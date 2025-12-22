@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:unified_map_view/src/VenueManager/VenueData.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
+import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
 import '../enums/map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -38,6 +39,7 @@ class UnifiedMapController extends ChangeNotifier {
     _providers[MapProvider.google] = GoogleMapProvider();
     _providers[MapProvider.mapbox] = MapboxMapProvider();
     _providers[MapProvider.apple] = AppleMapProvider();
+    _providers[MapProvider.mappls] = MapplsMapProvider();
   }
 
   /// Register a custom map provider

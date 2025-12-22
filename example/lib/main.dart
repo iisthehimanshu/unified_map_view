@@ -37,7 +37,7 @@ class _MapScreenState extends State<MapScreen> {
 
     // Initialize the controller with Google Maps as default
     _mapController = UnifiedMapController(
-      initialProvider: MapProvider.google,
+      initialProvider: MapProvider.mappls,
       config: const MapConfig(
         initialLocation: MapLocation(
           latitude: 37.7749, // San Francisco

@@ -2,8 +2,16 @@
 
 import 'package:flutter/material.dart';
 import 'package:unified_map_view/unified_map_view.dart';
+import 'package:mappls_gl/mappls_gl.dart';
 
-void main() => runApp(const GeoJsonExampleApp());
+void main(){
+  WidgetsFlutterBinding.ensureInitialized();
+  MapplsAccountManager.setMapSDKKey("6889110931e58e2b999fb9131f78cc2e");
+  MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
+  MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
+  MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
+  runApp(const GeoJsonExampleApp());
+}
 
 class GeoJsonExampleApp extends StatelessWidget {
   const GeoJsonExampleApp({Key? key}) : super(key: key);
@@ -34,7 +42,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
 
     _controller = UnifiedMapController(
-      initialProvider: MapProvider.google,
+      initialProvider: MapProvider.mappls,
       config: const MapConfig(
         initialLocation: MapLocation(latitude: 0, longitude: 0),
         initialZoom: 2.0,
@@ -115,9 +123,9 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _controller.switchProvider(MapProvider.mapbox),
+                        onPressed: () => _controller.switchProvider(MapProvider.mappls),
                         icon: const Icon(Icons.layers, size: 16),
-                        label: const Text('Mapbox'),
+                        label: const Text('Mappls'),
                       ),
                     ),
                   ],

@@ -16,6 +16,7 @@ dependencies:
   apple_maps_flutter:
   http:
 
+  mappls_gl: ^1.2.0
 
 dev_dependencies:
   flutter_test:
