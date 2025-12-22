@@ -15,9 +15,17 @@ class GeoJsonLoader {
     }
   }
 
+
+
+
+
   /// Load GeoJSON from JSON string
   static GeoJsonFeatureCollection loadFromString(String jsonString) {
     return GeoJsonFeatureCollection.fromJsonString(jsonString);
+  }
+
+  static GeoJsonFeatureCollection loadFromJson(Map<String, dynamic> json) {
+    return GeoJsonFeatureCollection.fromJson(json);
   }
 
   /// Parse GeoJSON data and extract all polygons

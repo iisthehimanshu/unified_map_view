@@ -1,6 +1,9 @@
 // lib/src/controllers/unified_map_controller.dart
 
 import 'package:flutter/foundation.dart';
+import 'package:unified_map_view/src/VenueManager/VenueData.dart';
+import '../apis/GlobalGeoJSONVenueAPI.dart';
+import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import '../enums/map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -140,6 +143,34 @@ class UnifiedMapController extends ChangeNotifier {
   // ============================================
   // GeoJSON Methods
   // ============================================
+
+  Future<void> changeBuildingFloor(String buildingId, int floor) async {
+    clearAllGeoJsonFeatures();
+    final venueData = VenueData.instance;
+    List<GeoJsonFeature> venueRenderData = [];
+    venueData?.availableFloors.forEach((buildingId,floors){
+      venueRenderData.addAll(venueData.getFeaturesForBuildingAndFloor(buildingId, floor));
+    });
+
+    await addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+  }
+
+  Future<void> setVenue(String venueName) async {
+    final apiData = await GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
+
+    if (apiData == null || apiData.isEmpty) {
+      throw Exception('No GeoJSON data received from API');
+    }
+    debugPrint("apiData ${apiData.length}");
+
+    VenueData venueData = VenueData(venueName, apiData);
+    List<GeoJsonFeature> venueRenderData = [];
+    venueData.availableFloors.forEach((buildingId,floors){
+      venueRenderData.addAll(venueData.getFeaturesForBuildingAndFloor(buildingId, 0));
+    });
+
+    await addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+  }
 
   /// Load and render GeoJSON from assets
   Future<void> loadGeoJsonFromAsset(String assetPath) async {

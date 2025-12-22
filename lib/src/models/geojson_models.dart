@@ -40,11 +40,12 @@ class GeoJsonFeature {
     if (geometry.type != GeoJsonGeometryType.point) return null;
 
     final coords = geometry.coordinates as List;
+    if(coords.isEmpty) return null;
     return MapMarker(
       id: id ?? DateTime.now().millisecondsSinceEpoch.toString(),
       position: MapLocation(
-        latitude: coords[1],
-        longitude: coords[0],
+        latitude: coords.first[1],
+        longitude: coords.first[0],
       ),
       title: properties?['name']?.toString() ?? properties?['title']?.toString(),
       snippet: properties?['description']?.toString(),
@@ -105,7 +106,7 @@ class GeoJsonFeatureCollection {
   });
 
   factory GeoJsonFeatureCollection.fromJson(Map<String, dynamic> json) {
-    final featuresJson = json['features'] as List;
+    final featuresJson = json['data'] as List;
 
     return GeoJsonFeatureCollection(
       features: featuresJson
