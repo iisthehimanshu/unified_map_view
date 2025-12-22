@@ -81,24 +81,24 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addMarker(dynamic controller, MapMarker marker) async {
     if (controller is MapplsMapController) {
       try {
-        final symbol = await controller.addSymbol(
-          SymbolOptions(
-            geometry: LatLng(
-              marker.position.latitude,
-              marker.position.longitude,
-            ),
-            iconImage: 'marker-15', // Default Mappls marker icon
-            iconSize: 1.5,
-            textField: marker.title,
-            textSize: 12.0,
-            textOffset: const Offset(0, 1.5),
-            textColor: '#000000',
-            textHaloColor: '#FFFFFF',
-            textHaloWidth: 2.0,
-          ),
-        );
-
-        _symbols[marker.id] = symbol;
+        // final symbol = await controller.addSymbol(
+        //   SymbolOptions(
+        //     geometry: LatLng(
+        //       marker.position.latitude,
+        //       marker.position.longitude,
+        //     ),
+        //     iconImage: 'marker-15', // Default Mappls marker icon
+        //     iconSize: 1.5,
+        //     textField: marker.title,
+        //     textSize: 12.0,
+        //     textOffset: const Offset(0, 1.5),
+        //     textColor: '#000000',
+        //     textHaloColor: '#FFFFFF',
+        //     textHaloWidth: 2.0,
+        //   ),
+        // );
+        //
+        // _symbols[marker.id] = symbol;
       } catch (e) {
         print('Error adding marker: $e');
       }
@@ -107,15 +107,18 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
-    if (controller is MapplsMapController && _symbols.containsKey(markerId)) {
+    if (controller is MapplsMapController) {
+      final symbol = _symbols.remove(markerId);
+      if (symbol == null) return;
+
       try {
-        await controller.removeSymbol(_symbols[markerId]!);
-        _symbols.remove(markerId);
-      } catch (e) {
-        print('Error removing marker: $e');
+        await controller.removeSymbol(symbol);
+      } catch (_) {
+        // Symbol already removed internally by Mappls
       }
     }
   }
+
 
   @override
   Future<void> clearMarkers(dynamic controller) async {
@@ -171,9 +174,12 @@ class MapplsMapProvider extends BaseMapProvider {
             geometry: [coordinates],
             fillColor: '#0080FF',
             fillOpacity: 0.3,
-            fillOutlineColor: '#0080FF',
+            fillOutlineColor: '#000000',
           ),
         );
+
+        final coordinatesForaLL = polygon.points.map((p) => LatLng(p.latitude, p.longitude)).toList();
+
 
         _fills[polygon.id] = fill;
       } catch (e) {
@@ -185,11 +191,22 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> removePolygon(dynamic controller, String polygonId) async {
     if (controller is MapplsMapController && _fills.containsKey(polygonId)) {
-      try {
-        await controller.removeFill(_fills[polygonId]!);
-        _fills.remove(polygonId);
-      } catch (e) {
-        print('Error removing polygon: $e');
+      if (controller is MapplsMapController) {
+        // try {
+        final fills = List<Fill>.from(_fills.values);
+
+        for (final fill in fills) {
+          try {
+            await controller.removeFill(fill);
+          } catch (_) {
+            // ignore – fill already removed internally
+          }
+        }
+
+        _fills.clear();
+        // } catch (e) {
+        //   print('Error clearing polygons: $e');
+        // }
       }
     }
   }
@@ -197,19 +214,27 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> clearPolygons(dynamic controller) async {
     if (controller is MapplsMapController) {
-      try {
-        for (var fill in _fills.values) {
+      // try {
+      final fills = List<Fill>.from(_fills.values);
+
+      for (final fill in fills) {
+        try {
           await controller.removeFill(fill);
+        } catch (_) {
+          // ignore – fill already removed internally
         }
-        _fills.clear();
-      } catch (e) {
-        print('Error clearing polygons: $e');
       }
+
+      _fills.clear();
+      // } catch (e) {
+      //   print('Error clearing polygons: $e');
+      // }
     }
   }
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
+
     if (controller is MapplsMapController) {
       try {
         final coordinates = polyline.points
@@ -219,8 +244,8 @@ class MapplsMapProvider extends BaseMapProvider {
         final line = await controller.addLine(
           LineOptions(
             geometry: coordinates,
-            lineColor: '#FF0000',
-            lineWidth: 3.0,
+            lineColor: '#fa9b9c9',
+            lineWidth: 1.0,
             lineOpacity: 0.8,
           ),
         );

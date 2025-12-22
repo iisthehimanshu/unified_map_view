@@ -146,7 +146,7 @@ class UnifiedMapController extends ChangeNotifier {
   // GeoJSON Methods
   // ============================================
 
-  Future<void> changeBuildingFloor(String buildingId, int floor) async {
+  Future<void> changeBuildingFloor(int floor) async {
     clearAllGeoJsonFeatures();
     final venueData = VenueData.instance;
     List<GeoJsonFeature> venueRenderData = [];
@@ -155,6 +155,13 @@ class UnifiedMapController extends ChangeNotifier {
     });
 
     await addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+  }
+
+  List<int>? returnBuildingFloors(){
+    final data = VenueData.instance;
+    List<int>? availableFloor = data?.availableFloors[data.selectedBuildingId];
+
+    return availableFloor;
   }
 
   Future<void> setVenue(String venueName) async {

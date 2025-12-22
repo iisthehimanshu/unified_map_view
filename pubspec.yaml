@@ -14,9 +14,9 @@ dependencies:
   google_maps_flutter:
   mapbox_maps_flutter:
   apple_maps_flutter:
-  http:
-
   mappls_gl: ^1.2.0
+
+  http:
 
 dev_dependencies:
   flutter_test:

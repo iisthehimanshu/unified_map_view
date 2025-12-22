@@ -148,7 +148,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                   ),
                   label: const Text('Clear All'),
                 ),
-                _buildFloorIndicator(),
               ],
             ),
           ),
@@ -159,15 +158,26 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               children: [
                 UnifiedMapWidget(controller: _controller),
 
-                // Floor indicator badge
+                // 🔹 TOP Floating Action Button
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 16,
+                  right: 16,
+                  child: _floorSelector(),
+                ),
 
+                // ✅ Floor FAB at top-right (below indicator)
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 16 + 230,
+                  right: 16,
+                  child: _floorFab(),
+                ),
               ],
             ),
           ),
+
         ],
       ),
-      floatingActionButton: _buildFloorSpeedDial(),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+
     );
   }
 
@@ -176,44 +186,19 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     _controller.dispose();
     super.dispose();
   }
-  String? _currentBuildingId;
 
-  bool _isSpeedDialOpen = false;
   int? _currentFloor = 0;
   List<int> _availableFloors = [];
 
 
   Future<void> _loadFloor(int floor) async {
-    if (_currentBuildingId == null) return;
-
     setState(() => _isLoading = true);
-
     try {
-      // Clear current features
-      await _controller.clearAllGeoJsonFeatures();
-
-      // Get features for the selected floor
-      // final venueData = _controller..instance;
-      // if (venueData != null) {
-      //   // final features = venueData.getFeaturesForBuildingAndFloor(
-      //   //   _currentBuildingId!,
-      //   //   floor,
-      //   // );
-      //   //
-      //   // // Add features to map
-      //   // for (var feature in features) {
-      //   //   await _controller.addGeoJsonFeature(feature);
-      //   // }
-      //   //
-      //   // venueData.setSelectedFloor(_currentBuildingId!, floor);
-      //
-      //   setState(() {
-      //     _currentFloor = floor;
-      //   });
-      //
-      //   await _controller.fitBoundsToGeoJson();
-      //   _showMessage('Loaded Floor $floor');
+      // if(_controller.returnBuildingFloors() != null){
+      //   _availableFloors = _controller.returnBuildingFloors()!;
+      //   print("_availableFloors $_availableFloors");
       // }
+      await _controller.changeBuildingFloor(floor);
     } catch (e) {
       _showMessage('Error loading floor: $e');
     } finally {
@@ -221,121 +206,66 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     }
   }
 
-  // Build speed dial for floor selection
-  Widget _buildFloorSpeedDial() {
-    if (_availableFloors.isEmpty) return const SizedBox.shrink();
+  bool _showFloors = false;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        // Floor options (shown when speed dial is open)
-        if (_isSpeedDialOpen) ...[
-          Container(
-            constraints: const BoxConstraints(maxHeight: 300),
-            child: Card(
-              elevation: 8,
-              margin: const EdgeInsets.only(bottom: 8),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: _availableFloors.map((floor) {
-                    final isSelected = floor == _currentFloor;
-                    return Material(
-                      color: isSelected ? Colors.blue.shade50 : Colors.transparent,
-                      child: InkWell(
-                        onTap: _isLoading
-                            ? null
-                            : () {
-                          _loadFloor(floor);
-                          setState(() => _isSpeedDialOpen = false);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 12,
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.layers,
-                                size: 20,
-                                color: isSelected ? Colors.blue : Colors.grey.shade600,
-                              ),
-                              const SizedBox(width: 12),
-                              Text(
-                                'Floor $floor',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                  color: isSelected ? Colors.blue : Colors.black87,
-                                ),
-                              ),
-                              if (isSelected) ...[
-                                const SizedBox(width: 8),
-                                Icon(
-                                  Icons.check_circle,
-                                  size: 18,
-                                  color: Colors.blue,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
+  final List<int> _floors = [0, 1, 2, 3, 4];
+  Widget _floorSelector() {
+    if (!_showFloors) return const SizedBox.shrink();
+
+    return Card(
+      elevation: 8,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: _floors.map((floor) {
+          final isSelected = floor == _currentFloor;
+
+          return InkWell(
+            onTap: () {
+              setState(() {
+                _currentFloor = floor;
+                _showFloors = false;
+              });
+
+              // 👉 load floor here
+              _loadFloor(floor);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.layers,
+                    size: 18,
+                    color: isSelected ? Colors.blue : Colors.grey,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Floor $floor',
+                    style: TextStyle(
+                      fontWeight:
+                      isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
-
-        // Main FAB button
-        FloatingActionButton(
-          heroTag: 'floor_switcher',
-          onPressed: () {
-            setState(() => _isSpeedDialOpen = !_isSpeedDialOpen);
-          },
-          backgroundColor: _isSpeedDialOpen ? Colors.red : Colors.blue,
-          child: AnimatedRotation(
-            turns: _isSpeedDialOpen ? 0.125 : 0,
-            duration: const Duration(milliseconds: 200),
-            child: Icon(_isSpeedDialOpen ? Icons.close : Icons.layers),
-          ),
-        ),
-      ],
+          );
+        }).toList(),
+      ),
     );
   }
 
-  // Build current floor indicator
-  Widget _buildFloorIndicator() {
-    if (_currentFloor == null) return const SizedBox.shrink();
 
-    return Positioned(
-      top: 50,
-      right: 16,
-      child: Card(
-        elevation: 4,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.layers, size: 20, color: Colors.blue),
-              const SizedBox(width: 8),
-              Text(
-                'Floor $_currentFloor',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+  Widget _floorFab() {
+    return FloatingActionButton(
+      onPressed: () {
+        setState(() => _showFloors = !_showFloors);
+      },
+      child: Icon(_showFloors ? Icons.close : Icons.layers),
     );
   }
 }

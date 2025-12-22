@@ -21,6 +21,7 @@ class VenueData{
 
   String venueName;
   Map<String, dynamic> json;
+  String selectedBuildingId = "65d887a5db333f89457145f6";
   Map<String,int> _selectedFloor = {};
   Map<String,List<int>> _availableFloors = {};
 
@@ -98,7 +99,12 @@ class VenueData{
         var filteredData = model.data!
             .where((feature) =>
         feature.buildingID == buildingId &&
-            feature.properties?.floor == floor)
+            feature.properties?.floor == floor &&
+            feature.properties?.name != null &&
+            feature.properties?.name!.toLowerCase() != 'undefined'
+            && !feature.properties!.name!.contains("Piller")
+            && !feature.properties!.name!.contains("Non Walkable")
+        )
             .toList();
 
         List<GeoJsonFeature> featureList = filteredData
