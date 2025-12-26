@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../controllers/unified_map_controller.dart';
+import 'FloorSpeedDial.dart';
 
 /// Main widget that displays the map based on the current provider
 class UnifiedMapWidget extends StatelessWidget {
@@ -21,10 +22,26 @@ class UnifiedMapWidget extends StatelessWidget {
       builder: (context, child) {
         return Padding(
           padding: padding,
-          child: controller.currentProviderImplementation.buildMap(
-            config: controller.config,
-            onMapCreated: controller.onMapCreated,
-            markers: controller.markers,
+          child: Stack(
+            children: [
+              controller.currentProviderImplementation.buildMap(
+                config: controller.config,
+                onMapCreated: controller.onMapCreated,
+                markers: controller.markers,
+                onCameraMove: controller.onCameraMove
+              ),
+              if(controller.focusedBuilding != null && controller.focusBuildingSelectedFloor != null && controller.focusedBuildingAvailableFloors != null && controller.focusedBuildingAvailableFloors!.isNotEmpty) Positioned(
+                bottom: 24,
+                right: 16,
+                child: FloorSpeedDial(
+                  floors: controller.focusedBuildingAvailableFloors!,
+                  selectedFloor: controller.focusBuildingSelectedFloor!,
+                  onFloorSelected: (floor) {
+                    controller.changeBuildingFloor(buildingID: controller.focusedBuilding!, floor: floor);
+                  },
+                ),
+              ),
+            ],
           ),
         );
       },

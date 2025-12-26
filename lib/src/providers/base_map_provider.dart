@@ -1,6 +1,7 @@
 // lib/src/providers/base_map_provider.dart
 
 import 'package:flutter/widgets.dart';
+import '../models/camera_position.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/map_marker.dart';
@@ -14,6 +15,7 @@ abstract class BaseMapProvider {
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
     Set<MapMarker>? markers,
+    required void Function(UnifiedCameraPosition position) onCameraMove,
   });
 
   /// Move camera to a specific location

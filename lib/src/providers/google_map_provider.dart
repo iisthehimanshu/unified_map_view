@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import '../models/camera_position.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -16,12 +17,15 @@ class GoogleMapProvider extends BaseMapProvider {
   final Set<Marker> _markers = {};
   final Set<Polygon> _polygons = {};
   final Set<Polyline> _polylines = {};
+  GoogleMapController? _controller;
 
   @override
   Widget buildMap({
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
     Set<MapMarker>? markers,
+    required void Function(UnifiedCameraPosition position) onCameraMove,
+
   }) {
     if (markers != null) {
       _markers.clear();
@@ -31,10 +35,10 @@ class GoogleMapProvider extends BaseMapProvider {
     return GoogleMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(
-          config.initialLocation.latitude,
-          config.initialLocation.longitude,
+          config.initialLocation.mapLocation.latitude,
+          config.initialLocation.mapLocation.longitude,
         ),
-        zoom: config.initialZoom,
+        zoom: config.initialLocation.zoom,
       ),
       myLocationEnabled: config.showUserLocation,
       buildingsEnabled: false,
@@ -46,7 +50,33 @@ class GoogleMapProvider extends BaseMapProvider {
       polygons: _polygons,
       polylines: _polylines,
       onMapCreated: (GoogleMapController controller) {
+        _controller = controller;
         onMapCreated(controller);
+      },
+      onCameraIdle: () async {
+        print("onCameraIdle");
+        if (_controller != null) {
+          try {
+            // Try getting the visible region instead
+            final bounds = await _controller!.getVisibleRegion();
+            if (bounds != null) {
+              // Calculate center from bounds
+              final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+              final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+              onCameraMove(UnifiedCameraPosition(
+                mapLocation: MapLocation(
+                  latitude: centerLat,
+                  longitude: centerLng,
+                ),
+                zoom: 0.0,
+                bearing: 0.0,
+              ));
+            }
+          } catch (e) {
+            print("Error getting camera position: $e");
+          }
+        }
       },
     );
   }
@@ -62,6 +92,7 @@ class GoogleMapProvider extends BaseMapProvider {
       );
     }
   }
+
 
   @override
   Future<void> animateCamera(dynamic controller, MapLocation location, double zoom) async {
@@ -82,7 +113,7 @@ class GoogleMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
-    _markers.removeWhere((m) => m.markerId.value == markerId);
+    _markers.removeWhere((m) => m.markerId.value.contains(markerId));
   }
 
   @override
@@ -123,13 +154,24 @@ class GoogleMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
-    final Color fill = (polygon.properties?["fillColor"] != null && polygon.properties?["fillColor"] != "undefined" && polygon.properties?["fillColor"].isNotEmpty)
-        ? RenderingUtilities.hexToColor(polygon.properties?["fillColor"], opacity: 1.0)
-        : Colors.blue.withOpacity(0);
+    final String? rawType = polygon.properties?["type"];
+    final String? type = rawType?.toLowerCase();
+    print("type $type ${polygon.id}");
 
-    final Color stroke = (polygon.properties?["strokeColor"] != null && polygon.properties?["strokeColor"] != "undefined" && polygon.properties?["strokeColor"].isNotEmpty)
-        ? RenderingUtilities.hexToColor(polygon.properties?["strokeColor"])
-        : Colors.blue;
+    final String? fillColorHex = polygon.properties?["fillColor"];
+    final String? strokeColorHex = polygon.properties?["strokeColor"];
+
+    final Color fill =
+    (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
+        ? RenderingUtilities.hexToColor(fillColorHex, opacity: 1.0)
+        : RenderingUtilities.polygonColorMap[type]?["fillColor"]
+        ?? Colors.blue.withOpacity(0.0);
+
+    final Color stroke =
+    (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
+        ? RenderingUtilities.hexToColor(strokeColorHex)
+        : RenderingUtilities.polygonColorMap[type]?["strokeColor"]
+        ?? Colors.blue.withOpacity(0.0);
 
     _polygons.add(
       Polygon(
@@ -145,10 +187,14 @@ class GoogleMapProvider extends BaseMapProvider {
   }
 
 
+
   @override
   Future<void> removePolygon(dynamic controller, String polygonId) async {
-    _polygons.removeWhere((p) => p.polygonId.value == polygonId);
+    _polygons.removeWhere(
+          (p) => p.polygonId.value.contains(polygonId),
+    );
   }
+
 
   @override
   Future<void> clearPolygons(dynamic controller) async {
@@ -180,11 +226,12 @@ class GoogleMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removePolyline(dynamic controller, String polylineId) async {
-    _polylines.removeWhere((p) => p.polylineId.value == polylineId);
+    _polylines.removeWhere((p) => p.polylineId.value.contains(polylineId));
   }
 
   @override
   Future<void> clearPolylines(dynamic controller) async {
     _polylines.clear();
   }
+
 }

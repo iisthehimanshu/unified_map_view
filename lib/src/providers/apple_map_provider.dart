@@ -7,6 +7,7 @@ import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/map_marker.dart';
 import '../models/geojson_models.dart';
+import '../models/camera_position.dart';
 
 /// Apple Maps implementation of BaseMapProvider
 class AppleMapProvider extends BaseMapProvider {
@@ -19,6 +20,7 @@ class AppleMapProvider extends BaseMapProvider {
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
     Set<MapMarker>? markers,
+    required void Function(UnifiedCameraPosition position) onCameraMove,
   }) {
     if (markers != null) {
       _annotations.clear();
@@ -28,10 +30,10 @@ class AppleMapProvider extends BaseMapProvider {
     return AppleMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(
-          config.initialLocation.latitude,
-          config.initialLocation.longitude,
+          config.initialLocation.mapLocation.latitude,
+          config.initialLocation.mapLocation.longitude,
         ),
-        zoom: config.initialZoom,
+        zoom: config.initialLocation.zoom,
       ),
       myLocationEnabled: config.showUserLocation,
       rotateGesturesEnabled: config.rotateGesturesEnabled,
@@ -158,4 +160,5 @@ class AppleMapProvider extends BaseMapProvider {
   Future<void> clearPolylines(dynamic controller) async {
     _polylines.clear();
   }
+
 }

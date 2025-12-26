@@ -10,8 +10,7 @@ import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 
 class GlobalGeoJSONVenueAPI{
 
-  Future<Map<String, dynamic>> getGeoJSONData(String venueName) async {
-    print("getGeoJSONData api stack ${StackTrace.current}");
+  Future<Map<String, dynamic>?> getGeoJSONData(String venueName) async {
 
     String baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/${venueName}?expand=-1&api_key=${AppConfig.apiKey}";
 
@@ -32,6 +31,7 @@ class GlobalGeoJSONVenueAPI{
       return await getGeoJSONData(venueName);
     } else {
       print("Sessionsapi response.statusCode ${response.statusCode} ${response.body}");
+      return null;
       throw Exception('Failed to load data');
     }
   }

@@ -1,11 +1,10 @@
 // lib/src/controllers/unified_map_controller.dart
 
 import 'package:flutter/foundation.dart';
-import 'package:unified_map_view/src/VenueManager/VenueData.dart';
-import '../apis/GlobalGeoJSONVenueAPI.dart';
-import '../apimodels/GlobalAppGeoJsonDataModel.dart';
+import '../controllers/annotation_controller.dart';
 import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
 import '../enums/map_provider.dart';
+import '../models/camera_position.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/map_marker.dart';
@@ -25,12 +24,17 @@ class UnifiedMapController extends ChangeNotifier {
   final Set<MapMarker> _markers = {};
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _polylines = [];
+  late UnifiedCameraPosition _cameraPosition;
+  late AnnotationController _annotationController;
 
   UnifiedMapController({
     required MapProvider initialProvider,
     required MapConfig config,
+    required String venueName
   })  : _currentProvider = initialProvider,
         _config = config {
+    _annotationController = AnnotationController(this, venueName: venueName);
+    _cameraPosition = config.initialLocation;
     _initializeProviders();
   }
 
@@ -58,6 +62,8 @@ class UnifiedMapController extends ChangeNotifier {
   /// Get current provider implementation
   BaseMapProvider get currentProviderImplementation => _providers[_currentProvider]!;
 
+  UnifiedCameraPosition get cameraPosition => _cameraPosition;
+
   /// Switch to a different map provider
   void switchProvider(MapProvider newProvider) {
     if (_providers.containsKey(newProvider)) {
@@ -80,13 +86,19 @@ class UnifiedMapController extends ChangeNotifier {
     _currentMapController = controller;
   }
 
+  void onCameraMove(UnifiedCameraPosition position) async {
+    _cameraPosition = position;
+    _annotationController.cameraFocusChange(position);
+    notifyListeners();
+  }
+
   /// Move camera to a specific location
   Future<void> moveCamera(MapLocation location, {double? zoom}) async {
     if (_currentMapController == null) return;
     await currentProviderImplementation.moveCamera(
       _currentMapController,
       location,
-      zoom ?? _config.initialZoom,
+      zoom ?? _config.initialLocation.zoom,
     );
   }
 
@@ -96,7 +108,7 @@ class UnifiedMapController extends ChangeNotifier {
     await currentProviderImplementation.animateCamera(
       _currentMapController,
       location,
-      zoom ?? _config.initialZoom,
+      zoom ?? _config.initialLocation.zoom,
     );
   }
 
@@ -146,41 +158,6 @@ class UnifiedMapController extends ChangeNotifier {
   // GeoJSON Methods
   // ============================================
 
-  Future<void> changeBuildingFloor(int floor) async {
-    clearAllGeoJsonFeatures();
-    final venueData = VenueData.instance;
-    List<GeoJsonFeature> venueRenderData = [];
-    venueData?.availableFloors.forEach((buildingId,floors){
-      venueRenderData.addAll(venueData.getFeaturesForBuildingAndFloor(buildingId, floor));
-    });
-
-    await addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
-  }
-
-  List<int>? returnBuildingFloors(){
-    final data = VenueData.instance;
-    List<int>? availableFloor = data?.availableFloors[data.selectedBuildingId];
-
-    return availableFloor;
-  }
-
-  Future<void> setVenue(String venueName) async {
-    final apiData = await GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
-
-    if (apiData == null || apiData.isEmpty) {
-      throw Exception('No GeoJSON data received from API');
-    }
-    debugPrint("apiData ${apiData.length}");
-
-    VenueData venueData = VenueData(venueName, apiData);
-    List<GeoJsonFeature> venueRenderData = [];
-    venueData.availableFloors.forEach((buildingId,floors){
-      venueRenderData.addAll(venueData.getFeaturesForBuildingAndFloor(buildingId, 0));
-    });
-
-    await addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
-  }
-
   /// Load and render GeoJSON from assets
   Future<void> loadGeoJsonFromAsset(String assetPath) async {
     try {
@@ -203,6 +180,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Add GeoJSON feature collection to map
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
+    print("addGeoJsonFeatures ${StackTrace.current}");
     if (_currentMapController == null) return;
 
     // Add markers from Point features
@@ -247,6 +225,17 @@ class UnifiedMapController extends ChangeNotifier {
   /// Clear all polygons
   Future<void> clearPolygons() async {
     _polygons.clear();
+    if (_currentMapController != null) {
+      await currentProviderImplementation.clearPolygons(_currentMapController);
+    }
+    notifyListeners();
+  }
+
+  /// Clear polygons by id
+  Future<void> clearPolygonByID(String id) async {
+    _polygons.removeWhere((polygon){
+      return polygon.id.contains(id);
+    });
     if (_currentMapController != null) {
       await currentProviderImplementation.clearPolygons(_currentMapController);
     }
@@ -330,6 +319,17 @@ class UnifiedMapController extends ChangeNotifier {
       MapLocation(latitude: centerLat, longitude: centerLng),
       zoom: 10.0, // You may want to calculate zoom based on bounds
     );
+  }
+
+
+  /// Annotation Controller
+  String? get focusedBuilding => _annotationController.focusedBuilding;
+  List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
+  int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
+
+  Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
+    await _annotationController.changeBuildingFloor(buildingID, floor);
+    notifyListeners();
   }
 
   @override

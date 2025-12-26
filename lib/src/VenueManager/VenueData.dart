@@ -1,31 +1,36 @@
+import 'package:apple_maps_flutter/apple_maps_flutter.dart';
+import 'package:unified_map_view/src/apimodels/BuildingData.dart';
 import 'package:unified_map_view/src/apimodels/GlobalAppGeoJsonDataModel.dart';
 
 import '../../unified_map_view.dart';
 
 class VenueData{
-  VenueData._internal(this.venueName, this.json) {
+  VenueData._internal(this.venueName, this.json, this.buildingData) {
     extractBuildingWiseData(json);
+    findBuildingCenters();
   }
 
   // Singleton instance
   static VenueData? _instance;
 
   // Public factory constructor
-  factory VenueData(String venueName, Map<String, dynamic> json) {
-    _instance = VenueData._internal(venueName, json);
+  factory VenueData(String venueName, Map<String, dynamic> json, BuildingData buildingData) {
+    _instance = VenueData._internal(venueName, json, buildingData);
     return _instance!;
   }
-
-  // Get the current instance
   static VenueData? get instance => _instance;
 
   String venueName;
+  MapLocation venueLatLng = MapLocation(latitude: 28.543733294529066, longitude: 77.18772931714324);
   Map<String, dynamic> json;
-  String selectedBuildingId = "65d887a5db333f89457145f6";
+
   Map<String,int> _selectedFloor = {};
   Map<String,List<int>> _availableFloors = {};
+  BuildingData buildingData;
+  Map<String, MapLocation> buildingCenters = {};
 
   Map<String, List<int>> get availableFloors => _availableFloors;
+  Map<String, int> get selectedFloor => _selectedFloor;
 
   void extractBuildingWiseData(Map<String, dynamic> json){
     GlobalAppGeoJsonDataModel globalAppGeoJsonDataModel = GlobalAppGeoJsonDataModel.fromJson(json);
@@ -90,7 +95,7 @@ class VenueData{
     }
   }
 
-  List<GeoJsonFeature> getFeaturesForBuildingAndFloor(
+  List<GeoJsonFeature> _getFeaturesForBuildingAndFloor(
       String buildingId, int floor) {
     // try {
       GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
@@ -104,6 +109,7 @@ class VenueData{
             feature.properties?.name!.toLowerCase() != 'undefined'
             && !feature.properties!.name!.contains("Piller")
             && !feature.properties!.name!.contains("Non Walkable")
+            && !feature.properties!.name!.contains("IW")
         )
             .toList();
 
@@ -118,5 +124,37 @@ class VenueData{
     // }
     return [];
   }
+
+  List<GeoJsonFeature> setBuildingFloor({required String buildingId, required int floor}){
+    _selectedFloor[buildingId] = floor;
+    return _getFeaturesForBuildingAndFloor(buildingId, floor);
+  }
+
+  void findBuildingCenters() {
+    buildingCenters.clear();
+
+    final List<Building>? buildings = buildingData.buildings;
+    if (buildings == null || buildings.isEmpty) return;
+
+    for (final building in buildings) {
+      // coordinates = [lat, lng]
+      if (building.coordinates.length < 2) continue;
+
+      final double lat = building.coordinates[0];
+      final double lng = building.coordinates[1];
+
+      // Use building ID as key (recommended)
+      buildingCenters[building.id] = MapLocation(latitude: lat, longitude: lng);
+    }
+
+    // Debug
+    print("🏢 Building Centers:");
+    buildingCenters.forEach((id, center) {
+      print("$id → ${center.latitude}, ${center.longitude}");
+    });
+  }
+
+
+
 
 }

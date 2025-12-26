@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import '../models/camera_position.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -17,6 +18,8 @@ class MapboxMapProvider extends BaseMapProvider {
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
     Set<MapMarker>? markers,
+    required void Function(UnifiedCameraPosition position) onCameraMove,
+
   }) {
     return MapWidget(
       onMapCreated: (mapboxMap) {
@@ -27,11 +30,11 @@ class MapboxMapProvider extends BaseMapProvider {
       cameraOptions: CameraOptions(
         center: Point(
           coordinates: Position(
-            config.initialLocation.longitude,
-            config.initialLocation.latitude,
+            config.initialLocation.mapLocation.longitude,
+            config.initialLocation.mapLocation.latitude,
           ),
         ),
-        zoom: config.initialZoom,
+        zoom: config.initialLocation.zoom,
       ),
       textureView: true,
     );
@@ -175,4 +178,5 @@ class MapboxMapProvider extends BaseMapProvider {
   Future<void> clearPolylines(dynamic controller) async {
     // Clear all Mapbox polylines
   }
+
 }

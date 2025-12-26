@@ -1,8 +1,7 @@
 import '../../unified_map_view.dart';
 
 class MapConfig {
-  final MapLocation initialLocation;
-  final double initialZoom;
+  final UnifiedCameraPosition initialLocation;
   final bool showUserLocation;
   final bool zoomControlsEnabled;
   final bool rotateGesturesEnabled;
@@ -11,7 +10,6 @@ class MapConfig {
 
   const MapConfig({
     required this.initialLocation,
-    this.initialZoom = 15.0,
     this.showUserLocation = true,
     this.zoomControlsEnabled = true,
     this.rotateGesturesEnabled = true,
@@ -20,7 +18,7 @@ class MapConfig {
   });
 
   MapConfig copyWith({
-    MapLocation? initialLocation,
+    UnifiedCameraPosition? initialLocation,
     double? initialZoom,
     bool? showUserLocation,
     bool? zoomControlsEnabled,
@@ -30,7 +28,6 @@ class MapConfig {
   }) {
     return MapConfig(
       initialLocation: initialLocation ?? this.initialLocation,
-      initialZoom: initialZoom ?? this.initialZoom,
       showUserLocation: showUserLocation ?? this.showUserLocation,
       zoomControlsEnabled: zoomControlsEnabled ?? this.zoomControlsEnabled,
       rotateGesturesEnabled: rotateGesturesEnabled ?? this.rotateGesturesEnabled,

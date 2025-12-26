@@ -34,21 +34,21 @@ class GeoJsonMapScreen extends StatefulWidget {
 }
 
 class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
-  late UnifiedMapController _controller;
+  late UnifiedMapController _unifiedMapController;
+
   bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
 
-    _controller = UnifiedMapController(
+    _unifiedMapController = UnifiedMapController(
       initialProvider: MapProvider.mappls,
       config: const MapConfig(
-        initialLocation: MapLocation(latitude: 0, longitude: 0),
-        initialZoom: 2.0,
-      ),
+        initialLocation: UnifiedCameraPosition(mapLocation: MapLocation(latitude: 0, longitude: 0), zoom: 2.0, bearing: 0.0),
+      ), venueName: 'IITDelhi',
     );
-    _controller.setMapStyle("assets/mapstyle.json");
+    _unifiedMapController.setMapStyle("assets/mapstyle.json");
   }
 
   // Load GeoJSON from assets
@@ -58,10 +58,9 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     // try {
       // Load your GeoJSON file from assets
       // await _controller.loadGeoJsonFromAsset('assets/response.json');
-      await _controller.setVenue("IITDelhi");
 
       // Fit map to show all features
-      await _controller.fitBoundsToGeoJson();
+      await _unifiedMapController.fitBoundsToGeoJson();
 
       _showMessage('GeoJSON loaded successfully!');
     // } catch (e) {
@@ -115,7 +114,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                   children: [
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _controller.switchProvider(MapProvider.google),
+                        onPressed: () => _unifiedMapController.switchProvider(MapProvider.google),
                         icon: const Icon(Icons.map, size: 16),
                         label: const Text('Google'),
                       ),
@@ -123,7 +122,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => _controller.switchProvider(MapProvider.mappls),
+                        onPressed: () => _unifiedMapController.switchProvider(MapProvider.mappls),
                         icon: const Icon(Icons.layers, size: 16),
                         label: const Text('Mappls'),
                       ),
@@ -140,7 +139,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                 ElevatedButton.icon(
                   onPressed: _isLoading
                       ? null
-                      : () => _controller.clearAllGeoJsonFeatures(),
+                      : () => _unifiedMapController.clearAllGeoJsonFeatures(),
                   icon: const Icon(Icons.clear),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
@@ -156,21 +155,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           Expanded(
             child: Stack(
               children: [
-                UnifiedMapWidget(controller: _controller),
-
-                // 🔹 TOP Floating Action Button
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 16,
-                  right: 16,
-                  child: _floorSelector(),
-                ),
-
-                // ✅ Floor FAB at top-right (below indicator)
-                Positioned(
-                  top: MediaQuery.of(context).padding.top + 16 + 230,
-                  right: 16,
-                  child: _floorFab(),
-                ),
+                UnifiedMapWidget(controller: _unifiedMapController),
               ],
             ),
           ),
@@ -183,7 +168,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
   @override
   void dispose() {
-    _controller.dispose();
+    _unifiedMapController.dispose();
     super.dispose();
   }
 
@@ -198,7 +183,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
       //   _availableFloors = _controller.returnBuildingFloors()!;
       //   print("_availableFloors $_availableFloors");
       // }
-      await _controller.changeBuildingFloor(floor);
+      await _unifiedMapController.changeBuildingFloor(buildingID: "65d887a5db333f89457145f6",floor: floor);
     } catch (e) {
       _showMessage('Error loading floor: $e');
     } finally {
@@ -206,68 +191,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     }
   }
 
-  bool _showFloors = false;
 
-  final List<int> _floors = [0, 1, 2, 3, 4];
-  Widget _floorSelector() {
-    if (!_showFloors) return const SizedBox.shrink();
-
-    return Card(
-      elevation: 8,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: _floors.map((floor) {
-          final isSelected = floor == _currentFloor;
-
-          return InkWell(
-            onTap: () {
-              setState(() {
-                _currentFloor = floor;
-                _showFloors = false;
-              });
-
-              // 👉 load floor here
-              _loadFloor(floor);
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 12,
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.layers,
-                    size: 18,
-                    color: isSelected ? Colors.blue : Colors.grey,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Floor $floor',
-                    style: TextStyle(
-                      fontWeight:
-                      isSelected ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-
-  Widget _floorFab() {
-    return FloatingActionButton(
-      onPressed: () {
-        setState(() => _showFloors = !_showFloors);
-      },
-      child: Icon(_showFloors ? Icons.close : Icons.layers),
-    );
-  }
 }
 
 // ============================================

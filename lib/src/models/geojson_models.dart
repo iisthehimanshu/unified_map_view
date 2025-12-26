@@ -17,11 +17,13 @@ enum GeoJsonGeometryType {
 
 /// Represents a GeoJSON Feature
 class GeoJsonFeature {
+  final String? building_ID;
   final String? id;
   final GeoJsonGeometry geometry;
   final Map<String, dynamic>? properties;
 
   GeoJsonFeature({
+    this.building_ID,
     this.id,
     required this.geometry,
     this.properties,
@@ -29,6 +31,7 @@ class GeoJsonFeature {
 
   factory GeoJsonFeature.fromJson(Map<String, dynamic> json) {
     return GeoJsonFeature(
+      building_ID: json["building_ID"]?.toString(),
       id: json['id']?.toString(),
       geometry: GeoJsonGeometry.fromJson(json['geometry']),
       properties: json['properties'] as Map<String, dynamic>?,
@@ -42,7 +45,7 @@ class GeoJsonFeature {
     final coords = geometry.coordinates as List;
     if(coords.isEmpty) return null;
     return MapMarker(
-      id: id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: "id:${properties?["polyId"]} | buildingID:${building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       position: MapLocation(
         latitude: coords.first[1],
         longitude: coords.first[0],
@@ -156,7 +159,7 @@ class GeoJsonPolygon {
     final ring = coords[0] as List; // First ring (outer boundary)
 
     return GeoJsonPolygon(
-      id: feature.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: "id:${feature.properties?["nodeId"]} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       points: ring.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],
@@ -185,7 +188,7 @@ class GeoJsonPolyline {
     final coords = feature.geometry.coordinates as List;
 
     return GeoJsonPolyline(
-      id: feature.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: "id:${feature.properties?["nodeId"]} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       points: coords.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],

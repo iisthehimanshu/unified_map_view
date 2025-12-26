@@ -1,7 +1,11 @@
 // lib/src/providers/mappls_map_provider.dart
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:mappls_gl/mappls_gl.dart';
+import '../models/camera_position.dart';
+import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -14,22 +18,25 @@ class MapplsMapProvider extends BaseMapProvider {
   final Map<String, Symbol> _symbols = {};
   final Map<String, Line> _lines = {};
   final Map<String, Fill> _fills = {};
+  MapplsMapController? _controller;
 
   @override
   Widget buildMap({
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
     Set<MapMarker>? markers,
+    required void Function(UnifiedCameraPosition position) onCameraMove,
   }) {
     return MapplsMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(
-          config.initialLocation.latitude,
-          config.initialLocation.longitude,
+          config.initialLocation.mapLocation.latitude,
+          config.initialLocation.mapLocation.longitude,
         ),
-        zoom: config.initialZoom,
+        zoom: config.initialLocation.zoom,
       ),
       onMapCreated: (MapplsMapController controller) async {
+        _controller = controller;
         onMapCreated(controller);
 
         // Add initial markers if provided
@@ -42,6 +49,12 @@ class MapplsMapProvider extends BaseMapProvider {
       onStyleLoadedCallback: () {
         // Style loaded, map is ready
       },
+      onMapClick: (Point<double> point, LatLng latlng){
+        print("onMapClick");
+        print(point);
+        print(latlng);
+      },
+      annotationConsumeTapEvents: [AnnotationType.symbol, AnnotationType.fill, AnnotationType.line, AnnotationType.circle],
       myLocationEnabled: config.showUserLocation,
       myLocationTrackingMode: MyLocationTrackingMode.none,
       compassEnabled: true,
@@ -50,12 +63,39 @@ class MapplsMapProvider extends BaseMapProvider {
       tiltGesturesEnabled: config.tiltGesturesEnabled,
       zoomGesturesEnabled: config.zoomControlsEnabled,
       minMaxZoomPreference: const MinMaxZoomPreference(4, 18),
+      onCameraIdle: () async {
+        print("onCameraIdle called");
+
+        if (_controller != null) {
+          try {
+            // Try getting the visible region instead
+            final bounds = await _controller!.getVisibleRegion();
+            if (bounds != null) {
+              // Calculate center from bounds
+              final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+              final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+              onCameraMove(UnifiedCameraPosition(
+                mapLocation: MapLocation(
+                  latitude: centerLat,
+                  longitude: centerLng,
+                ),
+                zoom: (await _controller!.cameraPosition)?.zoom ?? 0.0,
+                bearing: (await _controller!.cameraPosition)?.bearing ?? 0.0,
+              ));
+            }
+          } catch (e) {
+            print("Error getting camera position: $e");
+          }
+        }
+      },
     );
   }
 
   @override
   Future<void> moveCamera(dynamic controller, MapLocation location, double zoom) async {
     if (controller is MapplsMapController) {
+      print("current location ${location.latitude} ${location.longitude}");
       await controller.moveCamera(
         CameraUpdate.newLatLngZoom(
           LatLng(location.latitude, location.longitude),
@@ -81,24 +121,24 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addMarker(dynamic controller, MapMarker marker) async {
     if (controller is MapplsMapController) {
       try {
-        // final symbol = await controller.addSymbol(
-        //   SymbolOptions(
-        //     geometry: LatLng(
-        //       marker.position.latitude,
-        //       marker.position.longitude,
-        //     ),
-        //     iconImage: 'marker-15', // Default Mappls marker icon
-        //     iconSize: 1.5,
-        //     textField: marker.title,
-        //     textSize: 12.0,
-        //     textOffset: const Offset(0, 1.5),
-        //     textColor: '#000000',
-        //     textHaloColor: '#FFFFFF',
-        //     textHaloWidth: 2.0,
-        //   ),
-        // );
-        //
-        // _symbols[marker.id] = symbol;
+        final symbol = await controller.addSymbol(
+          SymbolOptions(
+            geometry: LatLng(
+              marker.position.latitude,
+              marker.position.longitude,
+            ),
+            iconImage: 'marker-15', // Default Mappls marker icon
+            iconSize: 1.5,
+            textField: marker.title,
+            textSize: 5.0,
+            textOffset: const Offset(0, 1.5),
+            textColor: '#000000',
+            textHaloColor: '#FFFFFF',
+            textHaloWidth: 2.0,
+          ),
+        );
+
+        _symbols[marker.id] = symbol;
       } catch (e) {
         print('Error adding marker: $e');
       }
@@ -107,17 +147,23 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
-    if (controller is MapplsMapController) {
-      final symbol = _symbols.remove(markerId);
-      if (symbol == null) return;
+    if (controller is! MapplsMapController) return;
 
+    final matchingEntries = _symbols.entries
+        .where((entry) => entry.key.contains(markerId))
+        .toList();
+
+    for (final entry in matchingEntries) {
       try {
-        await controller.removeSymbol(symbol);
+        await controller.removeSymbol(entry.value);
       } catch (_) {
-        // Symbol already removed internally by Mappls
+        // ignore – already removed internally
       }
+
+      _symbols.remove(entry.key);
     }
   }
+
 
 
   @override
@@ -163,18 +209,42 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
+    print("polgonid ${polygon.id}");
     if (controller is MapplsMapController) {
       try {
+        final String? rawType = polygon.properties?["type"];
+        final String? type = rawType?.toLowerCase();
+
+        final String? fillColorHex = polygon.properties?["fillColor"];
+        final String? strokeColorHex = polygon.properties?["strokeColor"];
+
+        final Color fillColor =
+        (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
+            ? RenderingUtilities.hexToColor(fillColorHex, opacity: 1.0)
+            : RenderingUtilities.polygonColorMap[type]?["fillColor"]
+            ?? Colors.blue.withOpacity(0.0);
+
+        final Color strokeColor =
+        (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
+            ? RenderingUtilities.hexToColor(strokeColorHex)
+            : RenderingUtilities.polygonColorMap[type]?["strokeColor"]
+            ?? Colors.blue.withOpacity(0.0);
+
         final coordinates = polygon.points
             .map((p) => LatLng(p.latitude, p.longitude))
             .toList();
 
+        String fillHex = RenderingUtilities.colorToMapplsHex(fillColor);
+        String strokeHex = RenderingUtilities.colorToMapplsHex(strokeColor);
+        print("fillHex $fillHex");
+        print("strokeHex $strokeHex");
+
         final fill = await controller.addFill(
           FillOptions(
             geometry: [coordinates],
-            fillColor: '#0080FF',
-            fillOpacity: 0.3,
-            fillOutlineColor: '#000000',
+            fillColor: '#$fillHex',          // "A38F9F"
+            fillOpacity: fillColor.opacity,
+            fillOutlineColor: '#$strokeHex', // "000000" etc
           ),
         );
 
@@ -190,26 +260,21 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removePolygon(dynamic controller, String polygonId) async {
-    if (controller is MapplsMapController && _fills.containsKey(polygonId)) {
-      if (controller is MapplsMapController) {
-        // try {
-        final fills = List<Fill>.from(_fills.values);
+    if (controller is! MapplsMapController) return;
 
-        for (final fill in fills) {
-          try {
-            await controller.removeFill(fill);
-          } catch (_) {
-            // ignore – fill already removed internally
-          }
-        }
+    // Find matching keys
+    final matchingEntries = _fills.entries
+        .where((entry) => entry.key.contains(polygonId))
+        .toList();
+    print("matchingEntries $matchingEntries");
+    for (final entry in matchingEntries) {
+        await controller.removeFill(entry.value);
 
-        _fills.clear();
-        // } catch (e) {
-        //   print('Error clearing polygons: $e');
-        // }
-      }
+
+      _fills.remove(entry.key);
     }
   }
+
 
   @override
   Future<void> clearPolygons(dynamic controller) async {
@@ -259,15 +324,23 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removePolyline(dynamic controller, String polylineId) async {
-    if (controller is MapplsMapController && _lines.containsKey(polylineId)) {
+    if (controller is! MapplsMapController) return;
+
+    final matchingEntries = _lines.entries
+        .where((entry) => entry.key.contains(polylineId))
+        .toList();
+
+    for (final entry in matchingEntries) {
       try {
-        await controller.removeLine(_lines[polylineId]!);
-        _lines.remove(polylineId);
-      } catch (e) {
-        print('Error removing polyline: $e');
+        await controller.removeLine(entry.value);
+      } catch (_) {
+        // ignore – already removed internally
       }
+
+      _lines.remove(entry.key);
     }
   }
+
 
   @override
   Future<void> clearPolylines(dynamic controller) async {

@@ -39,14 +39,10 @@ class _MapScreenState extends State<MapScreen> {
     _mapController = UnifiedMapController(
       initialProvider: MapProvider.mappls,
       config: const MapConfig(
-        initialLocation: MapLocation(
-          latitude: 37.7749, // San Francisco
-          longitude: -122.4194,
-        ),
-        initialZoom: 12.0,
+        initialLocation: UnifiedCameraPosition(mapLocation: MapLocation(latitude: 0, longitude: 0), zoom: 12.0, bearing: 0.0),
         showUserLocation: true,
         zoomControlsEnabled: true,
-      ),
+      ), venueName: 'Candor Techspace',
     );
 
     // Add some initial markers
