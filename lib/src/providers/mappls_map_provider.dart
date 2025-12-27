@@ -32,6 +32,11 @@ class MapplsMapProvider extends BaseMapProvider {
   // Track markers for clustering
   final List<MapMarker> _allMarkers = [];
 
+  String _markerSourceId = "marker-source";
+  String _markerLayerId = "marker-layer";
+
+  final List<Map<String, dynamic>> _markerFeatures = [];
+
   @override
   Widget buildMap({
     required MapConfig config,
@@ -54,6 +59,7 @@ class MapplsMapProvider extends BaseMapProvider {
         controller.onSymbolTapped.add(_onSymbolTapped);
         controller.onFillTapped.add(_onFillTapped);
         await _addMarkerImage();
+        _initMarkerLayers(controller);
         // Add initial markers if provided
         if (markers != null) {
           for (var marker in markers) {
@@ -64,38 +70,39 @@ class MapplsMapProvider extends BaseMapProvider {
       onStyleLoadedCallback: () async {
         print("Style loaded, initializing clustering layers");
         if (_clusteringEnabled && _controller != null) {
-          // await _initializeClusteringLayers();
-          // Update markers if any were added before style loaded
-          if (_allMarkers.isNotEmpty) {
-            await _addPendingMarkers();
-          }
+
         }
       },
       onMapClick: (Point<double> point, LatLng latlng) async {
-        print("onMapClick");
+        print("🗺 Map clicked at $latlng");
+
         final features = await _controller!.queryRenderedFeatures(
           point,
-          ['marker-layer-'], // OR all your marker layer IDs
+          ['marker-layer'], // your SymbolLayer ID
           null,
         );
 
-        if (features.isNotEmpty) {
-          final feature = features.first;
-          final props = feature['properties'];
+        if (features.isEmpty) return;
 
-          debugPrint("🟢 SymbolLayer tapped");
-          debugPrint("Feature id: ${feature['id']}");
-          debugPrint("Properties: $props");
+        final feature = features.first;
+        final props = feature['properties'];
 
-          final tappedMarkerId = props?['id'];
-          if (tappedMarkerId != null) {
-            debugPrint("Tapped marker id: $tappedMarkerId");
-          }
-        }else{
-          print("features.isEmpty");
-        }
-        print(point);
-        print(latlng);
+        print("✅ Marker tapped via map click");
+        print("Title: ${props?['title']}");
+
+        _controller?.onFeatureTapped.add(
+              (dynamic feature, Point<double> point, LatLng latLng) {
+            print("✅ Feature tapped");
+            print("Feature: $feature");
+            print("Screen point: $point");
+            print("LatLng: $latLng");
+
+            final properties = feature?['properties'];
+            if (properties != null) {
+              print("Tapped title: ${properties['title']}");
+            }
+          },
+        );
       },
       onAttributionClick: (){
         print("onAttributionClick");
@@ -147,7 +154,7 @@ class MapplsMapProvider extends BaseMapProvider {
     );
 
     if (entry.key.isNotEmpty) {
-      debugPrint("Polygon ID tapped: ${entry.key}");
+      debugPrint("Polygon ID tapped: ${fill.toGeoJson()}");
       // TODO: highlight polygon / show details
     }
   }
@@ -195,146 +202,43 @@ class MapplsMapProvider extends BaseMapProvider {
     );
   }
 
-  /// Initialize clustering layers using GeoJSON source and symbol layers
-  Future<void> _initializeClusteringLayers() async {
-    if (_layersInitialized || _controller == null) {
-      print("Skipping layer init - already initialized: $_layersInitialized");
-      return;
-    }
-
-    try {
-      print("Adding GeoJSON source for markers");
-
-      // Add GeoJSON source for markers
-      await _controller!.addGeoJsonSource(
-        'markers-source',
-        {
-          'type': 'FeatureCollection',
-          'features': [],
-        },
-      );
-      print("GeoJSON source added successfully");
-
-      // Add symbol layer for individual markers (unclustered)
-      await _controller!.addSymbolLayer(
-        'markers-source',
-        'markers-layer',
-        const SymbolLayerProperties(
-          iconImage: 'marker-15',
-          iconSize: 1.5,
-          textField: '{title}',
-          textSize: 10.0,
-          textColor: '#000000',
-          textHaloColor: '#FFFFFF',
-          textHaloWidth: 2.0,
-        ),
-        enableInteraction: true,
-      );
-      print("Symbol layer added successfully");
-
-      _layersInitialized = true;
-      print("Clustering layers initialized successfully");
-    } catch (e) {
-      print('Error initializing clustering layers: $e');
-      print('Stack trace: ${StackTrace.current}');
-      _layersInitialized = false;
-    }
-  }
-
-  /// Add all pending markers that were added before style loaded
-  Future<void> _addPendingMarkers() async {
-    if (_controller == null || !_layersInitialized) return;
-
-    try {
-      final features = _allMarkers.map((marker) {
-        return {
-          'type': 'Feature',
-          'id': marker.id,
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [
-              marker.position.longitude,
-              marker.position.latitude,
-            ],
-          },
-          'properties': {
-            'id': marker.id,
-            'title': marker.title ?? '',
-          },
-        };
-      }).toList();
-
-      final geojson = {
-        'type': 'FeatureCollection',
-        'features': features,
-      };
-
-      // Use setGeoJsonSource to update existing source
-      await _controller!.setGeoJsonSource('markers-source', geojson);
-      print("Added ${features.length} pending markers to map");
-    } catch (e) {
-      print('Error adding pending markers: $e');
-    }
-  }
 
   /// Add a single marker's GeoJSON feature and update the source
   Future<void> _addMarkerToSource(MapMarker marker) async {
     if (_controller == null) return;
 
-    String finalMarkerId = "${marker.position.longitude} ${marker.position.longitude}";
-
-    final sourceId = 'marker-source-${finalMarkerId}';
-    final layerId = 'marker-layer-${finalMarkerId}';
-
-    await _controller!.removeLayer(layerId);
-    await _controller!.removeSource(sourceId);
-    final geojson = {
-      'type': 'FeatureCollection',
-      'features': [
-        {
-          'type': 'Feature',
-          'id': finalMarkerId,
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [
-              marker.position.longitude,
-              marker.position.latitude,
-            ],
-          },
-        },
-      ],
+    final feature = {
+      "type": "Feature",
+      "id": marker.id,
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          marker.position.longitude,
+          marker.position.latitude,
+        ],
+      },
+      "properties": {
+        "id": marker.id,
+        "title": marker.title, // used by textField
+        "icon": RenderingUtilities.getMarkerIconId(marker.title),
+        "floor": '0', // ✅ FIXED
+      },
     };
 
-    try {
+    _markerFeatures.add(feature);
 
-      // 🔵 First time marker
-      await _controller!.addGeoJsonSource(sourceId, geojson);
+    await _controller!.setGeoJsonSource(
+      _markerSourceId,
+      {
+        "type": "FeatureCollection",
+        "features": _markerFeatures,
+      },
+    );
 
-      await _controller!.addSymbolLayer(
-        sourceId,
-        layerId,
-        SymbolLayerProperties(
-          iconImage: RenderingUtilities.getMarkerIconId(marker.title),
-          iconSize: 1.5,
-          textField: marker.title ?? '',
-          textSize: 10.0,
-          textColor: '#000000',
-          textHaloColor: '#FFFFFF',
-          textHaloWidth: 2.0,
-          textAnchor: 'top',
-          textOffset: [0, 1.2],
-          textAllowOverlap: false,
-          iconAllowOverlap: false,
-        ),
-        enableInteraction: true,
-      );
-
-
-      print('✅ Marker ${finalMarkerId} added');
-    } catch (e) {
-      print('❌ Error adding marker ${finalMarkerId}: $e');
-    }
+    print("✅ Marker ${marker.id} added to single symbol layer");
   }
+
+
 
 
 
@@ -377,15 +281,57 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
+
+  Future<void> _initMarkerLayers(MapplsMapController controller) async {
+    if (_layersInitialized) return;
+
+    _markerSourceId = "marker-source";
+    _markerLayerId = "marker-layer";
+
+    // 🔹 GeoJSON source (empty at start)
+    await controller.addGeoJsonSource(
+      _markerSourceId,
+      {
+        "type": "FeatureCollection",
+        "features": [],
+      },
+    );
+
+    // 🔹 SINGLE SymbolLayer (defined ONCE)
+    await controller.addSymbolLayer(
+      _markerSourceId,
+      _markerLayerId,
+      SymbolLayerProperties(
+        iconImage: ["get", "icon"],
+        iconSize: 1.5,
+        textField: ["get", "title"],
+        textSize: 10,
+        textColor: "#000000",
+        textHaloColor: "#FFFFFF",
+        textHaloWidth: 2,
+        textAnchor: "top",
+        textOffset: [0, 1.2],
+        iconAllowOverlap: false,
+        textAllowOverlap: false,
+      ),
+      enableInteraction: true,
+    );
+
+    _layersInitialized = true;
+    print("✅ Marker source & SymbolLayer initialized");
+  }
+
   @override
   Future<void> addMarker(dynamic controller, MapMarker marker) async {
     if (controller is MapplsMapController) {
-      try {
+      // try {
         _allMarkers.add(marker);
         print("Adding marker: ${marker.id} at ${marker.position.latitude}, ${marker.position.longitude}");
         print("Clustering enabled: $_clusteringEnabled, Layers initialized: $_layersInitialized");
-        await _addMarkerToSource(marker);
-        // if (_clusteringEnabled && _layersInitialized) {
+        if (!_layersInitialized) {
+          await _initMarkerLayers(controller);
+        }
+        await _addMarkerToSource(marker);        // if (_clusteringEnabled && _layersInitialized) {
         //   // Add marker to GeoJSON source immediately - symbol will be added automatically
         //   await _addMarkerToSource(marker);
         // } else if (_clusteringEnabled && !_layersInitialized) {
@@ -413,9 +359,9 @@ class MapplsMapProvider extends BaseMapProvider {
         //   );
         //   _symbols[marker.id] = symbol;
         // }
-      } catch (e) {
-        print('Error adding marker: $e');
-      }
+      // } catch (e) {
+      //   print('Error adding marker: $e');
+      // }
     }
   }
 
@@ -524,7 +470,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
-    print("polgonid ${polygon.id}");
+    print("polgonid ${polygon.properties?.keys}");
     if (controller is MapplsMapController) {
       try {
         final String? rawType = polygon.properties?["type"];

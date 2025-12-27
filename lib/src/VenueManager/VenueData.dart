@@ -96,36 +96,43 @@ class VenueData{
   }
 
   List<GeoJsonFeature> _getFeaturesForBuildingAndFloor(
-      String buildingId, int floor) {
-    // try {
-      GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
-      if (model.data != null) {
+      String buildingId,
+      int floor,
+      ) {
+    GlobalAppGeoJsonDataModel model =
+    GlobalAppGeoJsonDataModel.fromJson(json);
 
-        var filteredData = model.data!
-            .where((feature) =>
+    if (model.data == null) return [];
 
-        
-        feature.buildingID == buildingId &&
-            feature.properties?.floor == floor &&
-            feature.properties?.name != null &&
-            feature.properties?.name!.toLowerCase() != 'undefined'
-            && !feature.properties!.name!.contains("Piller")
-            && !feature.properties!.name!.contains("Non Walkable")
-            && !feature.properties!.name!.contains("IW")
-        )
-            .toList();
+    final filteredData = model.data!.where((feature) {
+      final name = feature.properties?.name;
+      final lowerName = name?.toLowerCase() ?? '';
 
-        List<GeoJsonFeature> featureList = filteredData
-            .map((f) => GeoJsonFeature.fromJson(f.toJson() as Map<String, dynamic>))
-            .toList();
-
-        return featureList;
+      // 🔥 Always include boundarypoint features
+      if (lowerName.contains('boundary point')) {
+        print("Boundary name ${lowerName}");
+        return true;
       }
-    // } catch (e) {
-    //   print("Error getting features: $e");
-    // }
-    return [];
+
+      // ✅ Existing conditions
+      return feature.buildingID == buildingId &&
+          feature.properties?.floor == floor &&
+          name != null &&
+          lowerName != 'undefined' &&
+          !lowerName.contains('piller') &&
+          !lowerName.contains('non walkable') &&
+          !lowerName.contains('iw');
+    }).toList();
+
+    return filteredData
+        .map(
+          (f) => GeoJsonFeature.fromJson(
+        f.toJson() as Map<String, dynamic>,
+      ),
+    )
+        .toList();
   }
+
 
   List<GeoJsonFeature> setBuildingFloor({required String buildingId, required int floor}){
     _selectedFloor[buildingId] = floor;
