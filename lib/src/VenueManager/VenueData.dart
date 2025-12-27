@@ -103,6 +103,8 @@ class VenueData{
 
         var filteredData = model.data!
             .where((feature) =>
+
+        
         feature.buildingID == buildingId &&
             feature.properties?.floor == floor &&
             feature.properties?.name != null &&

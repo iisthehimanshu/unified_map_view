@@ -30,20 +30,24 @@ class UnifiedMapController extends ChangeNotifier {
   UnifiedMapController({
     required MapProvider initialProvider,
     required MapConfig config,
-    required String venueName
+    required String venueName,
+    bool enableClustering = true,
   })  : _currentProvider = initialProvider,
         _config = config {
     _annotationController = AnnotationController(this, venueName: venueName);
     _cameraPosition = config.initialLocation;
-    _initializeProviders();
+    _initializeProviders(enableClustering);
   }
 
   /// Initialize all map providers
-  void _initializeProviders() {
+  void _initializeProviders(bool enableClustering) {
     _providers[MapProvider.google] = GoogleMapProvider();
     _providers[MapProvider.mapbox] = MapboxMapProvider();
     _providers[MapProvider.apple] = AppleMapProvider();
-    _providers[MapProvider.mappls] = MapplsMapProvider();
+
+    final mapplsProvider = MapplsMapProvider();
+    mapplsProvider.setClusteringEnabled(enableClustering);
+    _providers[MapProvider.mappls] = mapplsProvider;
   }
 
   /// Register a custom map provider
@@ -134,6 +138,7 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> clearMarkers() async {
     _markers.clear();
     if (_currentMapController != null) {
+
       await currentProviderImplementation.clearMarkers(_currentMapController);
     }
     notifyListeners();
@@ -170,18 +175,15 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Load and render GeoJSON from JSON string
   Future<void> loadGeoJsonFromString(String jsonString) async {
-    // try {
-      final collection = GeoJsonLoader.loadFromString(jsonString);
-      await addGeoJsonFeatures(collection);
-    // } catch (e) {
-    //   throw Exception('Failed to parse GeoJSON: $e');
-    // }
+    final collection = GeoJsonLoader.loadFromString(jsonString);
+    await addGeoJsonFeatures(collection);
   }
 
   /// Add GeoJSON feature collection to map
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
     print("addGeoJsonFeatures ${StackTrace.current}");
     if (_currentMapController == null) return;
+
 
     // Add markers from Point features
     final markers = collection.toMarkers();
@@ -320,7 +322,6 @@ class UnifiedMapController extends ChangeNotifier {
       zoom: 10.0, // You may want to calculate zoom based on bounds
     );
   }
-
 
   /// Annotation Controller
   String? get focusedBuilding => _annotationController.focusedBuilding;

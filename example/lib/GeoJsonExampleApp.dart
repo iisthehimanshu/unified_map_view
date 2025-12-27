@@ -35,7 +35,6 @@ class GeoJsonMapScreen extends StatefulWidget {
 
 class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   late UnifiedMapController _unifiedMapController;
-
   bool _isLoading = false;
 
   @override
@@ -45,9 +44,15 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     _unifiedMapController = UnifiedMapController(
       initialProvider: MapProvider.mappls,
       config: const MapConfig(
-        initialLocation: UnifiedCameraPosition(mapLocation: MapLocation(latitude: 0, longitude: 0), zoom: 2.0, bearing: 0.0),
-      ), venueName: 'IITDelhi',
+        initialLocation: UnifiedCameraPosition(
+          mapLocation: MapLocation(latitude: 28.6139, longitude: 77.2090), // Delhi
+          zoom: 12.0,
+          bearing: 0.0,
+        ),
+      ),
+      venueName: 'IITDelhi',
     );
+
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
   }
 
@@ -55,21 +60,20 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   Future<void> _loadGeoJsonFromAssets() async {
     setState(() => _isLoading = true);
 
-    // try {
+    try {
       // Load your GeoJSON file from assets
-      // await _controller.loadGeoJsonFromAsset('assets/response.json');
+      await _unifiedMapController.loadGeoJsonFromAsset('assets/response.json');
 
       // Fit map to show all features
       await _unifiedMapController.fitBoundsToGeoJson();
 
       _showMessage('GeoJSON loaded successfully!');
-    // } catch (e) {
-    //   _showMessage('Error loading GeoJSON: $e');
-    // } finally {
-    //   setState(() => _isLoading = false);
-    // }
+    } catch (e) {
+      _showMessage('Error loading GeoJSON: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
-
 
   void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -159,10 +163,8 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               ],
             ),
           ),
-
         ],
       ),
-
     );
   }
 
@@ -171,104 +173,95 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     _unifiedMapController.dispose();
     super.dispose();
   }
-
-  int? _currentFloor = 0;
-  List<int> _availableFloors = [];
-
-
-  Future<void> _loadFloor(int floor) async {
-    setState(() => _isLoading = true);
-    try {
-      // if(_controller.returnBuildingFloors() != null){
-      //   _availableFloors = _controller.returnBuildingFloors()!;
-      //   print("_availableFloors $_availableFloors");
-      // }
-      await _unifiedMapController.changeBuildingFloor(buildingID: "65d887a5db333f89457145f6",floor: floor);
-    } catch (e) {
-      _showMessage('Error loading floor: $e');
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-
 }
-
-// ============================================
-// SAMPLE GEOJSON FILES FOR TESTING
-// ============================================
 
 /*
-Create these files in your assets folder:
+============================================
+USAGE NOTES
+============================================
 
-1. assets/data.geojson - Points
-{
-  "type": "FeatureCollection",
-  "features": [
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "Location 1",
-        "description": "First marker"
-      },
-      "geometry": {
-        "type": "Point",
-        "coordinates": [-122.4194, 37.7749]
-      }
-    }
-  ]
-}
+1. INITIALIZATION:
+   UnifiedMapController(
+     initialProvider: MapProvider.mappls,  // Choose your map provider
+     config: MapConfig(...),                // Set initial camera position
+     venueName: 'IITDelhi',                // Your venue name
+   );
 
-2. assets/routes.geojson - LineStrings
-{
-  "type": "FeatureCollection",
-  "features": [
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "Route 1"
-      },
-      "geometry": {
-        "type": "LineString",
-        "coordinates": [
-          [-122.4194, 37.7749],
-          [-122.4084, 37.7849],
-          [-122.3974, 37.7949]
-        ]
-      }
-    }
-  ]
-}
+2. LOADING GEOJSON:
+   - From Assets:
+     await controller.loadGeoJsonFromAsset('assets/data.geojson');
 
-3. assets/zones.geojson - Polygons
-{
-  "type": "FeatureCollection",
-  "features": [
-    {
-      "type": "Feature",
-      "properties": {
-        "name": "Zone 1",
-        "type": "restricted"
-      },
-      "geometry": {
-        "type": "Polygon",
-        "coordinates": [
-          [
-            [-122.4194, 37.7749],
-            [-122.4084, 37.7749],
-            [-122.4084, 37.7849],
-            [-122.4194, 37.7849],
-            [-122.4194, 37.7749]
-          ]
-        ]
-      }
-    }
-  ]
-}
+   - From String:
+     await controller.loadGeoJsonFromString(jsonString);
 
-Don't forget to add to pubspec.yaml:
-assets:
-  - assets/data.geojson
-  - assets/routes.geojson
-  - assets/zones.geojson
+3. MARKER MANAGEMENT:
+   - Add individual marker:
+     await controller.addMarker(MapMarker(
+       id: 'marker-1',
+       position: MapLocation(lat: 28.6139, lng: 77.2090),
+       title: 'My Location',
+     ));
+
+   - Remove marker:
+     await controller.removeMarker('marker-1');
+
+   - Clear all markers:
+     await controller.clearMarkers();
+
+4. POLYGON MANAGEMENT:
+   - Polygons are automatically created from GeoJSON
+   - Remove by ID:
+     await controller.removePolygon('polygon-id');
+
+   - Clear all:
+     await controller.clearPolygons();
+
+5. CAMERA CONTROL:
+   - Move camera:
+     await controller.moveCamera(
+       MapLocation(lat: 28.6139, lng: 77.2090),
+       zoom: 15.0,
+     );
+
+   - Animate camera:
+     await controller.animateCamera(location, zoom: 15.0);
+
+   - Fit to all features:
+     await controller.fitBoundsToGeoJson();
+
+6. FLOOR MANAGEMENT (for venue maps):
+   - Get focused building:
+     String? building = controller.focusedBuilding;
+
+   - Get available floors:
+     List<int>? floors = controller.focusedBuildingAvailableFloors;
+
+   - Change floor:
+     await controller.changeBuildingFloor(
+       buildingID: 'building-123',
+       floor: 2,
+     );
+
+7. PROVIDER SWITCHING:
+   controller.switchProvider(MapProvider.google);
+   controller.switchProvider(MapProvider.mappls);
+
+8. MARKER RENDERING:
+   - Markers always render on TOP of polygons and polylines
+   - Each marker shows its unique title
+   - Default icon is 'marker-15' from Mappls
+   - Text appears below the marker icon
+
+9. GEOJSON FEATURES SUPPORTED:
+   - Point → Markers
+   - Polygon → Filled shapes
+   - LineString → Polylines
+   - Properties are preserved and can be accessed
+
+10. LISTENING TO CHANGES:
+    controller.addListener(() {
+      // React to map changes
+      print('Camera: ${controller.cameraPosition}');
+      print('Markers: ${controller.markers.length}');
+    });
 */

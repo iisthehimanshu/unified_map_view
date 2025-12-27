@@ -54,4 +54,37 @@ class RenderingUtilities{
         .substring(2)
         .toLowerCase();
   }
+
+  static String getMarkerIconId(String? title) {
+    if (title == null) return 'custom-default-marker';
+
+    final name = title.toLowerCase();
+
+    if (name.contains('lift')) {
+      return 'custom-lift-marker';
+    }
+
+    if (name.contains('female')) {
+      return 'custom-female-marker';
+    }
+    if (name.contains('male')) {
+      return 'custom-male-marker';
+    }
+
+    if (name.contains('exit') || name.contains('gate')) {
+      return 'custom-exit-marker';
+    }
+
+    if (name.contains('stairs') || name.contains('staircase')) {
+      return 'custom-stairs-marker';
+    }
+
+    if (name.contains('ramp')) {
+      return 'custom-ramp-marker';
+    }
+
+    // 👇 default
+    return 'custom-marker';
+  }
+
 }
