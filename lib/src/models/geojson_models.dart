@@ -45,7 +45,7 @@ class GeoJsonFeature {
     final coords = geometry.coordinates as List;
     if(coords.isEmpty) return null;
     return MapMarker(
-      id: "id:${properties?["polyId"]} | buildingID:${building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: "id:$id | buildingID:${building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       position: MapLocation(
         latitude: coords.first[1],
         longitude: coords.first[0],
@@ -159,7 +159,7 @@ class GeoJsonPolygon {
     final ring = coords[0] as List; // First ring (outer boundary)
 
     return GeoJsonPolygon(
-      id: "id:${feature.properties?["nodeId"]} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       points: ring.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],
@@ -188,7 +188,7 @@ class GeoJsonPolyline {
     final coords = feature.geometry.coordinates as List;
 
     return GeoJsonPolyline(
-      id: "id:${feature.properties?["nodeId"]} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       points: coords.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],

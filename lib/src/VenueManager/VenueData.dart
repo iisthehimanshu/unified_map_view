@@ -109,7 +109,7 @@ class VenueData{
       final lowerName = name?.toLowerCase() ?? '';
 
       // 🔥 Always include boundarypoint features
-      if (lowerName.contains('boundary point')) {
+      if (lowerName.contains('boundary points')) {
         print("Boundary name ${lowerName}");
         return true;
       }

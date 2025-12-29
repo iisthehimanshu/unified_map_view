@@ -114,7 +114,7 @@ class MapplsMapProvider extends BaseMapProvider {
       scrollGesturesEnabled: config.scrollGesturesEnabled,
       tiltGesturesEnabled: config.tiltGesturesEnabled,
       zoomGesturesEnabled: config.zoomControlsEnabled,
-      minMaxZoomPreference: const MinMaxZoomPreference(4, 18),
+      minMaxZoomPreference: const MinMaxZoomPreference(4, 22),
 
       onCameraIdle: () async {
         print("onCameraIdle called");
@@ -473,6 +473,8 @@ class MapplsMapProvider extends BaseMapProvider {
     print("polgonid ${polygon.properties?.keys}");
     if (controller is MapplsMapController) {
       try {
+        print("polygon.points");
+        print(polygon.points);
         final String? rawType = polygon.properties?["type"];
         final String? type = rawType?.toLowerCase();
 

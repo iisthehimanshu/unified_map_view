@@ -208,6 +208,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Add a polygon to the map
   Future<void> addPolygon(GeoJsonPolygon polygon) async {
+    print("addPolygon ${polygon.properties}");
     _polygons.add(polygon);
     if (_currentMapController != null) {
       await currentProviderImplementation.addPolygon(_currentMapController, polygon);

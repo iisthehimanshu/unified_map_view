@@ -35,7 +35,7 @@ class AnnotationController{
     _venueData.availableFloors.forEach((buildingId,floors){
       venueRenderData.addAll(_venueData.setBuildingFloor(buildingId: buildingId, floor: 0));
     });
-    await _unifiedMapController.moveCamera(_venueData.venueLatLng, zoom: 16);
+    await _unifiedMapController.moveCamera(_venueData.venueLatLng, zoom: 20);
 
     await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
   }
