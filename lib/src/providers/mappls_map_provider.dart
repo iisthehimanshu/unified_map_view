@@ -13,11 +13,9 @@ import '../models/geojson_models.dart';
 /// Supports Mappls (MapmyIndia) maps - India's own mapping platform
 class MapplsMapProvider extends BaseMapProvider {
   MapplsMapController? _controller;
-  final Map<String, Symbol> _symbols = {};
+  final List<GeoJsonMarker> _symbols = [];
   final Map<String, Line> _lines = {};
   final Map<String, Fill> _fills = {};
-
-  List<GeoJsonMarker> geoJsonFeatureList = [];
 
   String _clusterSourceId = 'markers-source';
 
@@ -39,6 +37,7 @@ class MapplsMapProvider extends BaseMapProvider {
       onMapCreated: (MapplsMapController controller) async {
         _controller = controller;
         onMapCreated(controller);
+        enableClustering(controller);
       },
       onStyleLoadedCallback: () {
         // Style loaded, map is ready
@@ -131,23 +130,56 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
-      try {
-        geoJsonFeatureList.add(marker);
-        // _symbols[marker.id] = Symbol(marker.id, SymbolOptions(
-        //   geometry: LatLng(marker.position.latitude, marker.position.longitude),
-        // ));
-      } catch (e) {
-        print('Error adding marker: $e');
-      }
+        _symbols.add(marker);
+        final features = _symbols.map((marker) => {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [marker.position.longitude, marker.position.latitude],
+          },
+          'properties': {
+            'title': marker.title,
+            'id': marker.id,
+          }
+        }).toList();
+
+        await controller.setGeoJsonSource(
+          _clusterSourceId,
+          {
+            "type": "FeatureCollection",
+            "features": features,
+          },
+        );
     }
   }
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
-    if (controller is MapplsMapController && _symbols.containsKey(markerId)) {
+    if (controller is MapplsMapController) {
       try {
-        await controller.removeSymbol(_symbols[markerId]!);
-        _symbols.remove(markerId);
+        // Remove marker from the list
+        _symbols.removeWhere((marker) => marker.id.toLowerCase().contains(markerId));
+
+        // Update the GeoJSON source with the remaining markers
+        final features = _symbols.map((marker) => {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [marker.position.longitude, marker.position.latitude],
+          },
+          'properties': {
+            'title': marker.title,
+            'id': marker.id,
+          }
+        }).toList();
+
+        await controller.setGeoJsonSource(
+          _clusterSourceId,
+          {
+            "type": "FeatureCollection",
+            "features": features,
+          },
+        );
       } catch (e) {
         print('Error removing marker: $e');
       }
@@ -158,10 +190,17 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> clearMarkers(dynamic controller) async {
     if (controller is MapplsMapController) {
       try {
-        for (var symbol in _symbols.values) {
-          await controller.removeSymbol(symbol);
-        }
+        // Clear the marker list
         _symbols.clear();
+
+        // Update the GeoJSON source with empty features
+        await controller.setGeoJsonSource(
+          _clusterSourceId,
+          {
+            "type": "FeatureCollection",
+            "features": [],
+          },
+        );
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -249,6 +288,9 @@ class MapplsMapProvider extends BaseMapProvider {
       if(polyline.properties?["lineCategory"] != null){
         isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint";
       }
+      if(polyline.properties?["polygonType"] != null){
+        isWaypoint = polyline.properties!["polygonType"].toLowerCase() == "waypoints";
+      }
 
       if(isWaypoint) return;
       try {
@@ -310,26 +352,13 @@ class MapplsMapProvider extends BaseMapProvider {
     await clearPolylines(controller);
   }
 
-  Future<void> enableClustering(dynamic controller, List<GeoJsonMarker> markers) async {
+  Future<void> enableClustering(dynamic controller) async {
     if (controller is! MapplsMapController) return;
 
     try {
-      // Create GeoJSON feature collection
-      final features = markers.map((marker) => {
-        'type': 'Feature',
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [marker.position.longitude, marker.position.latitude],
-        },
-        'properties': {
-          'title': marker.title,
-          'id': marker.id,
-        }
-      }).toList();
-
       await controller.addGeoJsonSource(_clusterSourceId, {
         'type': 'FeatureCollection',
-        'features': features,
+        'features': [],
       });
 
       await controller.addSymbolLayer(
@@ -339,7 +368,7 @@ class MapplsMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 1.5,
           textField: ["get", "title"],
-          textSize: 10,
+          textSize: 12,
           textColor: "#000000",
           textHaloColor: "#FFFFFF",
           textHaloWidth: 2,
