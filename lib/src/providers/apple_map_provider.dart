@@ -5,7 +5,6 @@ import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
-import '../models/map_marker.dart';
 import '../models/geojson_models.dart';
 import '../models/camera_position.dart';
 
@@ -66,7 +65,7 @@ class AppleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> addMarker(dynamic controller, MapMarker marker) async {
+  Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     _annotations.add(_convertMarker(marker));
   }
 
@@ -99,7 +98,7 @@ class AppleMapProvider extends BaseMapProvider {
     // This is a placeholder for potential future implementation
   }
 
-  Annotation _convertMarker(MapMarker marker) {
+  Annotation _convertMarker(GeoJsonMarker marker) {
     return Annotation(
       annotationId: AnnotationId(marker.id),
       position: LatLng(marker.position.latitude, marker.position.longitude),

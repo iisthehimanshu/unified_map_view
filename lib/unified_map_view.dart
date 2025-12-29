@@ -9,7 +9,6 @@ export 'src/enums/map_provider.dart';
 export 'src/models/map_config.dart';
 export 'src/models/map_location.dart';
 export 'src/models/camera_position.dart';
-export 'src/models/map_marker.dart';
 export 'src/models/geojson_models.dart';
 
 // Controllers

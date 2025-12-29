@@ -7,15 +7,19 @@ import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
-import '../models/map_marker.dart';
 import '../models/geojson_models.dart';
 
 /// Mappls GL implementation of BaseMapProvider
 /// Supports Mappls (MapmyIndia) maps - India's own mapping platform
 class MapplsMapProvider extends BaseMapProvider {
+  MapplsMapController? _controller;
   final Map<String, Symbol> _symbols = {};
   final Map<String, Line> _lines = {};
   final Map<String, Fill> _fills = {};
+
+  List<GeoJsonMarker> geoJsonFeatureList = [];
+
+  String _clusterSourceId = 'markers-source';
 
   @override
   Widget buildMap({
@@ -33,10 +37,33 @@ class MapplsMapProvider extends BaseMapProvider {
         zoom: config.initialLocation.zoom,
       ),
       onMapCreated: (MapplsMapController controller) async {
+        _controller = controller;
         onMapCreated(controller);
       },
       onStyleLoadedCallback: () {
         // Style loaded, map is ready
+      },
+      onCameraIdle: ()async{
+        if (_controller != null) {
+          try {
+            final bounds = await _controller!.getVisibleRegion();
+              final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+              final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+              final cameraPos = _controller!.cameraPosition;
+
+              onCameraMove(UnifiedCameraPosition(
+                mapLocation: MapLocation(
+                  latitude: centerLat,
+                  longitude: centerLng,
+                ),
+                zoom: cameraPos?.zoom ?? 0.0,
+                bearing: cameraPos?.bearing ?? 0.0,
+              ));
+          } catch (e) {
+            print("Error getting camera position: $e");
+          }
+        }
       },
       myLocationEnabled: config.showUserLocation,
       myLocationTrackingMode: MyLocationTrackingMode.none,
@@ -102,27 +129,13 @@ class MapplsMapProvider extends BaseMapProvider {
 
 
   @override
-  Future<void> addMarker(dynamic controller, MapMarker marker) async {
+  Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
       try {
-        final symbol = await controller.addSymbol(
-          SymbolOptions(
-            geometry: LatLng(
-              marker.position.latitude,
-              marker.position.longitude,
-            ),
-            iconImage: 'marker-15', // Default Mappls marker icon
-            iconSize: 1.5,
-            textField: marker.title,
-            textSize: 12.0,
-            textOffset: const Offset(0, 1.5),
-            textColor: '#000000',
-            textHaloColor: '#FFFFFF',
-            textHaloWidth: 2.0,
-          ),
-        );
-
-        _symbols[marker.id] = symbol;
+        geoJsonFeatureList.add(marker);
+        // _symbols[marker.id] = Symbol(marker.id, SymbolOptions(
+        //   geometry: LatLng(marker.position.latitude, marker.position.longitude),
+        // ));
       } catch (e) {
         print('Error adding marker: $e');
       }
@@ -230,6 +243,12 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
     if (controller is MapplsMapController) {
+      bool isWaypoint = false;
+      if(polyline.properties?["lineCategory"] != null){
+        isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint";
+      }
+
+      if(isWaypoint) return;
       try {
         final coordinates = polyline.points
             .map((p) => LatLng(p.latitude, p.longitude))
@@ -287,5 +306,51 @@ class MapplsMapProvider extends BaseMapProvider {
     await clearMarkers(controller);
     await clearPolygons(controller);
     await clearPolylines(controller);
+  }
+
+  Future<void> enableClustering(dynamic controller, List<GeoJsonMarker> markers) async {
+    if (controller is! MapplsMapController) return;
+
+    try {
+      // Create GeoJSON feature collection
+      final features = markers.map((marker) => {
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [marker.position.longitude, marker.position.latitude],
+        },
+        'properties': {
+          'title': marker.title,
+          'id': marker.id,
+        }
+      }).toList();
+
+      await controller.addGeoJsonSource(_clusterSourceId, {
+        'type': 'FeatureCollection',
+        'features': features,
+      });
+
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        'cluster-count',
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          textField: ["get", "title"],
+          textSize: 10,
+          textColor: "#000000",
+          textHaloColor: "#FFFFFF",
+          textHaloWidth: 2,
+          textAnchor: "top",
+          textOffset: [0, 1.2],
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
+        ),
+        enableInteraction: true,
+      );
+
+    } catch (e) {
+      print('Error enabling clustering: $e');
+    }
   }
 }

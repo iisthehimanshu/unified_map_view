@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 import '../models/camera_position.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
-import '../models/map_marker.dart';
 import '../models/geojson_models.dart';
 
 /// Abstract base class for all map providers
@@ -21,7 +20,7 @@ abstract class BaseMapProvider {
   Future<void> moveCamera(dynamic controller, MapLocation location, double zoom);
 
   /// Add a marker to the map
-  Future<void> addMarker(dynamic controller, MapMarker marker);
+  Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
 
   /// Remove a marker from the map
   Future<void> removeMarker(dynamic controller, String markerId);

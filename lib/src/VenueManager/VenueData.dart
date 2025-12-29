@@ -90,8 +90,7 @@ class VenueData{
       String buildingId,
       int floor,
       ) {
-    GlobalAppGeoJsonDataModel model =
-    GlobalAppGeoJsonDataModel.fromJson(json);
+    GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
 
     if (model.data == null) return [];
 
@@ -99,12 +98,8 @@ class VenueData{
       final name = feature.properties?.name;
       final lowerName = name?.toLowerCase() ?? '';
 
-      // 🔥 Always include boundarypoint features
-      if (lowerName.contains('boundary points')) {
-        return true;
-      }
 
-      // ✅ Existing conditions
+
       return feature.buildingID == buildingId &&
           feature.properties?.floor == floor &&
           name != null &&
@@ -114,13 +109,7 @@ class VenueData{
           !lowerName.contains('iw');
     }).toList();
 
-    return filteredData
-        .map(
-          (f) => GeoJsonFeature.fromJson(
-        f.toJson() as Map<String, dynamic>,
-      ),
-    )
-        .toList();
+    return filteredData.map((f) => GeoJsonFeature.fromJson(f.toJson())).toList();
   }
 
 
