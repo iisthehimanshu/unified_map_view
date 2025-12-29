@@ -89,6 +89,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> animateCamera(dynamic controller, MapLocation location, double zoom) async {
+    
     if (controller is MapplsMapController) {
       await controller.animateCamera(
         CameraUpdate.newLatLngZoom(
