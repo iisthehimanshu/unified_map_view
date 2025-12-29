@@ -165,17 +165,15 @@ class MapplsMapProvider extends BaseMapProvider {
         final String? fillColorHex = polygon.properties?["fillColor"];
         final String? strokeColorHex = polygon.properties?["strokeColor"];
 
-        final Color fillColor =
-        (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
+        final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
             ? RenderingUtilities.hexToColor(fillColorHex, opacity: 1.0)
             : RenderingUtilities.polygonColorMap[type]?["fillColor"]
-            ?? Colors.blue.withOpacity(0.0);
+            ?? Colors.blue.withOpacity(0.1);
 
-        final Color strokeColor =
-        (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
+        final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
             ? RenderingUtilities.hexToColor(strokeColorHex)
             : RenderingUtilities.polygonColorMap[type]?["strokeColor"]
-            ?? Colors.blue.withOpacity(0.0);
+            ?? Colors.blue.withOpacity(0.1);
 
         final coordinates = polygon.points
             .map((p) => LatLng(p.latitude, p.longitude))
