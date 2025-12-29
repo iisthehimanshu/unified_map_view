@@ -6,7 +6,6 @@ import '../models/camera_position.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
-import '../models/map_marker.dart';
 import '../models/geojson_models.dart';
 
 /// Mapbox implementation of BaseMapProvider
@@ -38,7 +37,7 @@ class MapboxMapProvider extends BaseMapProvider {
     );
   }
 
-  Future<void> _initializeAnnotations(MapboxMap mapboxMap, Set<MapMarker>? markers) async {
+  Future<void> _initializeAnnotations(MapboxMap mapboxMap, Set<GeoJsonMarker>? markers) async {
     _annotationManager = await mapboxMap.annotations.createPointAnnotationManager();
 
     if (markers != null && _annotationManager != null) {
@@ -48,7 +47,7 @@ class MapboxMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> _addMarkerToManager(MapMarker marker) async {
+  Future<void> _addMarkerToManager(GeoJsonMarker marker) async {
     if (_annotationManager == null) return;
 
     final options = PointAnnotationOptions(
@@ -96,7 +95,7 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> addMarker(dynamic controller, MapMarker marker) async {
+  Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapboxMap && _annotationManager == null) {
       _annotationManager = await controller.annotations.createPointAnnotationManager();
     }

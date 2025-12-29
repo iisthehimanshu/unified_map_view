@@ -7,7 +7,6 @@ import '../enums/map_provider.dart';
 import '../models/camera_position.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
-import '../models/map_marker.dart';
 import '../models/geojson_models.dart';
 import '../utils/geojson_loader.dart';
 import '../providers/base_map_provider.dart';
@@ -21,7 +20,7 @@ class UnifiedMapController extends ChangeNotifier {
   MapConfig _config;
   final Map<MapProvider, BaseMapProvider> _providers = {};
   dynamic _currentMapController;
-  final Set<MapMarker> _markers = {};
+  final Set<GeoJsonMarker> _markers = {};
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _polylines = [];
   late UnifiedCameraPosition _cameraPosition;
@@ -114,7 +113,7 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   /// Add a marker to the map
-  Future<void> addMarker(MapMarker marker) async {
+  Future<void> addMarker(GeoJsonMarker marker) async {
     _markers.add(marker);
     if (_currentMapController != null) {
       await currentProviderImplementation.addMarker(_currentMapController, marker);
@@ -157,33 +156,10 @@ class UnifiedMapController extends ChangeNotifier {
   // GeoJSON Methods
   // ============================================
 
-  /// Load and render GeoJSON from assets
-  Future<void> loadGeoJsonFromAsset(String assetPath) async {
-    try {
-      final collection = await GeoJsonLoader.loadFromAsset(assetPath);
-      await addGeoJsonFeatures(collection);
-    } catch (e) {
-      throw Exception('Failed to load GeoJSON: $e');
-    }
-  }
-
-  /// Load and render GeoJSON from JSON string
-  Future<void> loadGeoJsonFromString(String jsonString) async {
-    final collection = GeoJsonLoader.loadFromString(jsonString);
-    await addGeoJsonFeatures(collection);
-  }
-
   /// Add GeoJSON feature collection to map
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
     print("addGeoJsonFeatures ${StackTrace.current}");
     if (_currentMapController == null) return;
-
-
-    // Add markers from Point features
-    final markers = collection.toMarkers();
-    for (var marker in markers) {
-      await addMarker(marker);
-    }
 
     // Add polygons
     final polygons = GeoJsonLoader.extractPolygons(collection);
@@ -195,6 +171,12 @@ class UnifiedMapController extends ChangeNotifier {
     final polylines = GeoJsonLoader.extractPolylines(collection);
     for (var polyline in polylines) {
       await addPolyline(polyline);
+    }
+
+    // Add markers from Point features
+    final markers = GeoJsonLoader.extractMarkers(collection);
+    for (var marker in markers) {
+      await addMarker(marker);
     }
 
     notifyListeners();

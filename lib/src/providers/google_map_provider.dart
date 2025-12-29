@@ -9,7 +9,6 @@ import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
-import '../models/map_marker.dart';
 import '../models/geojson_models.dart';
 
 /// Google Maps implementation of BaseMapProvider
@@ -101,7 +100,7 @@ class GoogleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> addMarker(dynamic controller, MapMarker marker) async {
+  Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     _markers.add(_convertMarker(marker));
   }
 
@@ -135,7 +134,7 @@ class GoogleMapProvider extends BaseMapProvider {
     }
   }
 
-  Marker _convertMarker(MapMarker marker) {
+  Marker _convertMarker(GeoJsonMarker marker) {
     return Marker(
       markerId: MarkerId(marker.id),
       position: LatLng(marker.position.latitude, marker.position.longitude),

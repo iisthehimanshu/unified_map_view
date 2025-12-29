@@ -33,7 +33,8 @@ class AnnotationController{
     _venueData = VenueData(venueName, apiData,buildingData);
     List<GeoJsonFeature> venueRenderData = [];
     _venueData.availableFloors.forEach((buildingId,floors){
-      venueRenderData.addAll(_venueData.setBuildingFloor(buildingId: buildingId, floor: 0));
+      var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
+      venueRenderData.addAll(floorData);
     });
     await _unifiedMapController.moveCamera(_venueData.venueLatLng, zoom: 20);
 
@@ -43,8 +44,8 @@ class AnnotationController{
   Future<void> changeBuildingFloor(String buildingID, int floor) async {
     _focusBuildingSelectedFloor = floor;
     _unifiedMapController.removePolygon(buildingID);
-    List<GeoJsonFeature> venueRenderData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
-    await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+    var floorData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
+    await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
   }
 
   List<int>? returnFocusedBuildingFloors(){

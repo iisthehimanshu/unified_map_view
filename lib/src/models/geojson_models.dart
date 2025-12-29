@@ -2,7 +2,6 @@
 
 import 'dart:convert';
 import 'map_location.dart';
-import 'map_marker.dart';
 
 /// Types of GeoJSON geometries
 enum GeoJsonGeometryType {
@@ -35,23 +34,6 @@ class GeoJsonFeature {
       id: json['id']?.toString(),
       geometry: GeoJsonGeometry.fromJson(json['geometry']),
       properties: json['properties'] as Map<String, dynamic>?,
-    );
-  }
-
-  /// Convert feature to marker (for Point geometries)
-  MapMarker? toMarker() {
-    if (geometry.type != GeoJsonGeometryType.point) return null;
-
-    final coords = geometry.coordinates as List;
-    if(coords.isEmpty) return null;
-    return MapMarker(
-      id: "id:$id | buildingID:${building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
-      position: MapLocation(
-        latitude: coords.first[1],
-        longitude: coords.first[0],
-      ),
-      title: properties?['name']?.toString() ?? properties?['title']?.toString(),
-      snippet: properties?['description']?.toString(),
     );
   }
 }
@@ -124,15 +106,6 @@ class GeoJsonFeatureCollection {
     return GeoJsonFeatureCollection.fromJson(json);
   }
 
-  /// Get all point features as markers
-  List<MapMarker> toMarkers() {
-    return features
-        .map((f) => f.toMarker())
-        .where((m) => m != null)
-        .cast<MapMarker>()
-        .toList();
-  }
-
   /// Get all features of a specific type
   List<GeoJsonFeature> getFeaturesByType(GeoJsonGeometryType type) {
     return features.where((f) => f.geometry.type == type).toList();
@@ -194,6 +167,34 @@ class GeoJsonPolyline {
         longitude: coord[0],
       )).toList(),
       properties: feature.properties,
+    );
+  }
+}
+
+class GeoJsonMarker {
+  final String id;
+  final MapLocation position;
+  final String? title;
+  final String? snippet;
+
+  GeoJsonMarker({
+    required this.id,
+    required this.position,
+    this.title,
+    this.snippet
+  });
+
+  /// Create from GeoJSON Feature
+  static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
+    if (feature.geometry.type != GeoJsonGeometryType.point) return null;
+
+    final coords = feature.geometry.coordinates[0];
+
+    return GeoJsonMarker(
+      id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      position: MapLocation(latitude: coords.last, longitude: coords.first),
+      title: feature.properties?["name"],
+      snippet: ""
     );
   }
 }

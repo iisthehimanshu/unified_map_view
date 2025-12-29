@@ -56,31 +56,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
   }
 
-  // Load GeoJSON from assets
-  Future<void> _loadGeoJsonFromAssets() async {
-    setState(() => _isLoading = true);
-
-    try {
-      // Load your GeoJSON file from assets
-      await _unifiedMapController.loadGeoJsonFromAsset('assets/response.json');
-
-      // Fit map to show all features
-      await _unifiedMapController.fitBoundsToGeoJson();
-
-      _showMessage('GeoJSON loaded successfully!');
-    } catch (e) {
-      _showMessage('Error loading GeoJSON: $e');
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -132,12 +107,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 8),
-                ElevatedButton.icon(
-                  onPressed: _isLoading ? null : _loadGeoJsonFromAssets,
-                  icon: const Icon(Icons.folder),
-                  label: const Text('Load from Assets'),
                 ),
                 const SizedBox(height: 8),
                 ElevatedButton.icon(
