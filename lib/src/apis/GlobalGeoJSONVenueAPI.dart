@@ -23,14 +23,11 @@ class GlobalGeoJSONVenueAPI{
     if (response.statusCode == 200) {
 
       GlobalAppGeoJsonDataModel globalAppGeoJsonDataModel = GlobalAppGeoJsonDataModel.fromJson(json.decode(response.body));
-      debugPrint("GlobalGeoJSONVenueAPI DATA FROM API || Status Code ${response.statusCode} GlobalGeoJSONVenueAPI.data length ${globalAppGeoJsonDataModel.data?.length}");
       return json.decode(response.body);
     } else if (response.statusCode == 403) {
-      String newAccessToken = "await RefreshTokenAPI.refresh()";
-      debugPrint("Failed to load data: ${response.statusCode}");
       return await getGeoJSONData(venueName);
     } else {
-      print("Sessionsapi response.statusCode ${response.statusCode} ${response.body}");
+      print("getGeoJSONData response.statusCode ${response.statusCode} ${response.body}");
       return null;
       throw Exception('Failed to load data');
     }

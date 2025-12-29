@@ -73,12 +73,6 @@ class VenueData{
             : sortedFloors.first;
       }
     });
-
-    // Debug print
-    print("Building-wise available floors:");
-    _availableFloors.forEach((buildingId, floors) {
-      print("Building $buildingId: Floors $floors (Selected: ${_selectedFloor[buildingId]})");
-    });
   }
 
   int? getSelectedFloor(String buildingId) {
@@ -89,9 +83,6 @@ class VenueData{
   void setSelectedFloor(String buildingId, int floor) {
     if (availableFloors[buildingId]?.contains(floor) ?? false) {
       _selectedFloor[buildingId] = floor;
-      print("Selected floor $floor for building $buildingId");
-    } else {
-      print("Floor $floor not available for building $buildingId");
     }
   }
 
@@ -110,7 +101,6 @@ class VenueData{
 
       // 🔥 Always include boundarypoint features
       if (lowerName.contains('boundary points')) {
-        print("Boundary name ${lowerName}");
         return true;
       }
 
@@ -155,12 +145,6 @@ class VenueData{
       // Use building ID as key (recommended)
       buildingCenters[building.id] = MapLocation(latitude: lat, longitude: lng);
     }
-
-    // Debug
-    print("🏢 Building Centers:");
-    buildingCenters.forEach((id, center) {
-      print("$id → ${center.latitude}, ${center.longitude}");
-    });
   }
 
 
