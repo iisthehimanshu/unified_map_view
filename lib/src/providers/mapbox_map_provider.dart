@@ -17,14 +17,12 @@ class MapboxMapProvider extends BaseMapProvider {
   Widget buildMap({
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
-    Set<MapMarker>? markers,
     required void Function(UnifiedCameraPosition position) onCameraMove,
 
   }) {
     return MapWidget(
       onMapCreated: (mapboxMap) {
         onMapCreated(mapboxMap);
-        _initializeAnnotations(mapboxMap, markers);
       },
       styleUri: MapboxStyles.MAPBOX_STREETS,
       cameraOptions: CameraOptions(

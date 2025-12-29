@@ -1,13 +1,8 @@
 // lib/src/providers/mappls_map_provider.dart
 
-import 'dart:convert';
-import 'dart:math';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart';
 import 'package:mappls_gl/mappls_gl.dart';
-import '../models/camera_position.dart';
+import 'package:unified_map_view/src/models/camera_position.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -21,28 +16,13 @@ class MapplsMapProvider extends BaseMapProvider {
   final Map<String, Symbol> _symbols = {};
   final Map<String, Line> _lines = {};
   final Map<String, Fill> _fills = {};
-  MapplsMapController? _controller;
-
-  // Clustering configuration
-  bool _clusteringEnabled = true;
-  int _clusterMaxZoom = 14;
-  double _clusterRadiusInMeters = 100;
-  bool _layersInitialized = false;
-
-  // Track markers for clustering
-  final List<MapMarker> _allMarkers = [];
-
-  String _markerSourceId = "marker-source";
-  String _markerLayerId = "marker-layer";
-
-  final List<Map<String, dynamic>> _markerFeatures = [];
 
   @override
   Widget buildMap({
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
-    Set<MapMarker>? markers,
     required void Function(UnifiedCameraPosition position) onCameraMove,
+
   }) {
     return MapplsMap(
       initialCameraPosition: CameraPosition(
@@ -52,60 +32,11 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         zoom: config.initialLocation.zoom,
       ),
-
       onMapCreated: (MapplsMapController controller) async {
-        _controller = controller;
         onMapCreated(controller);
-        controller.onSymbolTapped.add(_onSymbolTapped);
-        controller.onFillTapped.add(_onFillTapped);
-        await _addMarkerImage();
-        _initMarkerLayers(controller);
-        // Add initial markers if provided
-        if (markers != null) {
-          for (var marker in markers) {
-            await addMarker(controller, marker);
-          }
-        }
       },
-      onStyleLoadedCallback: () async {
-        print("Style loaded, initializing clustering layers");
-        if (_clusteringEnabled && _controller != null) {
-
-        }
-      },
-      onMapClick: (Point<double> point, LatLng latlng) async {
-        print("🗺 Map clicked at $latlng");
-
-        final features = await _controller!.queryRenderedFeatures(
-          point,
-          ['marker-layer'], // your SymbolLayer ID
-          null,
-        );
-
-        if (features.isEmpty) return;
-
-        final feature = features.first;
-        final props = feature['properties'];
-
-        print("✅ Marker tapped via map click");
-        print("Title: ${props?['title']}");
-
-        _controller?.onFeatureTapped.add(
-              (dynamic feature, Point<double> point, LatLng latLng) {
-            print("✅ Feature tapped");
-            print("Feature: $feature");
-            print("Screen point: $point");
-            print("LatLng: $latLng");
-
-            final properties = feature?['properties'];
-            if (properties != null) {
-              print("Tapped title: ${properties['title']}");
-            }
-          },
-        );
-      },
-      onAttributionClick: (){
-        print("onAttributionClick");
+      onStyleLoadedCallback: () {
+        // Style loaded, map is ready
       },
       myLocationEnabled: config.showUserLocation,
       myLocationTrackingMode: MyLocationTrackingMode.none,
@@ -114,152 +45,13 @@ class MapplsMapProvider extends BaseMapProvider {
       scrollGesturesEnabled: config.scrollGesturesEnabled,
       tiltGesturesEnabled: config.tiltGesturesEnabled,
       zoomGesturesEnabled: config.zoomControlsEnabled,
-      minMaxZoomPreference: const MinMaxZoomPreference(4, 22),
-
-      onCameraIdle: () async {
-        print("onCameraIdle called");
-
-        if (_controller != null) {
-          try {
-            final bounds = await _controller!.getVisibleRegion();
-            if (bounds != null) {
-              final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
-              final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
-
-              final cameraPos = await _controller!.cameraPosition;
-
-              onCameraMove(UnifiedCameraPosition(
-                mapLocation: MapLocation(
-                  latitude: centerLat,
-                  longitude: centerLng,
-                ),
-                zoom: cameraPos?.zoom ?? 0.0,
-                bearing: cameraPos?.bearing ?? 0.0,
-              ));
-            }
-          } catch (e) {
-            print("Error getting camera position: $e");
-          }
-        }
-      },
-
+      minMaxZoomPreference: const MinMaxZoomPreference(0, 24),
     );
-  }
-  void _onFillTapped(Fill fill) {
-    debugPrint("🔵 Polygon tapped: ${fill.id}");
-
-    final entry = _fills.entries.firstWhere(
-          (e) => e.value.id == fill.id,
-      orElse: () => MapEntry('', fill),
-    );
-
-    if (entry.key.isNotEmpty) {
-      debugPrint("Polygon ID tapped: ${fill.toGeoJson()}");
-      // TODO: highlight polygon / show details
-    }
-  }
-
-  void _onSymbolTapped(Symbol symbol) {
-    debugPrint("🟢 Symbol tapped: ${symbol.id}");
-
-    final entry = _symbols.entries.firstWhere(
-          (e) => e.value.id == symbol.id,
-      orElse: () => MapEntry('', symbol),
-    );
-
-    if (entry.key.isNotEmpty) {
-      debugPrint("Marker ID tapped: ${entry.key}");
-      // 👉 open bottom sheet / show details / highlight marker
-    }
-  }
-
-
-  Future<void> _addMarkerImage() async {
-    final ByteData bytes = await rootBundle.load('assets/MapLift.png');
-
-    final Uint8List list = bytes.buffer.asUint8List();
-
-    await _controller!.addImage(
-      'custom-lift-marker', // 👈 image ID
-      list,
-    );
-    final ByteData maleWashroombytes = await rootBundle.load('assets/MapMaleWashroom.png');
-
-    final Uint8List maleWashroomlist = maleWashroombytes.buffer.asUint8List();
-
-    await _controller!.addImage(
-      'custom-male-marker', // 👈 image ID
-      maleWashroomlist,
-    );
-
-    final ByteData femaleWashroombytes = await rootBundle.load('assets/MapFemaleWashroom.png');
-
-    final Uint8List femaleWashroomlist = femaleWashroombytes.buffer.asUint8List();
-
-    await _controller!.addImage(
-      'custom-female-marker', // 👈 image ID
-      femaleWashroomlist,
-    );
-  }
-
-
-  /// Add a single marker's GeoJSON feature and update the source
-  Future<void> _addMarkerToSource(MapMarker marker) async {
-    if (_controller == null) return;
-
-    final feature = {
-      "type": "Feature",
-      "id": marker.id,
-      "geometry": {
-        "type": "Point",
-        "coordinates": [
-          marker.position.longitude,
-          marker.position.latitude,
-        ],
-      },
-      "properties": {
-        "id": marker.id,
-        "title": marker.title, // used by textField
-        "icon": RenderingUtilities.getMarkerIconId(marker.title),
-        "floor": '0', // ✅ FIXED
-      },
-    };
-
-    _markerFeatures.add(feature);
-
-    await _controller!.setGeoJsonSource(
-      _markerSourceId,
-      {
-        "type": "FeatureCollection",
-        "features": _markerFeatures,
-      },
-    );
-
-    print("✅ Marker ${marker.id} added to single symbol layer");
-  }
-
-
-
-
-
-  /// Enable or disable clustering
-  void setClusteringEnabled(bool enabled) {
-    _clusteringEnabled = enabled;
-  }
-
-  /// Configure clustering parameters
-  void setClusteringConfig({
-    int? maxZoom,
-    double? radiusInMeters,
-  }) {
-    if (maxZoom != null) _clusterMaxZoom = maxZoom;
-    if (radiusInMeters != null) _clusterRadiusInMeters = radiusInMeters;
   }
 
   @override
   Future<void> moveCamera(dynamic controller, MapLocation location, double zoom) async {
     if (controller is MapplsMapController) {
-      print("current location ${location.latitude} ${location.longitude}");
       await controller.moveCamera(
         CameraUpdate.newLatLngZoom(
           LatLng(location.latitude, location.longitude),
@@ -278,166 +70,6 @@ class MapplsMapProvider extends BaseMapProvider {
           zoom,
         ),
       );
-    }
-  }
-
-
-  Future<void> _initMarkerLayers(MapplsMapController controller) async {
-    if (_layersInitialized) return;
-
-    _markerSourceId = "marker-source";
-    _markerLayerId = "marker-layer";
-
-    // 🔹 GeoJSON source (empty at start)
-    await controller.addGeoJsonSource(
-      _markerSourceId,
-      {
-        "type": "FeatureCollection",
-        "features": [],
-      },
-    );
-
-    // 🔹 SINGLE SymbolLayer (defined ONCE)
-    await controller.addSymbolLayer(
-      _markerSourceId,
-      _markerLayerId,
-      SymbolLayerProperties(
-        iconImage: ["get", "icon"],
-        iconSize: 1.5,
-        textField: ["get", "title"],
-        textSize: 10,
-        textColor: "#000000",
-        textHaloColor: "#FFFFFF",
-        textHaloWidth: 2,
-        textAnchor: "top",
-        textOffset: [0, 1.2],
-        iconAllowOverlap: false,
-        textAllowOverlap: false,
-      ),
-      enableInteraction: true,
-    );
-
-    _layersInitialized = true;
-    print("✅ Marker source & SymbolLayer initialized");
-  }
-
-  @override
-  Future<void> addMarker(dynamic controller, MapMarker marker) async {
-    if (controller is MapplsMapController) {
-      // try {
-        _allMarkers.add(marker);
-        print("Adding marker: ${marker.id} at ${marker.position.latitude}, ${marker.position.longitude}");
-        print("Clustering enabled: $_clusteringEnabled, Layers initialized: $_layersInitialized");
-        if (!_layersInitialized) {
-          await _initMarkerLayers(controller);
-        }
-        await _addMarkerToSource(marker);        // if (_clusteringEnabled && _layersInitialized) {
-        //   // Add marker to GeoJSON source immediately - symbol will be added automatically
-        //   await _addMarkerToSource(marker);
-        // } else if (_clusteringEnabled && !_layersInitialized) {
-        //   // Wait for layers to be initialized
-        //   print("Markers will be added once style loads (${_allMarkers.length} markers pending)");
-        // } else {
-        //   // Add as regular symbol (non-clustered)
-        //   print("Adding marker as regular symbol");
-        //   final symbol = await controller.addSymbol(
-        //     SymbolOptions(
-        //       geometry: LatLng(
-        //         marker.position.latitude,
-        //         marker.position.longitude,
-        //       ),
-        //       iconImage: 'marker-15',
-        //       iconSize: 1.5,
-        //       textField: marker.title,
-        //       textSize: 10.0,
-        //       textOffset: const Offset(0, 1.5),
-        //       textColor: '#000000',
-        //       textHaloColor: '#FFFFFF',
-        //       textHaloWidth: 2.0,
-        //
-        //     ),
-        //   );
-        //   _symbols[marker.id] = symbol;
-        // }
-      // } catch (e) {
-      //   print('Error adding marker: $e');
-      // }
-    }
-  }
-
-  @override
-  Future<void> removeMarker(dynamic controller, String markerId) async {
-    if (controller is! MapplsMapController) return;
-
-    _allMarkers.removeWhere((m) => m.id == markerId);
-
-    if (_clusteringEnabled && _layersInitialized) {
-      // Update GeoJSON source with remaining markers
-      final features = _allMarkers.map((m) {
-        return {
-          'type': 'Feature',
-          'id': m.id,
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [
-              m.position.longitude,
-              m.position.latitude,
-            ],
-          },
-          'properties': {
-            'id': m.id,
-            'title': m.title ?? '',
-          },
-        };
-      }).toList();
-
-      final geojson = {
-        'type': 'FeatureCollection',
-        'features': features,
-      };
-
-      await _controller!.setGeoJsonSource('markers-source', geojson);
-    } else {
-      final matchingEntries = _symbols.entries
-          .where((entry) => entry.key.contains(markerId))
-          .toList();
-
-      for (final entry in matchingEntries) {
-        try {
-          await controller.removeSymbol(entry.value);
-        } catch (_) {}
-        _symbols.remove(entry.key);
-      }
-    }
-  }
-
-  @override
-  Future<void> clearMarkers(dynamic controller) async {
-    if (controller is MapplsMapController) {
-      try {
-        _allMarkers.clear();
-
-        if (_clusteringEnabled && _layersInitialized) {
-          // Clear GeoJSON source using setGeoJsonSource
-          await _controller!.setGeoJsonSource(
-            'markers-source',
-            {
-              'type': 'FeatureCollection',
-              'features': [],
-            },
-          );
-          print("Cleared all markers from GeoJSON source");
-        } else {
-          for (var symbol in _symbols.values) {
-            try {
-              await controller.removeSymbol(symbol);
-            } catch (_) {}
-          }
-          _symbols.clear();
-        }
-      } catch (e) {
-        print('Error clearing markers: $e');
-      }
     }
   }
 
@@ -468,13 +100,65 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
+
   @override
-  Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
-    print("polgonid ${polygon.properties?.keys}");
+  Future<void> addMarker(dynamic controller, MapMarker marker) async {
     if (controller is MapplsMapController) {
       try {
-        print("polygon.points");
-        print(polygon.points);
+        final symbol = await controller.addSymbol(
+          SymbolOptions(
+            geometry: LatLng(
+              marker.position.latitude,
+              marker.position.longitude,
+            ),
+            iconImage: 'marker-15', // Default Mappls marker icon
+            iconSize: 1.5,
+            textField: marker.title,
+            textSize: 12.0,
+            textOffset: const Offset(0, 1.5),
+            textColor: '#000000',
+            textHaloColor: '#FFFFFF',
+            textHaloWidth: 2.0,
+          ),
+        );
+
+        _symbols[marker.id] = symbol;
+      } catch (e) {
+        print('Error adding marker: $e');
+      }
+    }
+  }
+
+  @override
+  Future<void> removeMarker(dynamic controller, String markerId) async {
+    if (controller is MapplsMapController && _symbols.containsKey(markerId)) {
+      try {
+        await controller.removeSymbol(_symbols[markerId]!);
+        _symbols.remove(markerId);
+      } catch (e) {
+        print('Error removing marker: $e');
+      }
+    }
+  }
+
+  @override
+  Future<void> clearMarkers(dynamic controller) async {
+    if (controller is MapplsMapController) {
+      try {
+        for (var symbol in _symbols.values) {
+          await controller.removeSymbol(symbol);
+        }
+        _symbols.clear();
+      } catch (e) {
+        print('Error clearing markers: $e');
+      }
+    }
+  }
+
+  @override
+  Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
+    if (controller is MapplsMapController) {
+      try {
         final String? rawType = polygon.properties?["type"];
         final String? type = rawType?.toLowerCase();
 
@@ -596,82 +280,6 @@ class MapplsMapProvider extends BaseMapProvider {
         _lines.clear();
       } catch (e) {
         print('Error clearing polylines: $e');
-      }
-    }
-  }
-
-  /// Add custom symbol with custom icon
-  Future<void> addCustomMarker(
-      MapplsMapController controller,
-      MapMarker marker, {
-        String? customIconImage,
-        double? iconSize,
-      }) async {
-    try {
-      final symbol = await controller.addSymbol(
-        SymbolOptions(
-          geometry: LatLng(
-            marker.position.latitude,
-            marker.position.longitude,
-          ),
-          iconImage: customIconImage ?? 'marker-15',
-          iconSize: iconSize ?? 1.5,
-          textField: marker.title ?? '',
-          textSize: 12.0,
-          textOffset: const Offset(0, 1.5),
-        ),
-      );
-
-      _symbols[marker.id] = symbol;
-    } catch (e) {
-      print('Error adding custom marker: $e');
-    }
-  }
-
-  /// Update polygon style
-  Future<void> updatePolygonStyle(
-      MapplsMapController controller,
-      String polygonId, {
-        String? fillColor,
-        double? fillOpacity,
-        String? outlineColor,
-      }) async {
-    if (_fills.containsKey(polygonId)) {
-      try {
-        await controller.updateFill(
-          _fills[polygonId]!,
-          FillOptions(
-            fillColor: fillColor,
-            fillOpacity: fillOpacity,
-            fillOutlineColor: outlineColor,
-          ),
-        );
-      } catch (e) {
-        print('Error updating polygon: $e');
-      }
-    }
-  }
-
-  /// Update polyline style
-  Future<void> updatePolylineStyle(
-      MapplsMapController controller,
-      String polylineId, {
-        String? lineColor,
-        double? lineWidth,
-        double? lineOpacity,
-      }) async {
-    if (_lines.containsKey("polygonId")) {
-      try {
-        await controller.updateLine(
-          _lines[polylineId]!,
-          LineOptions(
-            lineColor: lineColor,
-            lineWidth: lineWidth,
-            lineOpacity: lineOpacity,
-          ),
-        );
-      } catch (e) {
-        print('Error updating polyline: $e');
       }
     }
   }

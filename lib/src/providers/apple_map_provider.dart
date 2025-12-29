@@ -19,14 +19,8 @@ class AppleMapProvider extends BaseMapProvider {
   Widget buildMap({
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
-    Set<MapMarker>? markers,
     required void Function(UnifiedCameraPosition position) onCameraMove,
   }) {
-    if (markers != null) {
-      _annotations.clear();
-      _annotations.addAll(markers.map(_convertMarker));
-    }
-
     return AppleMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(

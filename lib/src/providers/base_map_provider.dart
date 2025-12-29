@@ -14,7 +14,6 @@ abstract class BaseMapProvider {
   Widget buildMap({
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
-    Set<MapMarker>? markers,
     required void Function(UnifiedCameraPosition position) onCameraMove,
   });
 
@@ -56,33 +55,6 @@ abstract class BaseMapProvider {
 
   /// Clear all polylines
   Future<void> clearPolylines(dynamic controller);
-
-  /// Add multiple GeoJSON features at once
-  Future<void> addGeoJsonFeatures(dynamic controller, GeoJsonFeatureCollection collection) async {
-    // Add markers
-    final markers = collection.toMarkers();
-    for (var marker in markers) {
-      await addMarker(controller, marker);
-    }
-
-    // Add polygons
-    final polygons = collection.getFeaturesByType(GeoJsonGeometryType.polygon);
-    for (var feature in polygons) {
-      final polygon = GeoJsonPolygon.fromFeature(feature);
-      if (polygon != null) {
-        await addPolygon(controller, polygon);
-      }
-    }
-
-    // Add polylines
-    final polylines = collection.getFeaturesByType(GeoJsonGeometryType.lineString);
-    for (var feature in polylines) {
-      final polyline = GeoJsonPolyline.fromFeature(feature);
-      if (polyline != null) {
-        await addPolyline(controller, polyline);
-      }
-    }
-  }
 
   /// Clear all GeoJSON features
   Future<void> clearAllGeoJsonFeatures(dynamic controller) async {

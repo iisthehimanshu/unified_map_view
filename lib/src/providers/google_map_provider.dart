@@ -23,15 +23,9 @@ class GoogleMapProvider extends BaseMapProvider {
   Widget buildMap({
     required MapConfig config,
     required Function(dynamic controller) onMapCreated,
-    Set<MapMarker>? markers,
     required void Function(UnifiedCameraPosition position) onCameraMove,
 
   }) {
-    if (markers != null) {
-      _markers.clear();
-      _markers.addAll(markers.map(_convertMarker));
-    }
-
     return GoogleMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(

@@ -44,10 +44,7 @@ class UnifiedMapController extends ChangeNotifier {
     _providers[MapProvider.google] = GoogleMapProvider();
     _providers[MapProvider.mapbox] = MapboxMapProvider();
     _providers[MapProvider.apple] = AppleMapProvider();
-
-    final mapplsProvider = MapplsMapProvider();
-    mapplsProvider.setClusteringEnabled(enableClustering);
-    _providers[MapProvider.mappls] = mapplsProvider;
+    _providers[MapProvider.mappls] = MapplsMapProvider();
   }
 
   /// Register a custom map provider
@@ -155,9 +152,6 @@ class UnifiedMapController extends ChangeNotifier {
     if (_currentMapController == null) return;
     await currentProviderImplementation.setMapStyle(_currentMapController, styleJson);
   }
-
-  /// Get all current markers
-  Set<MapMarker> get markers => Set.unmodifiable(_markers);
 
   // ============================================
   // GeoJSON Methods
