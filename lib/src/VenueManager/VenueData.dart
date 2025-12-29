@@ -95,6 +95,7 @@ class VenueData{
     if (model.data == null) return [];
 
     final filteredData = model.data!.where((feature) {
+      print("feature ID ${feature.id}");
       final name = feature.properties?.name;
       final lowerName = name?.toLowerCase() ?? '';
 
@@ -103,7 +104,6 @@ class VenueData{
       return feature.buildingID == buildingId &&
           feature.properties?.floor == floor &&
           name != null &&
-          lowerName != 'undefined' &&
           !lowerName.contains('piller') &&
           !lowerName.contains('non walkable') &&
           !lowerName.contains('iw');
