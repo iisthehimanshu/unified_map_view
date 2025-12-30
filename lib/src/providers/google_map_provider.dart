@@ -142,7 +142,7 @@ class GoogleMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
-    final String? rawType = polygon.properties?["type"];
+    final String? rawType = polygon.properties?["type"]?? polygon.properties?["polygonType"];
     final String? type = rawType?.toLowerCase();
     print("type $type ${polygon.id}");
 
@@ -175,12 +175,21 @@ class GoogleMapProvider extends BaseMapProvider {
   }
 
 
-
   @override
-  Future<void> removePolygon(dynamic controller, String polygonId) async {
-    _polygons.removeWhere(
-          (p) => p.polygonId.value.contains(polygonId),
-    );
+  Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude}) async {
+    _polygons.removeWhere((p) {
+      final id = p.polygonId.value;
+
+      if (exclude != null && id.contains(exclude)) {
+        return false;
+      }
+
+      if (id.contains(polygonId)) {
+        return true;
+      }
+
+      return false;
+    });
   }
 
 
@@ -193,7 +202,9 @@ class GoogleMapProvider extends BaseMapProvider {
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
     bool isWaypoint = false;
     if(polyline.properties?["lineCategory"] != null){
-      isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint";
+      isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint" ;
+    }else{
+      isWaypoint = polyline.properties!["polygonType"].toLowerCase() == "waypoints" ;
     }
 
     _polylines.add(Polyline(
@@ -220,6 +231,12 @@ class GoogleMapProvider extends BaseMapProvider {
   @override
   Future<void> clearPolylines(dynamic controller) async {
     _polylines.clear();
+  }
+
+  @override
+  Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) {
+    // TODO: implement addPolygons
+    throw UnimplementedError();
   }
 
 }

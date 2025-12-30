@@ -37,9 +37,10 @@ abstract class BaseMapProvider {
 
   /// Add a polygon to the map
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon);
+  Future<void> addPolygons(dynamic controller, List<GeoJsonPolygon> polygons);
 
   /// Remove a polygon from the map
-  Future<void> removePolygon(dynamic controller, String polygonId);
+  Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude});
 
   /// Clear all polygons
   Future<void> clearPolygons(dynamic controller);

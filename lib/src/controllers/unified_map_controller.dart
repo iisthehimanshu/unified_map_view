@@ -205,6 +205,9 @@ class UnifiedMapController extends ChangeNotifier {
     for (var polygon in boundaryPolygons) {
       await addPolygon(polygon);
     }
+    // await addPolygons(boundaryPolygons);
+
+    // await addPolygons(otherPolygons);
 
     for (var polygon in otherPolygons) {
       await addPolygon(polygon);
@@ -227,7 +230,6 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Add a polygon to the map
   Future<void> addPolygon(GeoJsonPolygon polygon) async {
-    print("addPolygon ${polygon.properties}");
     _polygons.add(polygon);
     if (_currentMapController != null) {
       await currentProviderImplementation.addPolygon(_currentMapController, polygon);
@@ -235,11 +237,19 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> addPolygons(List<GeoJsonPolygon> polygons) async {
+    _polygons.addAll(polygons);
+    if (_currentMapController != null) {
+      await currentProviderImplementation.addPolygons(_currentMapController, polygons);
+    }
+    notifyListeners();
+  }
+
   /// Remove a polygon from the map
-  Future<void> removePolygon(String polygonId) async {
+  Future<void> removePolygon(String polygonId,{String? exclude}) async {
     _polygons.removeWhere((p) => p.id == polygonId);
     if (_currentMapController != null) {
-      await currentProviderImplementation.removePolygon(_currentMapController, polygonId);
+      await currentProviderImplementation.removePolygon(_currentMapController, polygonId, exclude: exclude);
     }
     notifyListeners();
   }

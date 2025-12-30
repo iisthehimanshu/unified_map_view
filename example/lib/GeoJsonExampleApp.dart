@@ -50,7 +50,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           bearing: 0.0,
         )
     );
-
+    
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
   }
 

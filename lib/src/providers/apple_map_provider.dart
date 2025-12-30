@@ -121,7 +121,7 @@ class AppleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> removePolygon(dynamic controller, String polygonId) async {
+  Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude}) async {
     _polygons.removeWhere((p) => p.polygonId.value == polygonId);
   }
 
@@ -150,6 +150,12 @@ class AppleMapProvider extends BaseMapProvider {
   @override
   Future<void> clearPolylines(dynamic controller) async {
     _polylines.clear();
+  }
+
+  @override
+  Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) {
+    // TODO: implement addPolygons
+    throw UnimplementedError();
   }
 
 }

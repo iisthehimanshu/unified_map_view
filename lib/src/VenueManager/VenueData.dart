@@ -98,8 +98,6 @@ class VenueData{
       final name = feature.properties?["name"];
       final lowerName = name?.toLowerCase() ?? '';
 
-
-
       return feature.buildingID == buildingId &&
           feature.properties?["floor"] == floor &&
           name != null &&
