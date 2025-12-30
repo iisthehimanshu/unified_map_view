@@ -42,7 +42,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
 
     _unifiedMapController = UnifiedMapController(
-      initialProvider: MapProvider.google,
+      initialProvider: MapProvider.mappls,
       config: const MapConfig(
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 28.6139, longitude: 77.2090), // Delhi
@@ -52,7 +52,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
       ),
       venueName: 'IITDelhi',
     );
-
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
   }
 

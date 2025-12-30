@@ -43,7 +43,7 @@ class AnnotationController{
 
   Future<void> changeBuildingFloor(String buildingID, int floor) async {
     _focusBuildingSelectedFloor = floor;
-    _unifiedMapController.removePolygon(buildingID);
+    _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
     _unifiedMapController.removePolyline(buildingID);
     _unifiedMapController.removeMarker(buildingID);
     var floorData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);

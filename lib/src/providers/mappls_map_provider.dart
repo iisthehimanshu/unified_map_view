@@ -252,14 +252,23 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> removePolygon(dynamic controller, String polygonId) async {
+  Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude}) async {
     if (controller is! MapplsMapController) return;
 
-    final matchingEntries = _fills.entries
-        .where((entry) => entry.key.contains(polygonId))
-        .toList();
-    print("matchingEntries $matchingEntries");
-    for (final entry in matchingEntries) {
+    final entriesToRemove = _fills.entries.where((entry) {
+      final id = entry.key;
+
+      if (exclude != null && id.contains(exclude)) {
+        return false;
+      }
+
+      if (id.contains(polygonId)) {
+        return true;
+      }
+
+      return false;
+    }).toList();
+    for (final entry in entriesToRemove) {
       await controller.removeFill(entry.value);
       _fills.remove(entry.key);
     }
@@ -382,5 +391,11 @@ class MapplsMapProvider extends BaseMapProvider {
     } catch (e) {
       print('Error enabling clustering: $e');
     }
+  }
+
+  @override
+  Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) {
+    // TODO: implement addPolygons
+    throw UnimplementedError();
   }
 }

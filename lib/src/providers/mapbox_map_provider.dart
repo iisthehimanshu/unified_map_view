@@ -1,8 +1,12 @@
 // lib/src/providers/mapbox_map_provider.dart
 
+import 'dart:convert';
+
+import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import '../models/camera_position.dart';
+import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -12,6 +16,15 @@ import '../models/geojson_models.dart';
 class MapboxMapProvider extends BaseMapProvider {
   PointAnnotationManager? _annotationManager;
 
+  static const String _markerSourceId = 'marker-source';
+  static const String _markerLayerId = 'marker-symbol-layer';
+  final Map<String, GeoJsonMarker> _markers = {};
+
+  static const String _polygonSourceId = 'polygon-source';
+  static const String _polygonLayerId  = 'polygon-extrusion-layer';
+  final Map<String, GeoJsonPolygon> _polygons = {};
+
+
   @override
   Widget buildMap({
     required MapConfig config,
@@ -20,8 +33,9 @@ class MapboxMapProvider extends BaseMapProvider {
 
   }) {
     return MapWidget(
-      onMapCreated: (mapboxMap) {
+      onMapCreated: (mapboxMap) async {
         onMapCreated(mapboxMap);
+        await _initMarkerLayer(mapboxMap);
       },
       styleUri: MapboxStyles.MAPBOX_STREETS,
       cameraOptions: CameraOptions(
@@ -37,33 +51,44 @@ class MapboxMapProvider extends BaseMapProvider {
     );
   }
 
-  Future<void> _initializeAnnotations(MapboxMap mapboxMap, Set<GeoJsonMarker>? markers) async {
-    _annotationManager = await mapboxMap.annotations.createPointAnnotationManager();
 
-    if (markers != null && _annotationManager != null) {
-      for (var marker in markers) {
-        await _addMarkerToManager(marker);
-      }
+
+  Future<void> _initMarkerLayer(MapboxMap mapboxMap) async {
+    final style = mapboxMap.style;
+
+    final exists = await style.styleSourceExists(_markerSourceId);
+    if (!exists) {
+      await style.addSource(
+        GeoJsonSource(
+          id: _markerSourceId,
+          data: jsonEncode({
+            'type': 'FeatureCollection',
+            'features': [],
+          }),
+        ),
+      );
+    }
+
+    final layerExists = await style.styleLayerExists(_markerLayerId);
+    if (!layerExists) {
+      await style.addLayer(
+        SymbolLayer(
+          id: _markerLayerId,
+          sourceId: _markerSourceId,
+          textFieldExpression: ['get', 'title'],
+          textSize: 14,
+          textOffset: [0, -1.5],
+          textAnchor: TextAnchor.TOP,
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
+        ),
+
+      );
     }
   }
 
-  Future<void> _addMarkerToManager(GeoJsonMarker marker) async {
-    if (_annotationManager == null) return;
 
-    final options = PointAnnotationOptions(
-      geometry: Point(
-        coordinates: Position(
-          marker.position.longitude,
-          marker.position.latitude,
-        ),
-      ),
-      textField: marker.title,
-      textOffset: [0.0, -2.0],
-      iconSize: 1.0,
-    );
 
-    await _annotationManager!.create(options);
-  }
 
   @override
   Future<void> moveCamera(dynamic controller, MapLocation location, double zoom) async {
@@ -96,27 +121,73 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
-    if (controller is MapboxMap && _annotationManager == null) {
-      _annotationManager = await controller.annotations.createPointAnnotationManager();
-    }
-    await _addMarkerToManager(marker);
+    if (controller is! MapboxMap) return;
+
+    _markers[marker.id] = marker;
+    await _updateMarkerSource(controller);
   }
+
+  Future<void> addPolygons(dynamic controller, List<GeoJsonPolygon> polygons) async {
+    if (controller is! MapboxMap) return;
+
+    // Add all polygons to the map
+    for (var polygon in polygons) {
+      _polygons[polygon.id] = polygon;
+    }
+
+    // Update source only once
+    await _updatePolygonSource(controller);
+  }
+
+
+
+  Future<void> _updateMarkerSource(MapboxMap mapboxMap) async {
+    final features = _markers.values.map((marker) {
+      return {
+        'type': 'Feature',
+        'id': marker.id,
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [
+            marker.position.longitude,
+            marker.position.latitude,
+          ],
+        },
+        'properties': {
+          'title': marker.title,
+        },
+      };
+    }).toList();
+
+    await mapboxMap.style.setStyleSourceProperty(
+      _markerSourceId,
+      'data',
+      {
+        'type': 'FeatureCollection',
+        'features': features,
+      },
+    );
+  }
+
+
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
-    // Note: Current Mapbox SDK requires managing annotation IDs
-    // This would need enhancement with a marker ID tracking system
-    if (_annotationManager != null) {
-      // Implementation would require tracking created annotation IDs
-    }
+    if (controller is! MapboxMap) return;
+
+    _markers.remove(markerId);
+    await _updateMarkerSource(controller);
   }
+
 
   @override
   Future<void> clearMarkers(dynamic controller) async {
-    if (_annotationManager != null) {
-      await _annotationManager!.deleteAll();
-    }
+    if (controller is! MapboxMap) return;
+
+    _markers.clear();
+    await _updateMarkerSource(controller);
   }
+
 
   @override
   Future<MapLocation?> getCurrentLocation(dynamic controller) async {
@@ -140,22 +211,113 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
-    // Mapbox polygons require style layer implementation
-    // This is a simplified version - full implementation would use style layers
-    if (controller is MapboxMap) {
-      // TODO: Implement polygon rendering using Mapbox style layers
-      // For now, this is a placeholder
+    if (controller is! MapboxMap) return;
+
+    _polygons[polygon.id] = polygon;
+    await _updatePolygonSource(controller);
+  }
+
+  Future<void> _updatePolygonSource(MapboxMap mapboxMap) async {
+    final style = mapboxMap.style;
+
+    final features = _polygons.values
+        .where((polygon) => polygon.properties?["polygonType"] != "Boundary")
+        .map((polygon) {
+
+      final String? rawType =
+          polygon.properties?["type"] ?? polygon.properties?["polygonType"];
+      final String? type = rawType?.toLowerCase();
+
+      final String? fillColorHex = polygon.properties?["fillColor"];
+
+      final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
+          ? RenderingUtilities.hexToColor(fillColorHex)
+          : RenderingUtilities.polygonColorMap[type]?["fillColor"]
+          ?? Colors.white;
+
+      print("Color${fillColor}");
+      return {
+        'type': 'Feature',
+        'id': polygon.id,
+        'geometry': {
+          'type': 'Polygon',
+          'coordinates': [
+            polygon.points
+                .map((p) => [p.longitude, p.latitude])
+                .toList()
+          ],
+        },
+        'properties': {
+          'height': 3.0,
+          'base': 0.0,
+          'r': fillColor.red,
+          'g': fillColor.green,
+          'b': fillColor.blue,
+        },
+      };
+    }).toList();
+
+    // ---- Create source once ----
+    if (!await style.styleSourceExists(_polygonSourceId)) {
+      await style.addSource(
+        GeoJsonSource(
+          id: _polygonSourceId,
+          data: jsonEncode({
+            'type': 'FeatureCollection',
+            'features': features,
+          }),
+        ),
+      );
+    } else {
+      // ---- Update source data ----
+      await style.setStyleSourceProperty(
+        _polygonSourceId,
+        'data',
+        jsonEncode({
+          'type': 'FeatureCollection',
+          'features': features,
+        }),
+      );
+    }
+
+    // ---- Create ONE extrusion layer ----
+    if (!await style.styleLayerExists(_polygonLayerId)) {
+
+      await style.addLayer(
+        FillExtrusionLayer(
+          id: _polygonLayerId,
+          sourceId: _polygonSourceId,
+          fillExtrusionColorExpression: [
+            'rgb',
+            ['get', 'r'],
+            ['get', 'g'],
+            ['get', 'b'],
+          ],
+          fillExtrusionHeightExpression: ['get', 'height'],
+          fillExtrusionOpacity: 1,
+        ),
+      );
     }
   }
 
+
+
   @override
-  Future<void> removePolygon(dynamic controller, String polygonId) async {
-    // Mapbox polygon removal
+  Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude}) async {
+    if (controller is! MapboxMap) return;
+
+    if (exclude != null && polygonId.contains(exclude)) return;
+
+    _polygons.remove(polygonId);
+    await _updatePolygonSource(controller);
   }
 
   @override
   Future<void> clearPolygons(dynamic controller) async {
-    // Clear all Mapbox polygons
+    if (controller is! MapboxMap) return;
+
+    _polygons.clear();
+    await _updatePolygonSource(controller);
   }
 
   @override
