@@ -1,0 +1,43 @@
+enum LandmarkAssetType {
+  lift,
+  stairs,
+  escalator,
+  femaleWashroom,
+  maleWashroom,
+  accessibleWashroom,
+  washroom,
+  waterFountain,
+  cafeteria,
+  room,
+  entrance,
+  emergency;
+
+  String get assetPath {
+    switch (this) {
+      case LandmarkAssetType.lift:
+        return 'packages/unified_map_view/assets/markers/lift.png';
+      case LandmarkAssetType.stairs:
+        return 'packages/unified_map_view/assets/markers/stairs.png';
+      case LandmarkAssetType.escalator:
+        return 'packages/unified_map_view/assets/markers/escalator.png';
+      case LandmarkAssetType.femaleWashroom:
+        return 'packages/unified_map_view/assets/markers/female_washroom.png';
+      case LandmarkAssetType.maleWashroom:
+        return 'packages/unified_map_view/assets/markers/male_washroom.png';
+      case LandmarkAssetType.accessibleWashroom:
+        return 'packages/unified_map_view/assets/markers/accessible_washroom.png';
+      case LandmarkAssetType.washroom:
+        return 'packages/unified_map_view/assets/markers/washroom.png';
+      case LandmarkAssetType.waterFountain:
+        return 'packages/unified_map_view/assets/markers/water_fountain.png';
+      case LandmarkAssetType.cafeteria:
+        return 'packages/unified_map_view/assets/markers/cafeteria.png';
+      case LandmarkAssetType.room:
+        return 'packages/unified_map_view/assets/markers/room.png';
+      case LandmarkAssetType.entrance:
+        return 'packages/unified_map_view/assets/markers/entrance.png';
+      case LandmarkAssetType.emergency:
+        return 'packages/unified_map_view/assets/markers/emergency.png';
+    }
+  }
+}

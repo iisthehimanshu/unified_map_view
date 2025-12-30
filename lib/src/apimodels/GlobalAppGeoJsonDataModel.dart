@@ -25,7 +25,7 @@ class GlobalAppGeoJsonDataModel {
 }
 
 class GlobalAppGeoData {
-  GLobalAppGeoProperties? properties;
+  Map<String, dynamic>? properties;
   String? sId;
   String? id;
   String? buildingID;
@@ -41,7 +41,7 @@ class GlobalAppGeoData {
 
   GlobalAppGeoData.fromJson(Map<dynamic, dynamic> json) {
     if(json['properties'] != null){
-      properties = new GLobalAppGeoProperties.fromJson(json['properties']);
+      properties = json['properties'] as Map<String, dynamic>?;
     }else{
       print("json['properties'] is null");
     }
@@ -60,7 +60,7 @@ class GlobalAppGeoData {
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = new Map<String, dynamic>();
     if (this.properties != null) {
-      data['properties'] = this.properties!.toJson();
+      data['properties'] = this.properties!;
     }
     data['_id'] = this.sId;
     data['id'] = this.id;
@@ -74,135 +74,6 @@ class GlobalAppGeoData {
     data['createdBy'] = this.createdBy;
     data['updatedBy'] = this.updatedBy;
     data['__v'] = this.iV;
-    return data;
-  }
-}
-
-class GLobalAppGeoProperties {
-  String? number;
-  String? lineCategory;
-  List<double>? centroid;
-  bool? visible;
-  int? level;
-  String? name;
-  String? type;
-  String? fillColor;
-  String? strokeColor;
-  String? direction;
-  String? pathNature;
-  String? pathType;
-  String? accessibility;
-  String? gpsAvailibility;
-  List<String>? associatedPoints;
-  String? buildingName;
-  int? floor;
-  String? landmarkId;
-  bool? global;
-  String? polygonType;
-  List<String>? associatedPolygons;
-  String? objectFile;
-  String? fillOpacity;
-  String? height;
-  String? strokeOpacity;
-  String? strokeWidth;
-  String? imageFile;
-  String? noJuctionId;
-  String? nodeId;
-  String? visibilityType;
-  double? angle;
-  double? elevation;
-  double? scale;
-
-  GLobalAppGeoProperties({this.number, this.lineCategory, this.centroid, this.visible, this.level, this.name, this.type, this.fillColor, this.strokeColor, this.direction, this.pathNature, this.pathType, this.accessibility, this.gpsAvailibility, this.associatedPoints, this.buildingName, this.floor, this.landmarkId, this.global, this.polygonType, this.associatedPolygons, this.objectFile, this.fillOpacity, this.height, this.strokeOpacity, this.strokeWidth, this.imageFile, this.noJuctionId, this.nodeId, this.visibilityType});
-
-  GLobalAppGeoProperties.fromJson(Map<dynamic, dynamic> json) {
-    number = json['number'];
-    lineCategory = json['lineCategory'];
-    centroid = (json['centroid'] is List) ? (json['centroid'] as List).map((e) => (e as num).toDouble()).toList() : null;
-    visible = json['visible'];
-    level = json['level'];
-    name = json['name'];
-    type = json['type'];
-    fillColor = json['fillColor'];
-    strokeColor = json['strokeColor'];
-    direction = json['direction'];
-    pathNature = json['pathNature'];
-    pathType = json['pathType'];
-    accessibility = json['accessibility'];
-    gpsAvailibility = json['gpsAvailibility'];
-    buildingName = json['buildingName'];
-    floor = json['floor'];
-    landmarkId = json['landmarkId'];
-    global = json['global'];
-    polygonType = json['polygonType'];
-    associatedPolygons = (json['associatedPolygons'] as List?)?.map((e) => e.toString()).toList();
-    associatedPoints = (json['associatedPoints'] as List?)?.map((e) => e.toString()).toList();
-    objectFile = json['objectFile'];
-    fillOpacity = json['fillOpacity'];
-    if(json['height'].runtimeType == double){
-      height = json['height'].toString();
-    }else{
-      height = json['height'];
-    }
-    strokeOpacity = json['strokeOpacity'];
-    strokeWidth = json['strokeWidth'];
-    imageFile = json['imageFile'];
-    noJuctionId = json['noJuctionId'];
-    nodeId = json['nodeId'];
-    visibilityType = json['visibilityType'];
-    if(json['angle'].runtimeType == int){ //Mishor issue
-      angle = double.parse(json['angle'].toString());
-    }else{
-      angle = json['angle'];
-    }
-
-    if(json['elevation'] != null){
-      elevation = double.parse(json['elevation'].toString());
-    }else{
-      elevation = json['elevation'];
-    }
-    if(json['scale'] != null){
-      scale = double.parse(json['scale'].toString());
-    }else {
-      scale = json['scale'];
-    }
-  }
-
-  Map<dynamic, dynamic> toJson() {
-    final Map<String, dynamic> data = new Map<String, dynamic>();
-    data['number'] = this.number;
-    data['lineCategory'] = this.lineCategory;
-    data['centroid'] = this.centroid;
-    data['visible'] = this.visible;
-    data['level'] = this.level;
-    data['name'] = this.name;
-    data['type'] = this.type;
-    data['fillColor'] = this.fillColor;
-    data['strokeColor'] = this.strokeColor;
-    data['direction'] = this.direction;
-    data['pathNature'] = this.pathNature;
-    data['pathType'] = this.pathType;
-    data['accessibility'] = this.accessibility;
-    data['gpsAvailibility'] = this.gpsAvailibility;
-    data['associatedPoints'] = this.associatedPoints;
-    data['buildingName'] = this.buildingName;
-    data['floor'] = this.floor;
-    data['landmarkId'] = this.landmarkId;
-    data['global'] = this.global;
-    data['polygonType'] = this.polygonType;
-    data['associatedPolygons'] = this.associatedPolygons;
-    data['objectFile'] = this.objectFile;
-    data['fillOpacity'] = this.fillOpacity;
-    data['height'] = this.height;
-    data['strokeOpacity'] = this.strokeOpacity;
-    data['strokeWidth'] = this.strokeWidth;
-    data['imageFile'] = this.imageFile;
-    data['noJuctionId'] = this.noJuctionId;
-    data['nodeId'] = this.nodeId;
-    data['visibilityType'] = this.visibilityType;
-    data['angle'] = this.angle;
-    data['elevation'] = this.angle;
-    data['scale'] = this.angle;
     return data;
   }
 }
@@ -292,38 +163,6 @@ GlobalAppGeoData? convertQueriedFeatureToGeoData(dynamic queriedFeature) {
 }
 
 // Method to extract just the properties
-GLobalAppGeoProperties? convertQueriedFeatureToProperties(dynamic queriedFeature) {
-  try {
-    if (queriedFeature == null) return null;
-
-    Map<dynamic, dynamic>? featureMap;
-
-    if (queriedFeature is Map) {
-      featureMap = queriedFeature;
-    } else if (queriedFeature.feature is Map) {
-      featureMap = queriedFeature.feature as Map<dynamic, dynamic>;
-    } else {
-      return null;
-    }
-
-    // Extract the properties field
-    final propertiesMap = featureMap['properties'];
-    if (propertiesMap == null) return null;
-
-    // For the stairs example, properties is nested inside properties
-    // Check if there's a nested 'properties' field
-    if (propertiesMap is Map && propertiesMap.containsKey('properties')) {
-      return GLobalAppGeoProperties.fromJson(propertiesMap['properties']);
-    }
-
-    // Otherwise use the properties directly
-    return GLobalAppGeoProperties.fromJson(propertiesMap);
-
-  } catch (e) {
-    print("Error converting properties: $e");
-    return null;
-  }
-}
 GlobalAppGeoGeometry? convertQueriedFeatureToGeometry(dynamic queriedFeature) {
   try {
     if (queriedFeature == null) return null;

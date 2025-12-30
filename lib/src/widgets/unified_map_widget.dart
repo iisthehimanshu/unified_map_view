@@ -24,11 +24,7 @@ class UnifiedMapWidget extends StatelessWidget {
           padding: padding,
           child: Stack(
             children: [
-              controller.currentProviderImplementation.buildMap(
-                config: controller.config,
-                onMapCreated: controller.onMapCreated,
-                onCameraMove: controller.onCameraMove
-              ),
+              controller.currentProviderImplementation.buildMap(config: controller.config),
               if(controller.focusedBuilding != null && controller.focusBuildingSelectedFloor != null && controller.focusedBuildingAvailableFloors != null && controller.focusedBuildingAvailableFloors!.isNotEmpty) Positioned(
                 bottom: 24,
                 right: 16,

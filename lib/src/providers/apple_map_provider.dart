@@ -17,8 +17,6 @@ class AppleMapProvider extends BaseMapProvider {
   @override
   Widget buildMap({
     required MapConfig config,
-    required Function(dynamic controller) onMapCreated,
-    required void Function(UnifiedCameraPosition position) onCameraMove,
   }) {
     return AppleMap(
       initialCameraPosition: CameraPosition(
@@ -35,7 +33,7 @@ class AppleMapProvider extends BaseMapProvider {
       polygons: _polygons,
       polylines: _polylines,
       onMapCreated: (AppleMapController controller) {
-        onMapCreated(controller);
+        config.onMapCreated(controller);
       },
     );
   }
