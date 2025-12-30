@@ -16,8 +16,8 @@ import '../providers/apple_map_provider.dart';
 
 /// Main controller for managing map providers and operations
 class UnifiedMapController extends ChangeNotifier {
-  MapProvider _currentProvider;
-  MapConfig _config;
+  late MapProvider _currentProvider;
+  late MapConfig _config;
   final Map<MapProvider, BaseMapProvider> _providers = {};
   dynamic _currentMapController;
   final Set<GeoJsonMarker> _markers = {};
@@ -28,18 +28,42 @@ class UnifiedMapController extends ChangeNotifier {
 
   UnifiedMapController({
     required MapProvider initialProvider,
-    required MapConfig config,
     required String venueName,
     bool enableClustering = true,
-  })  : _currentProvider = initialProvider,
-        _config = config {
+
+    required UnifiedCameraPosition initialLocation,
+    bool showUserLocation = false,
+    bool zoomControlsEnabled = true,
+    bool rotateGesturesEnabled = true,
+    bool scrollGesturesEnabled = true,
+    bool tiltGesturesEnabled = false,
+
+  }) {
+    _currentProvider = initialProvider;
+
+    _config = MapConfig(
+        initialLocation: initialLocation,
+      showUserLocation: showUserLocation,
+      zoomControlsEnabled: zoomControlsEnabled,
+      rotateGesturesEnabled: rotateGesturesEnabled,
+      scrollGesturesEnabled: scrollGesturesEnabled,
+      tiltGesturesEnabled: tiltGesturesEnabled,
+      onMapCreated: onMapCreated,
+      onCameraMove: onCameraMove,
+      onMarkerTap: onMarkerTap,
+      onPolygonTap: onPolygonTap,
+      onPolylineTap: onPolylineTap
+    );
+
     _annotationController = AnnotationController(this, venueName: venueName);
-    _cameraPosition = config.initialLocation;
-    _initializeProviders(enableClustering);
+
+    _cameraPosition = initialLocation;
+
+    _initializeProviders();
   }
 
   /// Initialize all map providers
-  void _initializeProviders(bool enableClustering) {
+  void _initializeProviders() {
     _providers[MapProvider.google] = GoogleMapProvider();
     _providers[MapProvider.mapbox] = MapboxMapProvider();
     _providers[MapProvider.apple] = AppleMapProvider();
@@ -90,6 +114,18 @@ class UnifiedMapController extends ChangeNotifier {
     _cameraPosition = position;
     _annotationController.cameraFocusChange(position);
     notifyListeners();
+  }
+
+  void onPolylineTap({required String polylineId, required List<MapLocation> coordinates}){
+
+  }
+
+  void onPolygonTap({required String polygonId, required List<MapLocation> coordinates}){
+
+  }
+
+  void onMarkerTap({required String polygonId, required List<MapLocation> coordinates}){
+
   }
 
   /// Move camera to a specific location

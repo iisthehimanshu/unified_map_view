@@ -12,8 +12,6 @@ abstract class BaseMapProvider {
   /// Build the map widget
   Widget buildMap({
     required MapConfig config,
-    required Function(dynamic controller) onMapCreated,
-    required void Function(UnifiedCameraPosition position) onCameraMove,
   });
 
   /// Move camera to a specific location

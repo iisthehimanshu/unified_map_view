@@ -46,7 +46,7 @@ class VenueData{
       String? buildingId = feature.buildingID;
 
       // Get floor from properties
-      int? floor = feature.properties?.floor;
+      int? floor = feature.properties?["floor"];
 
       // Skip if building ID or floor is null
       if (buildingId == null || floor == null) {
@@ -95,13 +95,13 @@ class VenueData{
     if (model.data == null) return [];
 
     final filteredData = model.data!.where((feature) {
-      final name = feature.properties?.name;
+      final name = feature.properties?["name"];
       final lowerName = name?.toLowerCase() ?? '';
 
 
 
       return feature.buildingID == buildingId &&
-          feature.properties?.floor == floor &&
+          feature.properties?["floor"] == floor &&
           name != null &&
           !lowerName.contains('piller') &&
           !lowerName.contains('non walkable') &&

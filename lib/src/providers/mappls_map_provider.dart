@@ -1,6 +1,7 @@
 // lib/src/providers/mappls_map_provider.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import '../utils/renderingUtilities.dart';
@@ -20,12 +21,7 @@ class MapplsMapProvider extends BaseMapProvider {
   String _clusterSourceId = 'markers-source';
 
   @override
-  Widget buildMap({
-    required MapConfig config,
-    required Function(dynamic controller) onMapCreated,
-    required void Function(UnifiedCameraPosition position) onCameraMove,
-
-  }) {
+  Widget buildMap({required MapConfig config}) {
     return MapplsMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(
@@ -36,7 +32,7 @@ class MapplsMapProvider extends BaseMapProvider {
       ),
       onMapCreated: (MapplsMapController controller) async {
         _controller = controller;
-        onMapCreated(controller);
+        config.onMapCreated(controller);
         enableClustering(controller);
       },
       onStyleLoadedCallback: () {
@@ -51,7 +47,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
               final cameraPos = _controller!.cameraPosition;
 
-              onCameraMove(UnifiedCameraPosition(
+              config.onCameraMove(UnifiedCameraPosition(
                 mapLocation: MapLocation(
                   latitude: centerLat,
                   longitude: centerLng,
@@ -131,26 +127,33 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
-        _symbols.add(marker);
-        final features = _symbols.map((marker) => {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [marker.position.longitude, marker.position.latitude],
-          },
-          'properties': {
-            'title': marker.title,
-            'id': marker.id,
-          }
-        }).toList();
+      _symbols.add(marker);
 
-        await controller.setGeoJsonSource(
-          _clusterSourceId,
-          {
-            "type": "FeatureCollection",
-            "features": features,
-          },
-        );
+      // Load marker icon if provided
+      if (marker.assetPath != null && marker.iconName != null) {
+        await _loadMarkerIcon(controller, marker.assetPath!, marker.iconName!);
+      }
+
+      final features = _symbols.map((marker) => {
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [marker.position.longitude, marker.position.latitude],
+        },
+        'properties': {
+          'title': marker.title ?? '',
+          'id': marker.id,
+          if(marker.iconName != null)'icon': marker.iconName,
+        }
+      }).toList();
+
+      await controller.setGeoJsonSource(
+        _clusterSourceId,
+        {
+          "type": "FeatureCollection",
+          "features": features,
+        },
+      );
     }
   }
 
@@ -351,6 +354,20 @@ class MapplsMapProvider extends BaseMapProvider {
     await clearPolylines(controller);
   }
 
+  Future<bool> _loadMarkerIcon(MapplsMapController controller, String assetPath, String iconName) async {
+    try {
+      final ByteData bytes = await rootBundle.load(
+          assetPath
+      );
+      final Uint8List image = bytes.buffer.asUint8List();
+      await controller.addImage(iconName, image);
+      return true;
+    } catch (e) {
+      print('Icon $iconName.png not found in assets/markers');
+      return false;
+    }
+  }
+
   Future<void> enableClustering(dynamic controller) async {
     if (controller is! MapplsMapController) return;
 
@@ -371,8 +388,20 @@ class MapplsMapProvider extends BaseMapProvider {
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
           textHaloWidth: 2,
-          textAnchor: "top",
-          textOffset: [0, 1.2],
+          // Conditional text anchor: center if no icon, left if icon exists
+          textAnchor: [
+            "case",
+            ["has", "icon"],
+            "left",
+            "center"
+          ],
+          // Conditional text offset: [3.5, 0] if icon exists, [0, 0] if no icon
+          textOffset: [
+            "case",
+            ["has", "icon"],
+            ["literal", [3.5, 0]],
+            ["literal", [0, 0]]
+          ],
           iconAllowOverlap: false,
           textAllowOverlap: false,
         ),
