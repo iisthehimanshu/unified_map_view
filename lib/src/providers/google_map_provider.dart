@@ -39,7 +39,7 @@ class GoogleMapProvider extends BaseMapProvider {
       rotateGesturesEnabled: config.rotateGesturesEnabled,
       scrollGesturesEnabled: config.scrollGesturesEnabled,
       tiltGesturesEnabled: config.tiltGesturesEnabled,
-      // markers: _markers,
+      markers: _markers,
       polygons: _polygons,
       polylines: _polylines,
       onMapCreated: (GoogleMapController controller) {
@@ -101,7 +101,7 @@ class GoogleMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
-    _markers.add(_convertMarker(marker));
+    _markers.add(await _convertMarker(marker));
   }
 
   @override
@@ -134,14 +134,16 @@ class GoogleMapProvider extends BaseMapProvider {
     }
   }
 
-  Marker _convertMarker(GeoJsonMarker marker) {
+  Future<Marker> _convertMarker(GeoJsonMarker marker) async {
     return Marker(
+      // icon: icon,
       markerId: MarkerId(marker.id),
       position: LatLng(marker.position.latitude, marker.position.longitude),
       infoWindow: InfoWindow(
         title: marker.title,
         snippet: marker.snippet,
       ),
+
     );
   }
 
