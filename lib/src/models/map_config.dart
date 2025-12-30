@@ -11,7 +11,7 @@ class MapConfig {
   final void Function(dynamic controller) onMapCreated ;
   final void Function(UnifiedCameraPosition position) onCameraMove;
 
-  final void Function({required List<MapLocation> coordinates, required String polygonId})? onMarkerTap;
+  final void Function({required MapLocation coordinates, required String polygonId})? onMarkerTap;
   final void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap;
   final void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap;
 
@@ -39,7 +39,7 @@ class MapConfig {
     bool? rotateGesturesEnabled,
     bool? scrollGesturesEnabled,
     bool? tiltGesturesEnabled,
-   void Function({required List<MapLocation> coordinates, required String polygonId})? onMarkerTap,
+   void Function({required MapLocation coordinates, required String polygonId})? onMarkerTap,
    void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap,
    void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap
   }) {

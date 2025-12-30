@@ -1,9 +1,12 @@
 // lib/src/providers/mappls_map_provider.dart
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
+import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -34,9 +37,16 @@ class MapplsMapProvider extends BaseMapProvider {
         _controller = controller;
         config.onMapCreated(controller);
         enableClustering(controller);
-      },
-      onStyleLoadedCallback: () {
-        // Style loaded, map is ready
+        controller.onFillTapped.add((Fill){
+          var polygons = _fills.entries.where((entry)=>entry.value == Fill);
+          if(polygons.isNotEmpty){
+            var entry = polygons.first;
+            config.onPolygonTap!(
+                coordinates: Fill.options.geometry!.first.map((point)=>MapLocation(latitude: point.latitude, longitude: point.longitude)).toList(),
+                polygonId: entry.key
+            );
+          }
+        });
       },
       onCameraIdle: ()async{
         if (_controller != null) {
@@ -130,20 +140,30 @@ class MapplsMapProvider extends BaseMapProvider {
       _symbols.add(marker);
 
       // Load marker icon if provided
-      if (marker.assetPath != null && marker.iconName != null) {
-        await _loadMarkerIcon(controller, marker.assetPath!, marker.iconName!);
+      // if (marker.assetPath != null && marker.iconName != null) {
+        await _loadMarkerIcon(controller, marker);
+      // }
+      try{
+        setGeoJsonSource(controller, _symbols);
+      }catch(e){
+        rethrow;
       }
+    }
+  }
 
-      final features = _symbols.map((marker) => {
+  Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols) async {
+    if (controller is MapplsMapController) {
+      final features = _symbols.map((marker) =>
+      {
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
           'coordinates': [marker.position.longitude, marker.position.latitude],
         },
         'properties': {
-          'title': marker.title ?? '',
+          'title': '',
           'id': marker.id,
-          if(marker.iconName != null)'icon': marker.iconName,
+          if(marker.iconName != null || true)'icon': marker.id,
         }
       }).toList();
 
@@ -164,26 +184,7 @@ class MapplsMapProvider extends BaseMapProvider {
         // Remove marker from the list
         _symbols.removeWhere((marker) => marker.id.toLowerCase().contains(markerId));
 
-        // Update the GeoJSON source with the remaining markers
-        final features = _symbols.map((marker) => {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [marker.position.longitude, marker.position.latitude],
-          },
-          'properties': {
-            'title': marker.title,
-            'id': marker.id,
-          }
-        }).toList();
-
-        await controller.setGeoJsonSource(
-          _clusterSourceId,
-          {
-            "type": "FeatureCollection",
-            "features": features,
-          },
-        );
+        setGeoJsonSource(controller, _symbols);
       } catch (e) {
         print('Error removing marker: $e');
       }
@@ -363,16 +364,27 @@ class MapplsMapProvider extends BaseMapProvider {
     await clearPolylines(controller);
   }
 
-  Future<bool> _loadMarkerIcon(MapplsMapController controller, String assetPath, String iconName) async {
+  final creator = UnifiedMarkerCreator();
+  Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     try {
-      final ByteData bytes = await rootBundle.load(
-          assetPath
+      MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
+        text: marker.title ?? "",
+        imageSource: marker.assetPath,
+        layout: MarkerLayout.horizontal,
+        textFormat: TextFormat.smartWrap,
+        textColor: const Color(0xfffb8c00),
       );
-      final Uint8List image = bytes.buffer.asUint8List();
-      await controller.addImage(iconName, image);
+
+      final Uint8List iconBytes = markerIconWithAnchor.icon;
+
+      // final ByteData bytes = await rootBundle.load(
+      //     marker.assetPath!
+      // );
+      // final Uint8List image = bytes.buffer.asUint8List();
+      await controller.addImage(marker.id, iconBytes);
       return true;
     } catch (e) {
-      print('Icon $iconName.png not found in assets/markers');
+      print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
       return false;
     }
   }
@@ -397,14 +409,12 @@ class MapplsMapProvider extends BaseMapProvider {
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
           textHaloWidth: 2,
-          // Conditional text anchor: center if no icon, left if icon exists
           textAnchor: [
             "case",
             ["has", "icon"],
             "left",
             "center"
           ],
-          // Conditional text offset: [3.5, 0] if icon exists, [0, 0] if no icon
           textOffset: [
             "case",
             ["has", "icon"],
@@ -416,6 +426,28 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         enableInteraction: true,
       );
+
+      // Try approach 1: onSymbolTapped
+      controller.onSymbolTapped?.add((symbol) {
+        print("Symbol tapped: ${symbol.id}");
+        print("Symbol data: ${symbol.data}");
+      });
+
+      // Try approach 2: onFeatureDrag (some SDKs use this for interaction)
+      controller.onFeatureTapped.add((id, point, coordinates) {
+        print("Feature tapped with id $id at $coordinates");
+      });
+
+      // Try approach 3: General map click to debug
+      controller.addListener(() {
+        print("Controller listener triggered");
+      });
+
+      if(_symbols.isNotEmpty){
+        List<GeoJsonMarker> symbols = [..._symbols];
+        clearMarkers(controller);
+        setGeoJsonSource(controller, symbols);
+      }
 
     } catch (e) {
       print('Error enabling clustering: $e');
