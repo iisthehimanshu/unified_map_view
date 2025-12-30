@@ -163,7 +163,14 @@ class UnifiedMapController extends ChangeNotifier {
 
     // Add polygons
     final polygons = GeoJsonLoader.extractPolygons(collection);
-    for (var polygon in polygons) {
+    final boundaryPolygons = polygons.where((p) => p.properties?["polygonType"] == "Boundary").toList();
+    final otherPolygons = polygons.where((p) => p.properties?["polygonType"] != "Boundary").toList();
+
+    for (var polygon in boundaryPolygons) {
+      await addPolygon(polygon);
+    }
+
+    for (var polygon in otherPolygons) {
       await addPolygon(polygon);
     }
 

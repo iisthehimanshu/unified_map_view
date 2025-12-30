@@ -71,7 +71,7 @@ class MapplsMapProvider extends BaseMapProvider {
       scrollGesturesEnabled: config.scrollGesturesEnabled,
       tiltGesturesEnabled: config.tiltGesturesEnabled,
       zoomGesturesEnabled: config.zoomControlsEnabled,
-      minMaxZoomPreference: const MinMaxZoomPreference(0, 24),
+      minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
     );
   }
 
@@ -212,21 +212,21 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
     if (controller is MapplsMapController) {
       try {
-        final String? rawType = polygon.properties?["type"];
+        final String? rawType = polygon.properties?["polygonType"];
         final String? type = rawType?.toLowerCase();
 
         final String? fillColorHex = polygon.properties?["fillColor"];
         final String? strokeColorHex = polygon.properties?["strokeColor"];
 
         final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
-            ? RenderingUtilities.hexToColor(fillColorHex, opacity: 1.0)
+            ? RenderingUtilities.hexToColor(fillColorHex)
             : RenderingUtilities.polygonColorMap[type]?["fillColor"]
-            ?? Colors.blue.withOpacity(0.1);
+            ?? Colors.white;
 
         final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
             ? RenderingUtilities.hexToColor(strokeColorHex)
             : RenderingUtilities.polygonColorMap[type]?["strokeColor"]
-            ?? Colors.blue.withOpacity(0.1);
+            ?? Colors.black;
 
         final coordinates = polygon.points
             .map((p) => LatLng(p.latitude, p.longitude))
@@ -244,7 +244,17 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
         );
 
+        final line = await controller.addLine(
+          LineOptions(
+            geometry: coordinates,
+            lineColor: '#$strokeHex',
+            lineWidth: 2.0, // Set your desired stroke width here
+            lineOpacity: strokeColor.opacity,
+          ),
+        );
+
         _fills[polygon.id] = fill;
+        _lines[polygon.id] = line;
       } catch (e) {
         print('Error adding polygon: $e');
       }

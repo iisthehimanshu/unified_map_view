@@ -95,7 +95,6 @@ class VenueData{
     if (model.data == null) return [];
 
     final filteredData = model.data!.where((feature) {
-      print("feature ID ${feature.id}");
       final name = feature.properties?.name;
       final lowerName = name?.toLowerCase() ?? '';
 

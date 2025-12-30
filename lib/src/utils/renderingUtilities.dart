@@ -44,6 +44,8 @@ class RenderingUtilities{
     'atm': {'strokeColor': Color(0xffE99696), 'fillColor': Color(0xffFBEAEA)},
     'health': {'strokeColor': Color(0xffE99696), 'fillColor': Color(0xffFBEAEA)},
 
+    'boundary': {'strokeColor': Color(0xffC0C0C0), 'fillColor': Color(0xffffffff)},
+
     'default': {'strokeColor': Color(0xffCCCCCC), 'fillColor': Color(0xffE6E6E6)},
   };
 
