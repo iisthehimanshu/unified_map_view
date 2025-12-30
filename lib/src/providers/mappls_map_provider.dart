@@ -368,11 +368,13 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     try {
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
-        text: marker.title ?? "",
+        imageSize: const Size(25, 25),
+        fontSize: 8.5,
+        text: marker.assetPath != null ? "":marker.title ?? "",
         imageSource: marker.assetPath,
         layout: MarkerLayout.horizontal,
         textFormat: TextFormat.smartWrap,
-        textColor: const Color(0xfffb8c00),
+        textColor: const Color(0xff000000),
       );
 
       final Uint8List iconBytes = markerIconWithAnchor.icon;

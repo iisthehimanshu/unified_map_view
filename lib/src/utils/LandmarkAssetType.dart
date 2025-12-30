@@ -35,9 +35,9 @@ enum LandmarkAssetType {
       case LandmarkAssetType.room:
         return 'packages/unified_map_view/assets/markers/room.png';
       case LandmarkAssetType.entrance:
-        return 'packages/unified_map_view/assets/markers/entrance.png';
+        return 'packages/unified_map_view/assets/markers/building_entry.png';
       case LandmarkAssetType.emergency:
-        return 'packages/unified_map_view/assets/markers/emergency.png';
+        return 'packages/unified_map_view/assets/markers/entry.png';
     }
   }
 }

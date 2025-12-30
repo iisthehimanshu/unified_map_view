@@ -64,13 +64,10 @@ class RenderingUtilities{
       if (landmarkProperties == null) return null;
 
       final element = landmarkProperties['element'] as Map<String, dynamic>?;
-      print("getAssetNameForLandmark $element");
       if (element == null) return null;
 
       final type = element['type'] as String?;
       final subType = element['subType'] as String?;
-
-      print("getAssetNameForLandmark type $type subType $subType");
 
       // Handle FloorConnection type (Lifts, Stairs, etc.)
       if (type == 'FloorConnection') {
