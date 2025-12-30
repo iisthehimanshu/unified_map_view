@@ -121,11 +121,11 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   void onPolygonTap({required String polygonId, required List<MapLocation> coordinates}){
-
+    print("unified controller onPolygonTap $polygonId $coordinates");
   }
 
-  void onMarkerTap({required String polygonId, required List<MapLocation> coordinates}){
-
+  void onMarkerTap({required String polygonId, required MapLocation coordinates}){
+    print("marker tapped with id $polygonId");
   }
 
   /// Move camera to a specific location
