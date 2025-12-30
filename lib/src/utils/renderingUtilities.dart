@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'LandmarkAssetType.dart';
+
 class RenderingUtilities{
   static Color hexToColor(String hex, {double opacity = 1.0}) {
     hex = hex.replaceAll('#', '');
@@ -57,36 +59,83 @@ class RenderingUtilities{
         .toLowerCase();
   }
 
-  static String getMarkerIconId(String? title) {
-    if (title == null) return 'custom-default-marker';
+  static String? getAssetNameForLandmark(Map<String, dynamic>? landmarkProperties) {
+    try {
+      if (landmarkProperties == null) return null;
 
-    final name = title.toLowerCase();
+      final element = landmarkProperties['element'] as Map<String, dynamic>?;
+      print("getAssetNameForLandmark $element");
+      if (element == null) return null;
 
-    if (name.contains('lift')) {
-      return 'custom-lift-marker';
+      final type = element['type'] as String?;
+      final subType = element['subType'] as String?;
+
+      print("getAssetNameForLandmark type $type subType $subType");
+
+      // Handle FloorConnection type (Lifts, Stairs, etc.)
+      if (type == 'FloorConnection') {
+        switch (subType?.toLowerCase()) {
+          case 'lift':
+          case 'elevator':
+            return LandmarkAssetType.lift.assetPath;
+          case 'stairs':
+          case 'staircase':
+            return LandmarkAssetType.stairs.assetPath;
+          case 'escalator':
+            return LandmarkAssetType.escalator.assetPath;
+          default:
+            return null;
+        }
+      }
+
+      // Handle Services type (Washrooms, etc.)
+      if (type == 'Services') {
+        switch (subType?.toLowerCase()) {
+          case 'restroom':
+          case 'washroom':
+          // Check washroom type from properties
+            final washroomType = landmarkProperties['washroomType'] as String?;
+            switch (washroomType?.toLowerCase()) {
+              case 'female':
+                return LandmarkAssetType.femaleWashroom.assetPath;
+              case 'male':
+                return LandmarkAssetType.maleWashroom.assetPath;
+              case 'unisex':
+              case 'accessible':
+                return LandmarkAssetType.accessibleWashroom.assetPath;
+              default:
+                return LandmarkAssetType.washroom.assetPath;
+            }
+          case 'water':
+          case 'waterfountain':
+            return LandmarkAssetType.waterFountain.assetPath;
+          case 'cafe':
+          case 'cafeteria':
+            return LandmarkAssetType.cafeteria.assetPath;
+          default:
+            return null;
+        }
+      }
+
+      // Handle other common types
+      switch (type?.toLowerCase()) {
+        case 'room':
+        case 'office':
+          return LandmarkAssetType.room.assetPath;
+        case 'entrance':
+        case 'exit':
+          return LandmarkAssetType.entrance.assetPath;
+        case 'emergency':
+          return LandmarkAssetType.emergency.assetPath;
+        default:
+          return null;
+      }
+
+    } catch (e) {
+      print('Error extracting asset name: $e');
+      return null;
     }
-
-    if (name.contains('female')) {
-      return 'custom-female-marker';
-    }
-    if (name.contains('male')) {
-      return 'custom-male-marker';
-    }
-
-    if (name.contains('exit') || name.contains('gate')) {
-      return 'custom-exit-marker';
-    }
-
-    if (name.contains('stairs') || name.contains('staircase')) {
-      return 'custom-stairs-marker';
-    }
-
-    if (name.contains('ramp')) {
-      return 'custom-ramp-marker';
-    }
-
-    // 👇 default
-    return 'custom-marker';
   }
+
 
 }

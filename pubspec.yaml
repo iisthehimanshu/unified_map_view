@@ -15,7 +15,6 @@ dependencies:
   mapbox_maps_flutter:
   apple_maps_flutter:
   mappls_gl: ^1.2.0
-
   http:
   flutter_speed_dial: ^7.0.0
 
@@ -31,6 +30,7 @@ dev_dependencies:
 # The following section is specific to Flutter packages.
 flutter:
   assets:
+    - assets/
     - assets/
   # To add assets to your package, add an assets section, like this:
   # assets:

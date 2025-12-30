@@ -19,12 +19,7 @@ class GoogleMapProvider extends BaseMapProvider {
   GoogleMapController? _controller;
 
   @override
-  Widget buildMap({
-    required MapConfig config,
-    required Function(dynamic controller) onMapCreated,
-    required void Function(UnifiedCameraPosition position) onCameraMove,
-
-  }) {
+  Widget buildMap({required MapConfig config}) {
     return GoogleMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(
@@ -44,7 +39,7 @@ class GoogleMapProvider extends BaseMapProvider {
       polylines: _polylines,
       onMapCreated: (GoogleMapController controller) {
         _controller = controller;
-        onMapCreated(controller);
+        config.onMapCreated(controller);
       },
       onCameraIdle: () async {
         print("onCameraIdle");
@@ -57,7 +52,7 @@ class GoogleMapProvider extends BaseMapProvider {
               final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
               final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
 
-              onCameraMove(UnifiedCameraPosition(
+              config.onCameraMove(UnifiedCameraPosition(
                 mapLocation: MapLocation(
                   latitude: centerLat,
                   longitude: centerLng,

@@ -27,15 +27,12 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Widget buildMap({
-    required MapConfig config,
-    required Function(dynamic controller) onMapCreated,
-    required void Function(UnifiedCameraPosition position) onCameraMove,
-
-  }) {
-    return MapWidget(
+    required MapConfig config}) {
+    return MapWidget(       
       onMapCreated: (mapboxMap) async {
-        onMapCreated(mapboxMap);
-        await _initMarkerLayer(mapboxMap);
+        config.onMapCreated(mapboxMap);
+         await _initMarkerLayer(mapboxMap);
+
       },
       styleUri: MapboxStyles.MAPBOX_STREETS,
       cameraOptions: CameraOptions(

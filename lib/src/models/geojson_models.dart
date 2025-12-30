@@ -1,7 +1,11 @@
 // lib/src/models/geojson_models.dart
 
 import 'dart:convert';
+import 'dart:typed_data';
+import '../utils/renderingUtilities.dart';
 import 'map_location.dart';
+
+export 'dart:typed_data';
 
 /// Types of GeoJSON geometries
 enum GeoJsonGeometryType {
@@ -176,12 +180,16 @@ class GeoJsonMarker {
   final MapLocation position;
   final String? title;
   final String? snippet;
+  final String? assetPath; // Add icon name/identifier
+  final String? iconName;
 
   GeoJsonMarker({
     required this.id,
     required this.position,
     this.title,
-    this.snippet
+    this.snippet,
+    this.assetPath,
+    this.iconName,
   });
 
   /// Create from GeoJSON Feature
@@ -190,11 +198,20 @@ class GeoJsonMarker {
 
     final coords = feature.geometry.coordinates[0];
 
+    final assetPath = RenderingUtilities.getAssetNameForLandmark(feature.properties);
+    final iconName = assetPath?.split('/').last.split('.').first;
+
+    if(feature.properties?["landmarkId"] == "6889bb7cfe0f245a59f3cd7e"){
+      print("feature.properties $assetPath $iconName ${feature.properties}");
+    }
+
     return GeoJsonMarker(
       id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
       title: feature.properties?["name"],
-      snippet: ""
+      snippet: "",
+      assetPath: assetPath,
+      iconName: iconName
     );
   }
 }
