@@ -363,6 +363,20 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> selectLocation({required String polyID}) async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.selectLocation(_currentMapController, polyID);
+    }
+    notifyListeners();
+  }
+
+  Future<void> deSelectLocation({required String polyID}) async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.deSelectLocation(_currentMapController, polyID);
+    }
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     _currentMapController = null;

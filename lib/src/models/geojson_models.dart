@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'dart:typed_data';
+import '../utils/LandmarkAssetType.dart';
 import '../utils/renderingUtilities.dart';
 import 'map_location.dart';
 
@@ -192,6 +193,17 @@ class GeoJsonMarker {
     this.iconName,
   });
 
+  static GeoJsonMarker getGenericMarker(MapLocation mapLocation){
+    return GeoJsonMarker(
+        id: "Generic Marker",
+        position: mapLocation,
+        title: "",
+        snippet: "",
+        assetPath: LandmarkAssetType.genericMarker.assetPath,
+        iconName: "Generic Marker"
+    );
+  }
+
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
@@ -201,12 +213,8 @@ class GeoJsonMarker {
     final assetPath = RenderingUtilities.getAssetNameForLandmark(feature.properties);
     final iconName = assetPath?.split('/').last.split('.').first;
 
-    if(feature.properties?["landmarkId"] == "6889bb7cfe0f245a59f3cd7e"){
-      print("feature.properties $assetPath $iconName ${feature.properties}");
-    }
-
     return GeoJsonMarker(
-      id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: "id:${feature.id} | polyId:${feature.properties?["polyId"]} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
       title: feature.properties?["name"],
       snippet: "",

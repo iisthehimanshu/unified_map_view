@@ -54,6 +54,10 @@ abstract class BaseMapProvider {
   /// Clear all polylines
   Future<void> clearPolylines(dynamic controller);
 
+  Future<void> selectLocation(dynamic controller, String polyID);
+
+  Future<void> deSelectLocation(dynamic controller, String polyID);
+
   /// Clear all GeoJSON features
   Future<void> clearAllGeoJsonFeatures(dynamic controller) async {
     await clearMarkers(controller);

@@ -21,6 +21,8 @@ class MapplsMapProvider extends BaseMapProvider {
   final Map<String, Line> _lines = {};
   final Map<String, Fill> _fills = {};
 
+  final Map<String, Map<String, dynamic>> _originalPolygonProperties = {};
+
   String _clusterSourceId = 'markers-source';
 
   @override
@@ -429,22 +431,6 @@ class MapplsMapProvider extends BaseMapProvider {
         enableInteraction: true,
       );
 
-      // Try approach 1: onSymbolTapped
-      controller.onSymbolTapped?.add((symbol) {
-        print("Symbol tapped: ${symbol.id}");
-        print("Symbol data: ${symbol.data}");
-      });
-
-      // Try approach 2: onFeatureDrag (some SDKs use this for interaction)
-      controller.onFeatureTapped.add((id, point, coordinates) {
-        print("Feature tapped with id $id at $coordinates");
-      });
-
-      // Try approach 3: General map click to debug
-      controller.addListener(() {
-        print("Controller listener triggered");
-      });
-
       if(_symbols.isNotEmpty){
         List<GeoJsonMarker> symbols = [..._symbols];
         clearMarkers(controller);
@@ -460,5 +446,168 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) {
     // TODO: implement addPolygons
     throw UnimplementedError();
+  }
+
+  @override
+  Future<void> selectLocation(controller, String polyID) async {
+    if (controller is! MapplsMapController) return;
+
+    try {
+      // Find the polygon that contains polyID
+      final polygonEntry = _fills.entries.firstWhere(
+            (entry) => entry.key.contains(polyID),
+        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+      );
+
+      final Fill polygonFill = polygonEntry.value;
+      final String polygonId = polygonEntry.key;
+
+      // Get the polygon's coordinates
+      final coordinates = polygonFill.options.geometry?.first;
+      if (coordinates == null || coordinates.isEmpty) {
+        print('No coordinates found for polygon: $polygonId');
+        return;
+      }
+
+      // Store original properties if not already stored
+      if (!_originalPolygonProperties.containsKey(polygonId)) {
+        _originalPolygonProperties[polygonId] = {
+          'fillColor': polygonFill.options.fillColor,
+          'fillOpacity': polygonFill.options.fillOpacity,
+          'fillOutlineColor': polygonFill.options.fillOutlineColor,
+        };
+      }
+
+      // Calculate bounds of the polygon
+      double minLat = coordinates.first.latitude;
+      double maxLat = coordinates.first.latitude;
+      double minLng = coordinates.first.longitude;
+      double maxLng = coordinates.first.longitude;
+
+      for (final point in coordinates) {
+        minLat = min(minLat, point.latitude);
+        maxLat = max(maxLat, point.latitude);
+        minLng = min(minLng, point.longitude);
+        maxLng = max(maxLng, point.longitude);
+      }
+
+      // Calculate center point
+      final centerLat = (minLat + maxLat) / 2;
+      final centerLng = (minLng + maxLng) / 2;
+
+      // Remove the old polygon
+      await controller.removeFill(polygonFill);
+
+      // Add the polygon back with highlighted colors
+      final highlightedFill = await controller.addFill(
+        FillOptions(
+          geometry: [coordinates],
+          fillColor: '#4CAF50', // Bright green for highlight
+          fillOpacity: 0.6,
+          fillOutlineColor: '#2E7D32', // Darker green for border
+        ),
+      );
+
+      // Update the fills map with the new highlighted fill
+      _fills[polygonId] = highlightedFill;
+
+      // Find and show the marker associated with this polygon
+      try {
+        final marker = _symbols.firstWhere(
+              (m) => m.id.contains(polyID),
+        );
+
+        // Remove the marker first if it exists
+        _symbols.removeWhere((m) => m.id.contains(polyID));
+
+        // Add it back to ensure it's visible and on top
+        _symbols.add(GeoJsonMarker.getGenericMarker(marker.position));
+
+        // Update the GeoJSON source to show the marker
+        await setGeoJsonSource(controller, _symbols);
+
+        print('Showing marker: ${marker.id}');
+      } catch (e) {
+        print('No marker found for polyID: $polyID');
+      }
+
+      // Animate camera to the polygon center
+      await controller.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(centerLat, centerLng),
+          20,
+        ),
+      );
+
+      print('Selected and zoomed to polygon: $polygonId with marker');
+    } catch (e) {
+      print('Error selecting location: $e');
+    }
+  }
+
+  /// Deselect a polygon and restore its original colors
+  Future<void> deSelectLocation(dynamic controller, String polyID) async {
+    if (controller is! MapplsMapController) return;
+
+    try {
+      // Find the polygon that contains polyID
+      final polygonEntry = _fills.entries.firstWhere(
+            (entry) => entry.key.contains(polyID),
+        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+      );
+
+      final Fill polygonFill = polygonEntry.value;
+      final String polygonId = polygonEntry.key;
+
+      // Get the polygon's coordinates
+      final coordinates = polygonFill.options.geometry?.first;
+      if (coordinates == null || coordinates.isEmpty) {
+        print('No coordinates found for polygon: $polygonId');
+        return;
+      }
+
+      // Get the original properties
+      final originalProps = _originalPolygonProperties[polygonId];
+      if (originalProps == null) {
+        print('No original properties found for polygon: $polygonId');
+        return;
+      }
+
+      // Remove the highlighted polygon
+      await controller.removeFill(polygonFill);
+
+      // Add the polygon back with original colors
+      final restoredFill = await controller.addFill(
+        FillOptions(
+          geometry: [coordinates],
+          fillColor: originalProps['fillColor'] ?? '#FFFFFF',
+          fillOpacity: originalProps['fillOpacity'] ?? 0.5,
+          fillOutlineColor: originalProps['fillOutlineColor'] ?? '#D3D3D3',
+        ),
+      );
+
+      // Update the fills map with the restored fill
+      _fills[polygonId] = restoredFill;
+
+      // Hide the marker associated with this polygon
+      try {
+        // Remove the marker from the symbols list
+        _symbols.removeWhere((m) => m.id.contains(polyID));
+
+        // Update the GeoJSON source to hide the marker
+        await setGeoJsonSource(controller, _symbols);
+
+        print('Hidden marker for polyID: $polyID');
+      } catch (e) {
+        print('Error hiding marker: $e');
+      }
+
+      // Remove the stored original properties as it's now restored
+      _originalPolygonProperties.remove(polygonId);
+
+      print('Deselected polygon: $polygonId');
+    } catch (e) {
+      print('Error deselecting location: $e');
+    }
   }
 }
