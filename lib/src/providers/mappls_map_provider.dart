@@ -212,7 +212,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
     if (controller is MapplsMapController) {
       try {
-        final String? rawType = polygon.properties?["polygonType"];
+        final String? rawType = polygon.properties?["type"]??polygon.properties?["polygonType"];
         final String? type = rawType?.toLowerCase();
 
         final String? fillColorHex = polygon.properties?["fillColor"];
@@ -226,7 +226,7 @@ class MapplsMapProvider extends BaseMapProvider {
         final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
             ? RenderingUtilities.hexToColor(strokeColorHex)
             : RenderingUtilities.polygonColorMap[type]?["strokeColor"]
-            ?? Colors.black;
+            ?? Color(0xffD3D3D3);
 
         final coordinates = polygon.points
             .map((p) => LatLng(p.latitude, p.longitude))
@@ -244,17 +244,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
         );
 
-        final line = await controller.addLine(
-          LineOptions(
-            geometry: coordinates,
-            lineColor: '#$strokeHex',
-            lineWidth: 2.0, // Set your desired stroke width here
-            lineOpacity: strokeColor.opacity,
-          ),
-        );
-
         _fills[polygon.id] = fill;
-        _lines[polygon.id] = line;
       } catch (e) {
         print('Error adding polygon: $e');
       }
@@ -379,7 +369,7 @@ class MapplsMapProvider extends BaseMapProvider {
           textField: ["get", "title"],
           textSize: 12,
           textColor: "#000000",
-          textHaloColor: "#FFFFFF",
+          textHaloColor: "#f8f9fa",
           textHaloWidth: 2,
           textAnchor: "top",
           textOffset: [0, 1.2],
