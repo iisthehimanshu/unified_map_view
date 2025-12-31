@@ -36,14 +36,11 @@ class UnifiedMapWidget extends StatelessWidget {
                   },
                 ),
               ),
-              FloatingActionButton(onPressed: (){
-                controller.selectLocation(polyID: "0472b85-8a15-d3-fa41-2f66ea72a34");
-              }),
               Positioned(
                 left: 50,
                 top: 150,
                 child: FloatingActionButton(onPressed: (){
-                  controller.deSelectLocation(polyID: "0472b85-8a15-d3-fa41-2f66ea72a34");
+                  controller.deSelectLocation();
                 }),
               )
             ],

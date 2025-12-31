@@ -19,30 +19,31 @@ class FloorSpeedDial extends StatelessWidget {
   Widget build(BuildContext context) {
     if (floors.isEmpty) return const SizedBox.shrink();
 
-    return SpeedDial(
-      activeIcon: Icons.close,
-      backgroundColor: Colors.blue,
-      foregroundColor: Colors.white,
-      overlayOpacity: 0.2,
-      child: _floorLabel(selectedFloor),
-      children: floors
-          .map(
-            (floor) => SpeedDialChild(
-          child: _floorLabel(floor),
-          label: _floorName(floor),
-          onTap: () => onFloorSelected(floor),
-        ),
-      )
-          .toList(),
+    return SafeArea(
+      child: SpeedDial(
+        activeIcon: Icons.close,
+        backgroundColor: Colors.blue,
+        foregroundColor: Colors.white,
+        overlayOpacity: 0.2,
+        children: floors
+            .map(
+              (floor) => SpeedDialChild(
+            child: _floorLabel(floor),
+            onTap: () => onFloorSelected(floor),
+          ),
+        )
+            .toList(),
+        child: _floorLabel(selectedFloor, color: Colors.white),
+      ),
     );
   }
 
-  Widget _floorLabel(int floor) {
+  Widget _floorLabel(int floor,{Color? color}) {
     return Text(
       floor == 0 ? 'G' : floor.toString(),
-      style: const TextStyle(
+      style: TextStyle(
         fontWeight: FontWeight.bold,
-        color: Colors.white,
+        color: color??Colors.black,
       ),
     );
   }

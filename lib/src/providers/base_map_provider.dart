@@ -56,7 +56,7 @@ abstract class BaseMapProvider {
 
   Future<void> selectLocation(dynamic controller, String polyID);
 
-  Future<void> deSelectLocation(dynamic controller, String polyID);
+  Future<void> deSelectLocation(dynamic controller);
 
   /// Clear all GeoJSON features
   Future<void> clearAllGeoJsonFeatures(dynamic controller) async {

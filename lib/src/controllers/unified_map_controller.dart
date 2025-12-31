@@ -117,15 +117,15 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   void onPolylineTap({required String polylineId, required List<MapLocation> coordinates}){
-
+    print("unified controller onPolylineTap $polylineId $coordinates");
   }
 
   void onPolygonTap({required String polygonId, required List<MapLocation> coordinates}){
     print("unified controller onPolygonTap $polygonId $coordinates");
   }
 
-  void onMarkerTap({required String polygonId, required MapLocation coordinates}){
-    print("marker tapped with id $polygonId");
+  void onMarkerTap({required String markerId, required MapLocation coordinates}){
+    print("unified controller onMarkerTap $markerId $coordinates");
   }
 
   /// Move camera to a specific location
@@ -370,9 +370,9 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> deSelectLocation({required String polyID}) async {
+  Future<void> deSelectLocation() async {
     if (_currentMapController != null) {
-      await currentProviderImplementation.deSelectLocation(_currentMapController, polyID);
+      await currentProviderImplementation.deSelectLocation(_currentMapController);
     }
     notifyListeners();
   }
