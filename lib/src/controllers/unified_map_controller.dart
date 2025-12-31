@@ -38,6 +38,10 @@ class UnifiedMapController extends ChangeNotifier {
     bool scrollGesturesEnabled = true,
     bool tiltGesturesEnabled = false,
 
+    Function ({required String markerId, required MapLocation coordinates})? onMarker,
+    Function ({required String polygonId, required List<MapLocation> coordinates})? onPolygon,
+    Function ({required String polylineId, required List<MapLocation> coordinates})? onPolyline
+
   }) {
     _currentProvider = initialProvider;
 
@@ -50,9 +54,9 @@ class UnifiedMapController extends ChangeNotifier {
       tiltGesturesEnabled: tiltGesturesEnabled,
       onMapCreated: onMapCreated,
       onCameraMove: onCameraMove,
-      onMarkerTap: onMarkerTap,
-      onPolygonTap: onPolygonTap,
-      onPolylineTap: onPolylineTap
+      onMarkerTap: onMarker??onMarkerTap,
+      onPolygonTap: onPolygon??onPolygonTap,
+      onPolylineTap: onPolyline??onPolylineTap
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);

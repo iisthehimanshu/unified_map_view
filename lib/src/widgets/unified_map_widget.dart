@@ -22,29 +22,7 @@ class UnifiedMapWidget extends StatelessWidget {
       builder: (context, child) {
         return Padding(
           padding: padding,
-          child: Stack(
-            children: [
-              controller.currentProviderImplementation.buildMap(config: controller.config),
-              if(controller.focusedBuilding != null && controller.focusBuildingSelectedFloor != null && controller.focusedBuildingAvailableFloors != null && controller.focusedBuildingAvailableFloors!.isNotEmpty) Positioned(
-                bottom: 24,
-                right: 16,
-                child: FloorSpeedDial(
-                  floors: controller.focusedBuildingAvailableFloors!,
-                  selectedFloor: controller.focusBuildingSelectedFloor!,
-                  onFloorSelected: (floor) {
-                    controller.changeBuildingFloor(buildingID: controller.focusedBuilding!, floor: floor);
-                  },
-                ),
-              ),
-              Positioned(
-                left: 50,
-                top: 150,
-                child: FloatingActionButton(onPressed: (){
-                  controller.deSelectLocation();
-                }),
-              )
-            ],
-          ),
+          child : controller.currentProviderImplementation.buildMap(config: controller.config),
         );
       },
     );

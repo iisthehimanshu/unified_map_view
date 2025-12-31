@@ -3,20 +3,22 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_speed_dial/flutter_speed_dial.dart';
 
+import '../../unified_map_view.dart';
+
 class FloorSpeedDial extends StatelessWidget {
-  final int selectedFloor;
-  final List<int> floors;
-  final ValueChanged<int> onFloorSelected;
+
+  final UnifiedMapController controller;
 
   const FloorSpeedDial({
     super.key,
-    required this.selectedFloor,
-    required this.floors,
-    required this.onFloorSelected,
+    required this.controller
   });
 
   @override
   Widget build(BuildContext context) {
+    if(controller.focusedBuildingAvailableFloors == null || controller.focusBuildingSelectedFloor == null) return SizedBox.shrink();
+    var floors = controller.focusedBuildingAvailableFloors!;
+    var  selectedFloor =  controller.focusBuildingSelectedFloor!;
     if (floors.isEmpty) return const SizedBox.shrink();
 
     return SafeArea(
@@ -29,7 +31,9 @@ class FloorSpeedDial extends StatelessWidget {
             .map(
               (floor) => SpeedDialChild(
             child: _floorLabel(floor),
-            onTap: () => onFloorSelected(floor),
+            onTap: (){
+              controller.changeBuildingFloor(buildingID: controller.focusedBuilding!, floor: floor);
+            },
           ),
         )
             .toList(),
