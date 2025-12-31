@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
+import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../utils/UnifiedMarkerCreator.dart';
+import '../utils/geoJsonUtils.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -21,7 +23,9 @@ class MapplsMapProvider extends BaseMapProvider {
   final Map<String, Line> _lines = {};
   final Map<String, Fill> _fills = {};
 
-  String _clusterSourceId = 'markers-source';
+  SelectedLocation? selectedLocation;
+
+  final String _clusterSourceId = 'markers-source';
 
   @override
   Widget buildMap({required MapConfig config}) {
@@ -39,12 +43,17 @@ class MapplsMapProvider extends BaseMapProvider {
         enableClustering(controller);
         controller.onFillTapped.add((Fill){
           var polygons = _fills.entries.where((entry)=>entry.value == Fill);
+          print("polygons $polygons");
           if(polygons.isNotEmpty){
             var entry = polygons.first;
+            print("key ${entry.key}");
+            var keyMap = GeoJsonUtils.extractKeyValueMap(entry.key);
+            if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
             config.onPolygonTap!(
                 coordinates: Fill.options.geometry!.first.map((point)=>MapLocation(latitude: point.latitude, longitude: point.longitude)).toList(),
                 polygonId: entry.key
             );
+            selectLocation(controller,keyMap["id"]!);
           }
         });
       },
@@ -137,6 +146,7 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
+      if(marker.properties == null || marker.properties!["polyId"] == null) return;
       _symbols.add(marker);
 
       // Load marker icon if provided
@@ -146,15 +156,15 @@ class MapplsMapProvider extends BaseMapProvider {
       try{
         setGeoJsonSource(controller, _symbols);
       }catch(e){
-        rethrow;
+        print("error adding marker $e");
       }
     }
   }
 
   Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols) async {
     if (controller is MapplsMapController) {
-      final features = _symbols.map((marker) =>
-      {
+      final features = _symbols.map((marker)=>
+       {
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
@@ -163,7 +173,8 @@ class MapplsMapProvider extends BaseMapProvider {
         'properties': {
           'title': '',
           'id': marker.id,
-          if(marker.iconName != null || true)'icon': marker.id,
+          if(marker.iconName != null || true) 'icon': marker.id,
+        'isPriority': marker.priority ?? false,
         }
       }).toList();
 
@@ -173,9 +184,8 @@ class MapplsMapProvider extends BaseMapProvider {
           "type": "FeatureCollection",
           "features": features,
         },
-      );
+      );}
     }
-  }
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
@@ -199,13 +209,7 @@ class MapplsMapProvider extends BaseMapProvider {
         _symbols.clear();
 
         // Update the GeoJSON source with empty features
-        await controller.setGeoJsonSource(
-          _clusterSourceId,
-          {
-            "type": "FeatureCollection",
-            "features": [],
-          },
-        );
+       setGeoJsonSource(controller, []);
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -400,9 +404,10 @@ class MapplsMapProvider extends BaseMapProvider {
         'features': [],
       });
 
+      // Layer 1: Normal markers (rendered first, can be hidden)
       await controller.addSymbolLayer(
         _clusterSourceId,
-        'cluster-count',
+        'normal-markers',
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 1.5,
@@ -411,12 +416,7 @@ class MapplsMapProvider extends BaseMapProvider {
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
           textHaloWidth: 2,
-          textAnchor: [
-            "case",
-            ["has", "icon"],
-            "left",
-            "center"
-          ],
+          textAnchor: ["case", ["has", "icon"], "left", "center"],
           textOffset: [
             "case",
             ["has", "icon"],
@@ -426,24 +426,35 @@ class MapplsMapProvider extends BaseMapProvider {
           iconAllowOverlap: false,
           textAllowOverlap: false,
         ),
+        filter: ["!=", ["get", "isPriority"], true], // Only non-priority markers
         enableInteraction: true,
       );
 
-      // Try approach 1: onSymbolTapped
-      controller.onSymbolTapped?.add((symbol) {
-        print("Symbol tapped: ${symbol.id}");
-        print("Symbol data: ${symbol.data}");
-      });
-
-      // Try approach 2: onFeatureDrag (some SDKs use this for interaction)
-      controller.onFeatureTapped.add((id, point, coordinates) {
-        print("Feature tapped with id $id at $coordinates");
-      });
-
-      // Try approach 3: General map click to debug
-      controller.addListener(() {
-        print("Controller listener triggered");
-      });
+      // Layer 2: Priority markers (rendered last, always visible)
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        'priority-markers',
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          textField: ["get", "title"],
+          textSize: 12,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 2,
+          textAnchor: ["case", ["has", "icon"], "left", "center"],
+          textOffset: [
+            "case",
+            ["has", "icon"],
+            ["literal", [3.5, 0]],
+            ["literal", [0, 0]]
+          ],
+          iconAllowOverlap: true,  // Priority markers always show
+          textAllowOverlap: true,
+        ),
+        filter: ["==", ["get", "isPriority"], true], // Only priority markers
+        enableInteraction: true,
+      );
 
       if(_symbols.isNotEmpty){
         List<GeoJsonMarker> symbols = [..._symbols];
@@ -460,5 +471,323 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) {
     // TODO: implement addPolygons
     throw UnimplementedError();
+  }
+
+  @override
+  Future<void> selectLocation(controller, String polyID) async {
+
+    // Edge case: Validate controller type
+    if (controller is! MapplsMapController) {
+      print('Error: Invalid controller type');
+      return;
+    }
+
+    // Edge case: Validate polyID
+    if (polyID.isEmpty) {
+      print('Error: polyID cannot be empty');
+      return;
+    }
+
+    // Edge case: Deselect previous location if exists
+    if (selectedLocation != null) {
+      await deSelectLocation(controller);
+    }
+
+    try {
+      // Edge case: Check if _fills map is empty
+      if (_fills.isEmpty) {
+        print('Error: No polygons available to select');
+        return;
+      }
+
+      // Find the polygon that contains polyID
+      final polygonEntry = _fills.entries.firstWhere(
+            (entry) => entry.key.contains(polyID),
+        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+      );
+
+      final Fill polygonFill = polygonEntry.value;
+      final String polygonId = polygonEntry.key;
+
+      // Edge case: Validate polygon options
+      if (polygonFill.options == null) {
+        print('Error: Polygon options are null for $polygonId');
+        return;
+      }
+
+      // Get the polygon's coordinates
+      final coordinates = polygonFill.options.geometry?.first;
+
+      // Edge case: Validate coordinates exist and have sufficient points
+      if (coordinates == null || coordinates.isEmpty) {
+        print('Error: No coordinates found for polygon: $polygonId');
+        return;
+      }
+
+      if (coordinates.length < 3) {
+        print('Error: Polygon must have at least 3 points: $polygonId');
+        return;
+      }
+
+      // Calculate bounds of the polygon with validation
+      double minLat = coordinates.first.latitude;
+      double maxLat = coordinates.first.latitude;
+      double minLng = coordinates.first.longitude;
+      double maxLng = coordinates.first.longitude;
+
+      for (final point in coordinates) {
+        // Edge case: Validate coordinate values
+        if (point.latitude < -90 || point.latitude > 90) {
+          print('Warning: Invalid latitude ${point.latitude} for $polygonId');
+          continue;
+        }
+        if (point.longitude < -180 || point.longitude > 180) {
+          print('Warning: Invalid longitude ${point.longitude} for $polygonId');
+          continue;
+        }
+
+        minLat = min(minLat, point.latitude);
+        maxLat = max(maxLat, point.latitude);
+        minLng = min(minLng, point.longitude);
+        maxLng = max(maxLng, point.longitude);
+      }
+
+      // Edge case: Check for degenerate polygon (all points are the same)
+      if (minLat == maxLat && minLng == maxLng) {
+        print('Warning: Polygon has no area (all points identical): $polygonId');
+        // Still proceed but with a default zoom or fixed offset
+      }
+
+      // Calculate center point
+      final centerLat = (minLat + maxLat) / 2;
+      final centerLng = (minLng + maxLng) / 2;
+
+      // Edge case: Validate center coordinates
+      if (centerLat.isNaN || centerLng.isNaN ||
+          centerLat.isInfinite || centerLng.isInfinite) {
+        print('Error: Invalid center coordinates calculated for $polygonId');
+        return;
+      }
+
+      // Remove the old polygon
+      try {
+        await controller.removeFill(polygonFill);
+      } catch (e) {
+        print('Warning: Failed to remove old polygon: $e');
+        // Continue anyway as it might have been already removed
+      }
+
+      // Add the polygon back with highlighted colors
+      final highlightedFill = await controller.addFill(
+        FillOptions(
+          geometry: [coordinates],
+          fillColor: '#4CAF50', // Bright green for highlight
+          fillOpacity: 0.6,
+          fillOutlineColor: '#2E7D32', // Darker green for border
+        ),
+      );
+
+      // Edge case: Validate the highlighted fill was created
+      if (highlightedFill == null) {
+        print('Error: Failed to create highlighted fill for $polygonId');
+        return;
+      }
+
+      // Update the fills map with the new highlighted fill
+      _fills[polygonId] = highlightedFill;
+
+      selectedLocation = SelectedLocation(
+          polyID: polyID,
+          polygon: polygonFill,
+          marker: null
+      );
+
+      // Find and show the marker associated with this polygon
+      try {
+        // Edge case: Check if _symbols list is empty
+        if (_symbols.isEmpty) {
+          print('No markers available for polyID: $polyID');
+        } else {
+          final marker = _symbols.firstWhere(
+                (m) => m.id.contains(polyID),
+            orElse: () => throw Exception('Marker not found'),
+          );
+
+          selectedLocation?.setLocation(
+              polyID: polyID,
+              polygon: polygonFill,
+              marker: marker
+          );
+
+          final genericMarker = GeoJsonMarker.getGenericMarker(marker);
+
+          // Edge case: Validate generic marker creation
+          if (genericMarker == null) {
+            print('Error: Failed to create generic marker for $polyID');
+          } else {
+            // Remove the marker first if it exists
+            removeMarker(controller, polyID);
+            addMarker(controller, genericMarker);
+          }
+        }
+      } catch (e) {
+        print('No marker found for polyID: $polyID - $e');
+        // Not a critical error, continue without marker
+      }
+
+      // Animate camera to the polygon center
+      try {
+        // Edge case: Calculate appropriate zoom level based on polygon size
+        final latSpan = maxLat - minLat;
+        final lngSpan = maxLng - minLng;
+        final maxSpan = max(latSpan, lngSpan);
+
+        // Adjust zoom based on polygon size (larger polygons need lower zoom)
+        double targetZoom = 20.0;
+        if (maxSpan > 0.01) targetZoom = 15.0;
+        if (maxSpan > 0.1) targetZoom = 12.0;
+        if (maxSpan > 1.0) targetZoom = 8.0;
+
+        await controller.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(centerLat, centerLng),
+            targetZoom,
+          ),
+        );
+      } catch (e) {
+        print('Warning: Failed to animate camera: $e');
+        // Not critical, polygon is still selected
+      }
+
+    } catch (e, stackTrace) {
+      print('Error selecting location: $e');
+      print('Stack trace: $stackTrace');
+
+      // Edge case: Cleanup on failure
+      if (selectedLocation != null) {
+        selectedLocation = null;
+      }
+    }
+  }
+
+  /// Deselect a polygon and restore its original colors
+  Future<void> deSelectLocation(dynamic controller) async {
+    // Edge case: Validate controller type
+    if (controller is! MapplsMapController) {
+      print('Error: Invalid controller type in deSelectLocation');
+      return;
+    }
+
+    // Edge case: Check if there's anything to deselect
+    if (selectedLocation == null) {
+      return;
+    }
+
+    var polyID = selectedLocation!.polyID;
+
+    // Edge case: Validate polyID
+    if (polyID.isEmpty) {
+      print('Error: polyID is empty in selectedLocation');
+      selectedLocation = null;
+      return;
+    }
+
+    try {
+      // Edge case: Check if _fills map is empty
+      if (_fills.isEmpty) {
+        print('Error: No polygons available in _fills map');
+        selectedLocation = null;
+        return;
+      }
+
+      // Find the polygon that contains polyID
+      final polygonEntry = _fills.entries.firstWhere(
+            (entry) => entry.key.contains(polyID),
+        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+      );
+
+      final Fill polygonFill = polygonEntry.value;
+      final String polygonId = polygonEntry.key;
+
+      // Edge case: Validate polygon options
+      if (polygonFill.options == null) {
+        print('Error: Polygon options are null for $polygonId');
+        selectedLocation = null;
+        return;
+      }
+
+      // Get the polygon's coordinates
+      final coordinates = polygonFill.options.geometry?.first;
+
+      // Edge case: Validate coordinates
+      if (coordinates == null || coordinates.isEmpty) {
+        print('Error: No coordinates found for polygon: $polygonId');
+        selectedLocation = null;
+        return;
+      }
+
+      // Get the original properties
+      final originalProps = selectedLocation?.polygon as Fill?;
+
+      // Edge case: Handle missing original properties
+      if (originalProps == null || originalProps.options == null) {
+        print('Warning: No original properties found, using defaults for: $polygonId');
+        // Use default colors instead of failing
+      }
+
+      // Remove the highlighted polygon
+      try {
+        await controller.removeFill(polygonFill);
+      } catch (e) {
+        print('Warning: Failed to remove highlighted polygon: $e');
+        // Continue anyway
+      }
+
+      // Add the polygon back with original colors (or defaults if not available)
+      final restoredFill = await controller.addFill(
+        FillOptions(
+          geometry: [coordinates],
+          fillColor: originalProps?.options.fillColor ?? '#FFFFFF',
+          fillOpacity: originalProps?.options.fillOpacity ?? 0.5,
+          fillOutlineColor: originalProps?.options.fillOutlineColor ?? '#D3D3D3',
+        ),
+      );
+
+      // Edge case: Validate restored fill was created
+      if (restoredFill == null) {
+        print('Error: Failed to create restored fill for $polygonId');
+      } else {
+        // Update the fills map with the restored fill
+        _fills[polygonId] = restoredFill;
+      }
+
+      // Hide the marker associated with this polygon
+      try {
+        final marker = selectedLocation?.marker as GeoJsonMarker?;
+
+        // Edge case: Check if marker exists before trying to hide it
+        if (marker != null) {
+          // Remove the marker from the symbols list
+          removeMarker(controller, polyID);
+            // Marker was removed, now add it back with original state
+            await addMarker(controller, marker);
+        } else {
+          print('No marker associated with this location');
+        }
+      } catch (e) {
+        print('Error hiding marker: $e');
+        // Not critical, continue with deselection
+      }
+
+      // Remove the stored original properties as it's now restored
+      selectedLocation = null;
+
+    } catch (e, stackTrace) {
+      print('Error deselecting location: $e');
+      print('Stack trace: $stackTrace');
+
+      // Edge case: Force cleanup even on error
+      selectedLocation = null;
+    }
   }
 }

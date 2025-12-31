@@ -2,6 +2,9 @@
 
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:unified_map_view/src/utils/geoJsonUtils.dart';
+
+import '../utils/LandmarkAssetType.dart';
 import '../utils/renderingUtilities.dart';
 import 'map_location.dart';
 
@@ -136,7 +139,7 @@ class GeoJsonPolygon {
     final ring = coords[0] as List; // First ring (outer boundary)
 
     return GeoJsonPolygon(
-      id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.building_ID),
       points: ring.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],
@@ -165,7 +168,7 @@ class GeoJsonPolyline {
     final coords = feature.geometry.coordinates as List;
 
     return GeoJsonPolyline(
-      id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.building_ID),
       points: coords.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],
@@ -182,6 +185,8 @@ class GeoJsonMarker {
   final String? snippet;
   final String? assetPath; // Add icon name/identifier
   final String? iconName;
+  final bool? priority;
+  final Map<String, dynamic>? properties;
 
   GeoJsonMarker({
     required this.id,
@@ -190,7 +195,22 @@ class GeoJsonMarker {
     this.snippet,
     this.assetPath,
     this.iconName,
+    this.priority,
+    this.properties,
   });
+
+  static GeoJsonMarker getGenericMarker(GeoJsonMarker marker){
+    return GeoJsonMarker(
+        id: marker.id,
+        position: marker.position,
+        title: "",
+        snippet: "",
+        assetPath: LandmarkAssetType.genericMarker.assetPath,
+        iconName: "Generic Marker",
+      properties: marker.properties,
+      priority: true
+    );
+  }
 
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
@@ -201,17 +221,15 @@ class GeoJsonMarker {
     final assetPath = RenderingUtilities.getAssetNameForLandmark(feature.properties);
     final iconName = assetPath?.split('/').last.split('.').first;
 
-    if(feature.properties?["landmarkId"] == "6889bb7cfe0f245a59f3cd7e"){
-      print("feature.properties $assetPath $iconName ${feature.properties}");
-    }
-
     return GeoJsonMarker(
-      id: "id:${feature.id} | buildingID:${feature.building_ID}" ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.building_ID, polyId:feature.properties?["polyId"]),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
       title: feature.properties?["name"],
       snippet: "",
       assetPath: assetPath,
-      iconName: iconName
+      iconName: iconName,
+      properties: feature.properties,
+      priority: false
     );
   }
 }

@@ -36,6 +36,13 @@ class UnifiedMapWidget extends StatelessWidget {
                   },
                 ),
               ),
+              Positioned(
+                left: 50,
+                top: 150,
+                child: FloatingActionButton(onPressed: (){
+                  controller.deSelectLocation();
+                }),
+              )
             ],
           ),
         );

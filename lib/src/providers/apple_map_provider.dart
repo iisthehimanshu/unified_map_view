@@ -158,4 +158,16 @@ class AppleMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> selectLocation(controller, String polyID) {
+    // TODO: implement selectLocation
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> deSelectLocation(controller) {
+    // TODO: implement deSelectLocation
+    throw UnimplementedError();
+  }
+
 }
