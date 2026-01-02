@@ -11,6 +11,10 @@ enum LandmarkAssetType {
   room,
   entrance,
   genericMarker,
+  user,
+  source,
+  destination,
+  floorConnection,
   emergency;
 
   String get assetPath {
@@ -39,6 +43,14 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/building_entry.png';
       case LandmarkAssetType.genericMarker:
         return 'packages/unified_map_view/assets/markers/generic_marker.png';
+      case LandmarkAssetType.user:
+        return 'packages/unified_map_view/assets/markers/generic_marker.png';
+      case LandmarkAssetType.source:
+        return 'packages/unified_map_view/assets/markers/source.png';
+      case LandmarkAssetType.destination:
+        return 'packages/unified_map_view/assets/markers/destination.png';
+      case LandmarkAssetType.floorConnection:
+        return 'packages/unified_map_view/assets/markers/lift.png';
       case LandmarkAssetType.emergency:
         return 'packages/unified_map_view/assets/markers/entry.png';
     }

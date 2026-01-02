@@ -1,4 +1,4 @@
-import '../models/geojson_models.dart';
+import '../../models/geojson_models.dart';
 
 /// Utility class for loading and parsing GeoJSON data
 class GeoJsonLoader {

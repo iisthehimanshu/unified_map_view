@@ -1,12 +1,11 @@
 // lib/src/models/geojson_models.dart
 
+import 'dart:ui';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:unified_map_view/src/utils/geoJsonUtils.dart';
-
+import '../../unified_map_view.dart';
 import '../utils/LandmarkAssetType.dart';
 import '../utils/renderingUtilities.dart';
-import 'map_location.dart';
 
 export 'dart:typed_data';
 
@@ -187,6 +186,7 @@ class GeoJsonMarker {
   final String? iconName;
   final bool? priority;
   final Map<String, dynamic>? properties;
+  final Size? imageSize;
 
   GeoJsonMarker({
     required this.id,
@@ -197,20 +197,8 @@ class GeoJsonMarker {
     this.iconName,
     this.priority,
     this.properties,
+    this.imageSize
   });
-
-  static GeoJsonMarker getGenericMarker(GeoJsonMarker marker){
-    return GeoJsonMarker(
-        id: marker.id,
-        position: marker.position,
-        title: "",
-        snippet: "",
-        assetPath: LandmarkAssetType.genericMarker.assetPath,
-        iconName: "Generic Marker",
-      properties: marker.properties,
-      priority: true
-    );
-  }
 
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {

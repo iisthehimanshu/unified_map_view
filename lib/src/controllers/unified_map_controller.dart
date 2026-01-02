@@ -262,6 +262,7 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> deSelectLocation() async {
     if (_currentMapController != null) {
       await currentProviderImplementation.deSelectLocation(_currentMapController);
+      clearPath();
     }
     notifyListeners();
   }
@@ -412,6 +413,11 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<bool> addPath({required List<Map<String, dynamic>> path}) async {
     return _annotationController.addPath(path.map((map)=>Cell.fromJson(map)).toList());
+  }
+
+  Future<void> clearPath() async {
+    _annotationController.clearPath();
+    notifyListeners();
   }
 
   Future<void> annotatePath({required List<String> bids, required int sourceFloor}) async {

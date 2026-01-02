@@ -17,8 +17,11 @@ class Cell{
   int? imaginedIndex;
   Location? position;
   bool masterGraph;
+  bool isSource;
+  bool isDestination;
+  bool isFloorConnection;
 
-  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false});
+  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false});
 
   Map<String, dynamic> toJson() => {
     'node': node,
@@ -42,6 +45,9 @@ class Cell{
       'timeStamp': position!.timeStamp.toIso8601String(),
     }
         : null,
+    'isSource': isSource,
+    'isDestination': isDestination,
+    'isFloorConnection': isFloorConnection
   };
 
 
@@ -74,6 +80,9 @@ class Cell{
       imaginedIndex: json['imaginedIndex'],
       position: position,
       masterGraph: json['masterGraph'] ?? false,
+      isSource: json['isSource'],
+      isDestination: json['isDestination'],
+      isFloorConnection: json['isFloorConnection'],
     );
   }
 

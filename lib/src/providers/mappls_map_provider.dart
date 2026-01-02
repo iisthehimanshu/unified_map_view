@@ -8,7 +8,8 @@ import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../utils/UnifiedMarkerCreator.dart';
-import '../utils/geoJsonUtils.dart';
+import '../utils/geoJson/geoJsonUtils.dart';
+import '../utils/geoJson/predefined_markers.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -150,7 +151,6 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
-      if(marker.properties == null || marker.properties!["polyId"] == null) return;
       _symbols.add(marker);
 
       // Load marker icon if provided
@@ -195,6 +195,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'id': marker.id,
           if(marker.iconName != null || true) 'icon': marker.id,
           'isPriority': marker.priority ?? false,
+          'intractable': marker.properties?["polyId"] != null
         }
       }).toList();
 
@@ -449,7 +450,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     try {
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
-        imageSize: const Size(25, 25),
+        imageSize: marker.imageSize??const Size(25, 25),
         fontSize: 8.5,
         text: marker.assetPath != null ? "" : marker.title ?? "",
         imageSource: marker.assetPath,
@@ -750,11 +751,9 @@ class MapplsMapProvider extends BaseMapProvider {
             marker: marker,
           );
 
-          final genericMarker = GeoJsonMarker.getGenericMarker(marker);
-          if (genericMarker != null) {
-            await removeMarker(controller, polyID);
-            await addMarker(controller, genericMarker);
-          }
+          final genericMarker = PredefinedMarkers.getGenericMarker(marker);
+          await removeMarker(controller, polyID);
+          await addMarker(controller, genericMarker);
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');

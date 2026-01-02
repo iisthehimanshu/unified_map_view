@@ -23,4 +23,5 @@ export 'src/widgets/FloorSpeedDial.dart';
 export 'src/providers/base_map_provider.dart';
 
 // Utilities
-export 'src/utils/geojson_loader.dart';
+export 'src/utils/geoJson/geojson_loader.dart';
+export 'src/utils/geoJson/geoJsonUtils.dart';
