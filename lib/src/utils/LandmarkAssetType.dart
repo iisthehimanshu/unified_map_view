@@ -26,7 +26,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.maleWashroom:
         return 'packages/unified_map_view/assets/markers/male_washroom.png';
       case LandmarkAssetType.accessibleWashroom:
-        return 'packages/unified_map_view/assets/markers/accessible_washroom.png';
+        return 'packages/unified_map_view/assets/markers/male_washroom.png';
       case LandmarkAssetType.washroom:
         return 'packages/unified_map_view/assets/markers/washroom.png';
       case LandmarkAssetType.waterFountain:

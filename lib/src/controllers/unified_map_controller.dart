@@ -1,18 +1,13 @@
 // lib/src/controllers/unified_map_controller.dart
 
 import 'package:flutter/foundation.dart';
-import '../controllers/annotation_controller.dart';
 import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
-import '../enums/map_provider.dart';
-import '../models/camera_position.dart';
-import '../models/map_config.dart';
-import '../models/map_location.dart';
-import '../models/geojson_models.dart';
-import '../utils/geojson_loader.dart';
-import '../providers/base_map_provider.dart';
+
+import '../../unified_map_view.dart';
+import '../models/Cell.dart';
+import '../providers/apple_map_provider.dart';
 import '../providers/google_map_provider.dart';
 import '../providers/mapbox_map_provider.dart';
-import '../providers/apple_map_provider.dart';
 
 /// Main controller for managing map providers and operations
 class UnifiedMapController extends ChangeNotifier {
@@ -142,6 +137,21 @@ class UnifiedMapController extends ChangeNotifier {
     );
   }
 
+  Future<void> zoom({double zoom = 1.0}) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.zoom(_currentMapController, zoom: zoom);
+  }
+
+  Future<void> zoomTo(double zoom) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.zoomTo(_currentMapController, zoom);
+  }
+
+  Future<void> fitCameraToLine(GeoJsonPolyline polyline) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.fitCameraToLine(_currentMapController, polyline);
+  }
+
   /// Animate camera to a specific location
   Future<void> animateCamera(MapLocation location, {double? zoom}) async {
     if (_currentMapController == null) return;
@@ -157,6 +167,14 @@ class UnifiedMapController extends ChangeNotifier {
     _markers.add(marker);
     if (_currentMapController != null) {
       await currentProviderImplementation.addMarker(_currentMapController, marker);
+    }
+    notifyListeners();
+  }
+
+  Future<void> addMarkers(List<GeoJsonMarker> markers) async {
+    _markers.addAll(markers);
+    if (_currentMapController != null) {
+      await currentProviderImplementation.addMarkers(_currentMapController, markers);
     }
     notifyListeners();
   }
@@ -206,29 +224,45 @@ class UnifiedMapController extends ChangeNotifier {
     final boundaryPolygons = polygons.where((p) => p.properties?["polygonType"] == "Boundary").toList();
     final otherPolygons = polygons.where((p) => p.properties?["polygonType"] != "Boundary").toList();
 
-    for (var polygon in boundaryPolygons) {
-      await addPolygon(polygon);
-    }
-    // await addPolygons(boundaryPolygons);
+    // for (var polygon in boundaryPolygons) {
+    //   await addPolygon(polygon);
+    // }
+    await addPolygons(boundaryPolygons);
 
-    // await addPolygons(otherPolygons);
+    await addPolygons(otherPolygons);
 
-    for (var polygon in otherPolygons) {
-      await addPolygon(polygon);
-    }
+    // for (var polygon in otherPolygons) {
+    //   await addPolygon(polygon);
+    // }
 
     // Add polylines
     final polylines = GeoJsonLoader.extractPolylines(collection);
-    for (var polyline in polylines) {
-      await addPolyline(polyline);
-    }
+    // for (var polyline in polylines) {
+    //   await addPolyline(polyline);
+    // }
+    addPolylines(polylines);
 
     // Add markers from Point features
     final markers = GeoJsonLoader.extractMarkers(collection);
-    for (var marker in markers) {
-      await addMarker(marker);
-    }
+    // for (var marker in markers) {
+    //   await addMarker(marker);
+    // }
+    addMarkers(markers);
 
+    notifyListeners();
+  }
+
+  Future<void> selectLocation({required String polyID}) async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.selectLocation(_currentMapController, polyID);
+    }
+    notifyListeners();
+  }
+
+  Future<void> deSelectLocation() async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.deSelectLocation(_currentMapController);
+    }
     notifyListeners();
   }
 
@@ -283,6 +317,14 @@ class UnifiedMapController extends ChangeNotifier {
     _polylines.add(polyline);
     if (_currentMapController != null) {
       await currentProviderImplementation.addPolyline(_currentMapController, polyline);
+    }
+    notifyListeners();
+  }
+
+  Future<void> addPolylines(List<GeoJsonPolyline> polylines) async {
+    _polylines.addAll(polylines);
+    if (_currentMapController != null) {
+      await currentProviderImplementation.addPolylines(_currentMapController, polylines);
     }
     notifyListeners();
   }
@@ -364,20 +406,19 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
+    await _annotationController.annotatePath(floor);
     notifyListeners();
   }
 
-  Future<void> selectLocation({required String polyID}) async {
-    if (_currentMapController != null) {
-      await currentProviderImplementation.selectLocation(_currentMapController, polyID);
-    }
-    notifyListeners();
+  Future<bool> addPath({required List<Map<String, dynamic>> path}) async {
+    return _annotationController.addPath(path.map((map)=>Cell.fromJson(map)).toList());
   }
 
-  Future<void> deSelectLocation() async {
-    if (_currentMapController != null) {
-      await currentProviderImplementation.deSelectLocation(_currentMapController);
+  Future<void> annotatePath({required List<String> bids, required int sourceFloor}) async {
+    for (var bid in bids) {
+      changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }
+    await _annotationController.annotatePath(sourceFloor);
     notifyListeners();
   }
 

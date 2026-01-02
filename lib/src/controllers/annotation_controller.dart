@@ -4,6 +4,8 @@ import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
 import '../apis/BuildingByVenue.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
+import '../models/Cell.dart';
+import '../utils/geoJsonUtils.dart';
 
 class AnnotationController{
   UnifiedMapController _unifiedMapController;
@@ -16,6 +18,8 @@ class AnnotationController{
   String? get focusedBuilding => _focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
+
+  Map<String, Map<int, List<Cell>>>? _path;
 
   AnnotationController(this._unifiedMapController, {required String venueName}){
     _setVenue(venueName);
@@ -82,4 +86,45 @@ class AnnotationController{
       return;
     }
   }
+
+  bool addPath(List<Cell> path){
+    _path ??= Map();
+    path.forEach((cell){
+      _path!.putIfAbsent(cell.bid!, ()=>Map());
+      _path![cell.bid]!.putIfAbsent(cell.floor, ()=>[]);
+      _path![cell.bid]![cell.floor]!.add(cell);
+    });
+    print("addPath $_path");
+    return true;
+  }
+
+  Future<bool> annotatePath(int sourceFloor) async {
+    print("annotatePath $_path");
+    if(_path == null) return false;
+
+    _path!.forEach((bid, value){
+      print("annotatePath bid $bid");
+      value.forEach((floor, path) async {
+        print("annotatePath floor $floor path $path sourceFloor $sourceFloor");
+        if(floor == sourceFloor){
+          // await changeBuildingFloor(bid, floor);
+          List<MapLocation> points = [];
+          for (var point in path) {
+            points.add(MapLocation(latitude: point.lat, longitude: point.lng));
+          }
+          print("annotatePath point $points");
+          GeoJsonPolyline polyline = GeoJsonPolyline(
+              id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'true'),
+              points: points
+          );
+          print("annotatePath polyline $polyline");
+          await _unifiedMapController.fitCameraToLine(polyline);
+          await _unifiedMapController.addPolyline(polyline);
+        }
+      });
+    });
+
+    return true;
+  }
+
 }

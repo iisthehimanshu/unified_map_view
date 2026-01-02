@@ -19,11 +19,15 @@ class GeoJsonUtils{
     String? id,
     String? polyId,
     String? buildingID,
+    String? floor,
+    String? path
   }) {
     final Map<String, String?> values = {
       'id': id,
       'polyId': polyId,
       'buildingID': buildingID,
+      'floor': floor,
+      'path': path,
     };
 
     return values.entries
