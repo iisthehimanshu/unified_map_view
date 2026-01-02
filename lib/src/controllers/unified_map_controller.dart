@@ -202,16 +202,14 @@ class UnifiedMapController extends ChangeNotifier {
     final boundaryPolygons = polygons.where((p) => p.properties?["polygonType"] == "Boundary").toList();
     final otherPolygons = polygons.where((p) => p.properties?["polygonType"] != "Boundary").toList();
 
-    for (var polygon in boundaryPolygons) {
-      await addPolygon(polygon);
-    }
-    // await addPolygons(boundaryPolygons);
+    // for (var polygon in boundaryPolygons) {
+    //   await addPolygon(polygon);
+    // }
 
-    // await addPolygons(otherPolygons);
-
-    for (var polygon in otherPolygons) {
-      await addPolygon(polygon);
-    }
+    // for (var polygon in otherPolygons) {
+    //   await addPolygon(polygon);
+    // }
+    await addPolygons(polygons);
 
     // Add polylines
     final polylines = GeoJsonLoader.extractPolylines(collection);

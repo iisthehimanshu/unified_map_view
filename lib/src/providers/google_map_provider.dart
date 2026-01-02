@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:unified_map_view/src/utils/UnifiedMarkerCreator.dart';
 import '../models/camera_position.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
@@ -129,16 +130,26 @@ class GoogleMapProvider extends BaseMapProvider {
     }
   }
 
+  final creator = UnifiedMarkerCreator();
   Future<Marker> _convertMarker(GeoJsonMarker marker) async {
+    MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
+      text: marker.assetPath != null ? "":marker.title ?? "",
+      imageSource: marker.assetPath,
+      layout: MarkerLayout.horizontal,
+      textFormat: TextFormat.smartWrap,
+      textColor: const Color(0xff000000),
+    );
+    final Uint8List iconBytes = markerIconWithAnchor.icon;
     return Marker(
-      // icon: icon,
+      icon: BitmapDescriptor.fromBytes(iconBytes),
       markerId: MarkerId(marker.id),
       position: LatLng(marker.position.latitude, marker.position.longitude),
       infoWindow: InfoWindow(
         title: marker.title,
         snippet: marker.snippet,
       ),
-
+      onTap: (){},
+      anchor: markerIconWithAnchor.anchor
     );
   }
 

@@ -59,6 +59,47 @@ class RenderingUtilities{
         .toLowerCase();
   }
 
+  static String colorToHex(Color color) {
+    return '#${color.value.toRadixString(16).substring(2).toUpperCase()}';
+  }
+
+  static String getColorByType(String input) {
+    final s = input.toLowerCase();
+
+    if (s.toLowerCase().contains("wall")) {
+      return "#8ae9f8";
+    } else if (s.contains("female washroom")) {
+      return "#f7a8b8";
+    } else if (s.contains("male washroom")) {
+      return "#5d9cec";
+    } else if (s.contains("pantry")) {
+      return "#c8f0d1";
+    } else if (s.contains("boundary")) {
+      return "#ffffff";
+    } else if (s.contains("rooms")) {
+      return "#d3e0ea";
+    } else if (s.contains("conference")) {
+      return "#ffe4b5";
+    } else if (s.contains("workstations")) {
+      return "#c2f0c2";
+    } else if (s.contains("washroom")) {
+      return "#aec6cf";
+    }
+    return "#bdbdbd";
+  }
+
+  static (String,double) getIconIdByType(String input) {
+    final s = input.toLowerCase();
+    if (s.contains("female washroom")) {
+      return (LandmarkAssetType.femaleWashroom.iconImageId, LandmarkAssetType.femaleWashroom.iconSize);
+    } else if (s.contains("male washroom")) {
+      return (LandmarkAssetType.maleWashroom.iconImageId, LandmarkAssetType.maleWashroom.iconSize);
+    } else if(s.contains("entrance")){
+      return (LandmarkAssetType.entrance.iconImageId, LandmarkAssetType.entrance.iconSize);
+    }
+    return (LandmarkAssetType.genericMarker.iconImageId, LandmarkAssetType.genericMarker.iconSize);
+  }
+
   static String? getAssetNameForLandmark(Map<String, dynamic>? landmarkProperties) {
     try {
       if (landmarkProperties == null) return null;
