@@ -51,7 +51,7 @@ class MapplsMapProvider extends BaseMapProvider {
             if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
             config.onPolygonTap!(
                 coordinates: Fill.options.geometry!.first.map((point)=>MapLocation(latitude: point.latitude, longitude: point.longitude)).toList(),
-                polygonId: entry.key
+                polygonId: keyMap["id"]!
             );
             selectLocation(controller,keyMap["id"]!);
           }

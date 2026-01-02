@@ -17,6 +17,7 @@ export 'src/controllers/annotation_controller.dart';
 
 // Widgets
 export 'src/widgets/unified_map_widget.dart';
+export 'src/widgets/FloorSpeedDial.dart';
 
 // Providers (for custom implementations)
 export 'src/providers/base_map_provider.dart';
