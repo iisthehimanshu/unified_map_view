@@ -1,11 +1,15 @@
 // lib/src/providers/mapbox_map_provider.dart
 
 import 'dart:convert';
+import 'dart:math';
+import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import '../models/camera_position.dart';
+import '../models/selectedLocation.dart';
 import '../utils/LandmarkAssetType.dart';
+import '../utils/geoJsonUtils.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -16,13 +20,15 @@ import '../models/geojson_models.dart';
 class MapboxMapProvider extends BaseMapProvider {
   late MapboxMap _mapboxMap;
   static const String _markerSourceId = 'marker-source';
-  static const String _markerLayerId = 'marker-symbol-layer';
+  static const String _normalMarkerLayerId = 'normal-marker-layer';
+  static const String _priorityMarkerLayerId = 'priority-marker-layer';
   final Map<String, GeoJsonMarker> _markers = {};
 
   static const String _polygonSourceId = 'polygon-source';
   static const String _polygonLayerId  = 'polygon-extrusion-layer';
   final Map<String, GeoJsonPolygon> _polygons = {};
 
+  SelectedLocation? selectedLocation;
 
   @override
   Widget buildMap({
@@ -45,8 +51,9 @@ class MapboxMapProvider extends BaseMapProvider {
                ],
              ),
            );
+
            features.forEach((value){
-             if(value?.layers[0] == _polygonLayerId && value?.layers[0] != null && !value!.layers[0]!.contains('boundary')){
+             if(value?.layers[0] == _polygonLayerId && value?.layers[0] != null && !value!.queriedFeature.feature['id'].toString().contains('boundary')){
                dynamic geometry = value.queriedFeature.feature['geometry']!;
                final coordinates = geometry['coordinates'] as List<dynamic>;
                final List<MapLocation> polygonPoints = (coordinates.first as List<dynamic>).map((point) {
@@ -56,6 +63,10 @@ class MapboxMapProvider extends BaseMapProvider {
                }).toList();
                if(coordinates.length == 1){
                  config.onPolygonTap!(coordinates: polygonPoints, polygonId: value.queriedFeature.feature['id']!.toString());
+                 var keyMap = GeoJsonUtils.extractKeyValueMap(value!.queriedFeature.feature['id'].toString());
+                 print("keyMap $keyMap");
+                 if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
+                 selectLocation(mapboxMap,keyMap["id"]!);
                }
              }
            });
@@ -93,6 +104,126 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   @override
+  Future<void> selectLocation(controller, String polyID) async {
+    if (controller is! MapboxMap) {
+      print('Error: Invalid controller type');
+      return;
+    }
+    if (polyID.isEmpty) {
+      print('Error: polyID cannot be empty');
+      return;
+    }
+    if (selectedLocation != null) {
+      await deSelectLocation(controller);
+    }
+
+    try {
+      if (_polygons.isEmpty) {
+        print('Error: No polygons available to select');
+        return;
+      }
+
+      final polygonEntry = _polygons.entries.firstWhere(
+            (entry) => entry.key.contains(polyID),
+        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+      );
+
+      GeoJsonPolygon polygon = polygonEntry.value;
+      final String polygonId = polygonEntry.key;
+
+      print("received polyID $polygonId");
+
+      final coordinates = polygon.points;
+      if (coordinates == null || coordinates.isEmpty || coordinates.length < 3) {
+        print('Error: Invalid polygon coordinates');
+        return;
+      }
+
+      // Calculate bounds and center
+      double minLat = coordinates.first.latitude;
+      double maxLat = coordinates.first.latitude;
+      double minLng = coordinates.first.longitude;
+      double maxLng = coordinates.first.longitude;
+
+      for (final point in coordinates) {
+        if (point.latitude < -90 || point.latitude > 90 ||
+            point.longitude < -180 || point.longitude > 180) {
+          continue;
+        }
+        minLat = min(minLat, point.latitude);
+        maxLat = max(maxLat, point.latitude);
+        minLng = min(minLng, point.longitude);
+        maxLng = max(maxLng, point.longitude);
+      }
+
+      final centerLat = (minLat + maxLat) / 2;
+      final centerLng = (minLng + maxLng) / 2;
+
+      if (centerLat.isNaN || centerLng.isNaN ||
+          centerLat.isInfinite || centerLng.isInfinite) {
+        print('Error: Invalid center coordinates');
+        return;
+      }
+
+      // Update polygon color
+      final updatedProperties = Map<String, dynamic>.from(polygon.properties ?? {});
+      updatedProperties['onTap'] = "#aec6cf";
+
+      final updatedPolygon = GeoJsonPolygon(
+        id: polygon.id,
+        points: polygon.points,
+        properties: updatedProperties,
+      );
+
+      _polygons[polygonId] = updatedPolygon;
+      await _updatePolygonSource(controller);
+
+      // Remove existing markers for this polygon
+      await removeMarker(controller, polygonId);
+
+      // Add priority landmark marker (will render on top layer)
+      final landmarkMarker = GeoJsonMarker(
+        id: 'landmark_$polygonId',
+        position: MapLocation(latitude: centerLat, longitude: centerLng),
+        title: 'generic',  // Change based on your needs
+        priority: true,  // KEY: This makes it render on the priority layer
+        properties: {
+          'polyId': polygonId,
+          'type': 'Wall',
+
+        },
+      );
+      await removeMarker(controller, "landmark_");
+      await addMarker(controller, landmarkMarker);
+
+      // Store for deselection
+      selectedLocation = SelectedLocation(
+        polyID: polygonId,
+        polygon: polygon,  // Store original polygon
+        marker: null,
+      );
+
+      final latSpan = maxLat - minLat;
+      final lngSpan = maxLng - minLng;
+      final maxSpan = max(latSpan, lngSpan);
+
+      // Adjust zoom based on polygon size (larger polygons need lower zoom)
+      double targetZoom = 20.0;
+      if (maxSpan > 0.01) targetZoom = 15.0;
+      if (maxSpan > 0.1) targetZoom = 12.0;
+      if (maxSpan > 1.0) targetZoom = 8.0;
+
+      await _mapboxMap.flyTo(
+          CameraOptions(center:Point(coordinates: Position(centerLng, centerLat),),zoom: targetZoom),
+          MapAnimationOptions(duration: 500),
+      );
+    } catch (e) {
+      print('Error selecting polygon (Mapbox): $e');
+    }
+  }
+
+
+  @override
   Future<void> moveCamera(dynamic controller, MapLocation location, double zoom) async {
     if (controller is MapboxMap) {
       await controller.setCamera(
@@ -125,6 +256,7 @@ class MapboxMapProvider extends BaseMapProvider {
   Future<void> _initMarkerLayer(MapboxMap mapboxMap) async {
     final style = mapboxMap.style;
 
+    // Load icons (shared by both layers)
     Future<void> addIcon(String id, String path) async {
       if (await style.styleLayerExists(id)) return;
 
@@ -150,8 +282,11 @@ class MapboxMapProvider extends BaseMapProvider {
     await addIcon(LandmarkAssetType.entrance.iconImageId, LandmarkAssetType.entrance.assetPath);
     await addIcon(LandmarkAssetType.femaleWashroom.iconImageId, LandmarkAssetType.femaleWashroom.assetPath);
     await addIcon(LandmarkAssetType.maleWashroom.iconImageId, LandmarkAssetType.maleWashroom.assetPath);
+    await addIcon(LandmarkAssetType.genericMarker.iconImageId, LandmarkAssetType.genericMarker.assetPath);
 
-
+    // ============================================
+    // Create single GeoJSON source
+    // ============================================
     final exists = await style.styleSourceExists(_markerSourceId);
     if (!exists) {
       await style.addSource(
@@ -165,14 +300,17 @@ class MapboxMapProvider extends BaseMapProvider {
       );
     }
 
-    final layerExists = await style.styleLayerExists(_markerLayerId);
-    if (!layerExists) {
+    // ============================================
+    // Layer 1: Normal markers (rendered first, can be hidden by overlap)
+    // ============================================
+    final normalLayerExists = await style.styleLayerExists(_normalMarkerLayerId);
+    if (!normalLayerExists) {
       await style.addLayer(
         SymbolLayer(
-          id: _markerLayerId,
+          id: _normalMarkerLayerId,
           sourceId: _markerSourceId,
           iconImageExpression: ['get', 'icon'],
-          iconSizeExpression: ['get','iconSize'],
+          iconSizeExpression: ['get', 'iconSize'],
           textFieldExpression: ['get', 'title'],
           textFont: ["Roboto Medium", "Arial Unicode MS Regular"],
           textSize: 12,
@@ -180,12 +318,43 @@ class MapboxMapProvider extends BaseMapProvider {
           textHaloColor: 0xFFFFFFFF,
           textHaloWidth: 1,
           textHaloBlur: 0.5,
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
+          iconAllowOverlap: false,  // Can be hidden
+          textAllowOverlap: false,  // Can be hidden
           textMaxWidth: 5,
           textAnchor: TextAnchor.CENTER,
           symbolZOffset: 3.0,
           textJustify: TextJustify.LEFT,
+          filter: ['!=', ['get', 'isPriority'], true],
+        ),
+      );
+    }
+
+    // ============================================
+    // Layer 2: Priority markers (rendered last, always visible)
+    // ============================================
+    final priorityLayerExists = await style.styleLayerExists(_priorityMarkerLayerId);
+    if (!priorityLayerExists) {
+      await style.addLayer(
+        SymbolLayer(
+          id: _priorityMarkerLayerId,
+          sourceId: _markerSourceId,
+          iconImageExpression: ['get', 'icon'],
+          iconSizeExpression: ['get', 'iconSize'],
+          iconOffset: [0, -6],
+          textFont: ["Roboto Medium", "Arial Unicode MS Regular"],
+          textSize: 12,
+          textColor: 0xFF000000,
+          textHaloColor: 0xFFFFFFFF,
+          textHaloWidth: 1,
+          textHaloBlur: 0.5,
+          iconAllowOverlap: true,   // Always visible
+          textAllowOverlap: true,   // Always visible
+          textMaxWidth: 5,
+          textAnchor: TextAnchor.CENTER,
+          symbolZOffset: 3.0,  // Higher z-order
+          textJustify: TextJustify.LEFT,
+          // FILTER: Only show priority markers
+          filter: ['==', ['get', 'isPriority'], true],
         ),
       );
     }
@@ -194,20 +363,21 @@ class MapboxMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is! MapboxMap) return;
-    if(marker.properties == null || marker.properties!["polyId"] == null) return;
+    if (marker.properties == null || marker.properties!["polyId"] == null) return;
 
     _markers[marker.id] = marker;
 
     try {
       await _updateMarkerSource(controller);
-    } catch(e) {
-      print("error adding marker $e");
+    } catch (e) {
+      print("Error adding marker: $e");
     }
   }
 
+  /// Update marker source - single source feeds both layers
   Future<void> _updateMarkerSource(MapboxMap mapboxMap) async {
     final features = _markers.values.map((marker) {
-      final result = RenderingUtilities.getIconIdByType(marker.title??"");
+      final result = RenderingUtilities.getIconIdByType(marker.title ?? "");
       return {
         'type': 'Feature',
         'id': marker.id,
@@ -219,10 +389,12 @@ class MapboxMapProvider extends BaseMapProvider {
           ],
         },
         'properties': {
-          'title': (marker.title != null && marker.title!.toLowerCase().contains("washroom"))? "" : marker.title,
+          'title': (marker.title != null && marker.title!.toLowerCase().contains("washroom"))
+              ? ""
+              : marker.title,
           'icon': result.$1,
           'iconSize': result.$2,
-          'isPriority': marker.priority ?? false,
+          'isPriority': marker.priority ?? false,  // This determines which layer renders it
         },
       };
     }).toList();
@@ -238,26 +410,27 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> removeMarker(dynamic controller, String markerId,{String? exclude}) async {
+  Future<void> removeMarker(dynamic controller, String markerId, {String? exclude}) async {
     if (controller is! MapboxMap) return;
 
-    final markersToRemove = _markers.entries.where((entry){
+    final markersToRemove = _markers.entries.where((entry) {
       final id = entry.key;
-      if(exclude != null && id.contains(exclude)){
+      if (exclude != null && id.contains(exclude)) {
         return false;
       }
-      if(id.contains(markerId)){
+      if (id.contains(markerId)) {
         return true;
       }
       return false;
     }).toList();
 
-    for(final entry in markersToRemove) {
+    for (final entry in markersToRemove) {
       _markers.remove(entry.key);
     }
 
     await _updateMarkerSource(controller);
   }
+
   @override
   Future<void> clearMarkers(dynamic controller) async {
     if (controller is! MapboxMap) return;
@@ -286,6 +459,7 @@ class MapboxMapProvider extends BaseMapProvider {
           : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ?? Color(0xffD3D3D3);
 
       _polygons[polygon.id] = polygon;
+
       await _updatePolygonSource(controller);
     } catch (e) {
       print('Error adding polygon: $e');
@@ -328,6 +502,9 @@ class MapboxMapProvider extends BaseMapProvider {
       );
       if(polygon.properties?["type"] != null){
         color = RenderingUtilities.getColorByType(polygon.properties?["type"]);
+      }
+      if(polygon.properties?['onTap'] != null){
+        color = polygon.properties?['onTap'];
       }
 
       final height = (polygon.properties?["name"] !=null && polygon.properties!["name"].toString().toLowerCase().contains("boundary"))? 0 : 3;
@@ -385,14 +562,13 @@ class MapboxMapProvider extends BaseMapProvider {
           fillExtrusionColorExpression: ['get', 'fillColor'],
           fillExtrusionHeightExpression: ['get', 'height'],
         ),
-        LayerPosition(below: _markerLayerId)
+        LayerPosition(below: _normalMarkerLayerId)
       );
     }
   }
 
   @override
   Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude}) async {
-    print("removePolygon ${StackTrace.current}");
     if (controller is! MapboxMap) return;
 
     final entriesToRemove = _polygons.entries.where((entry) {
@@ -460,15 +636,32 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> selectLocation(controller, String polyID) {
-    // TODO: implement selectLocation
-    throw UnimplementedError();
-  }
+  Future<void> deSelectLocation(controller) async {
+    if (controller is! MapboxMap) return;
+    if (selectedLocation == null) return;
 
-  @override
-  Future<void> deSelectLocation(controller) {
-    // TODO: implement deSelectLocation
-    throw UnimplementedError();
+    // try {
+      final polygonId = selectedLocation!.polyID;
+      final polygon = selectedLocation!.polygon;
+      final restoredProperties = Map<String, dynamic>.from(polygon.properties ?? {});
+
+      restoredProperties.remove('onTap');
+      final restoredPolygon = GeoJsonPolygon(
+        id: polygon.id,
+        points: polygon.points,
+        properties: restoredProperties,
+      );
+
+      _polygons[polygonId] = restoredPolygon;
+      await _updatePolygonSource(controller);
+
+      selectedLocation = null;
+
+
+    // } catch (e) {
+    //   print('Error deselecting polygon: $e');
+    // }
+
   }
 
 }

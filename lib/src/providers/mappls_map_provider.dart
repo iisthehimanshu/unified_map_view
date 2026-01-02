@@ -63,17 +63,17 @@ class MapplsMapProvider extends BaseMapProvider {
             final bounds = await _controller!.getVisibleRegion();
               final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
               final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
-
               final cameraPos = _controller!.cameraPosition;
-
-              config.onCameraMove(UnifiedCameraPosition(
-                mapLocation: MapLocation(
-                  latitude: centerLat,
-                  longitude: centerLng,
-                ),
-                zoom: cameraPos?.zoom ?? 0.0,
-                bearing: cameraPos?.bearing ?? 0.0,
-              ));
+              config.onCameraMove(
+                  UnifiedCameraPosition(
+                    mapLocation: MapLocation(
+                      latitude: centerLat,
+                      longitude: centerLng,
+                    ),
+                    zoom: cameraPos?.zoom ?? 0.0,
+                    bearing: cameraPos?.bearing ?? 0.0,
+                  )
+              );
           } catch (e) {
             print("Error getting camera position: $e");
           }
@@ -145,6 +145,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
+    print("addMarker ${StackTrace.current}");
     if (controller is MapplsMapController) {
       if(marker.properties == null || marker.properties!["polyId"] == null) return;
       _symbols.add(marker);

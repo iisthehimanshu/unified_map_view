@@ -76,7 +76,7 @@ class RenderingUtilities{
       return "#c8f0d1";
     } else if (s.contains("boundary")) {
       return "#ffffff";
-    } else if (s.contains("rooms")) {
+    } else if (s.contains("rooms") || s.contains("Room")) {
       return "#d3e0ea";
     } else if (s.contains("conference")) {
       return "#ffe4b5";
@@ -96,8 +96,11 @@ class RenderingUtilities{
       return (LandmarkAssetType.maleWashroom.iconImageId, LandmarkAssetType.maleWashroom.iconSize);
     } else if(s.contains("entrance")){
       return (LandmarkAssetType.entrance.iconImageId, LandmarkAssetType.entrance.iconSize);
+    } else if(s.contains("generic")) {
+      return (LandmarkAssetType.genericMarker.iconImageId, LandmarkAssetType
+          .genericMarker.iconSize);
     }
-    return (LandmarkAssetType.genericMarker.iconImageId, LandmarkAssetType.genericMarker.iconSize);
+    return ("",0.0);
   }
 
   static String? getAssetNameForLandmark(Map<String, dynamic>? landmarkProperties) {
