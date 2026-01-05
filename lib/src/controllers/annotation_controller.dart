@@ -4,9 +4,11 @@ import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
 import '../apis/BuildingByVenue.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
+import '../models/Cell.dart';
+import '../utils/geoJson/predefined_markers.dart';
 
 class AnnotationController{
-  UnifiedMapController _unifiedMapController;
+  final UnifiedMapController _unifiedMapController;
   late VenueData _venueData;
 
   String? _focusedBuilding;
@@ -16,6 +18,8 @@ class AnnotationController{
   String? get focusedBuilding => _focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
+
+  Map<String, Map<int, List<Cell>>>? _path;
 
   AnnotationController(this._unifiedMapController, {required String venueName}){
     _setVenue(venueName);
@@ -59,7 +63,6 @@ class AnnotationController{
       if (_venueData.buildingCenters.isEmpty) return;
 
       final MapLocation cameraTarget = cameraPosition.mapLocation;
-      final variabrl = _focusedBuildingAvailableFloors;
 
       String? nearestBuildingId = _focusedBuilding;
       double minDistance = double.infinity;
@@ -82,4 +85,66 @@ class AnnotationController{
       return;
     }
   }
+
+  bool clearPath(){
+    _unifiedMapController.removePolyline('path');
+    _unifiedMapController.removeMarker('path');
+    _path = null;
+    return true;
+  }
+
+  bool addPath(List<Cell> path){
+    _path ??= <String, Map<int, List<Cell>>>{};
+    for (var cell in path) {
+      _path!.putIfAbsent(cell.bid!, ()=><int, List<Cell>>{});
+      _path![cell.bid]!.putIfAbsent(cell.floor, ()=>[]);
+      _path![cell.bid]![cell.floor]!.add(cell);
+    }
+    return true;
+  }
+
+  Future<bool> annotatePath(int sourceFloor) async {
+    if(_path == null) return false;
+
+    _path!.forEach((bid, value){
+      value.forEach((floor, path) async {
+        if(floor == sourceFloor){
+          List<MapLocation> points = [];
+          for (var point in path) {
+            points.add(MapLocation(latitude: point.lat, longitude: point.lng));
+          }
+          GeoJsonPolyline polyline = GeoJsonPolyline(
+              id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'true'),
+              points: points
+          );
+          await _unifiedMapController.fitCameraToLine(polyline);
+          await _unifiedMapController.addPolyline(polyline);
+          annotatePathMarkers(path);
+        }
+      });
+    });
+
+    return true;
+  }
+
+  void annotatePathMarkers(List<Cell> path){
+    for (var cell in path) {
+      if(cell.isDestination){
+        _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+      }
+      if(cell.isSource){
+        _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+      }
+      if(cell.isFloorConnection){
+        _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+      }
+    }
+  }
+
+  void localizeUser(MapLocation location, String bid, int floor){
+    String id = GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), id: "user");
+    GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(location, id);
+    _unifiedMapController.addMarker(userMarker);
+  }
+
 }

@@ -8,7 +8,8 @@ import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../utils/UnifiedMarkerCreator.dart';
-import '../utils/geoJsonUtils.dart';
+import '../utils/geoJson/geoJsonUtils.dart';
+import '../utils/geoJson/predefined_markers.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -20,12 +21,28 @@ import '../models/geojson_models.dart';
 class MapplsMapProvider extends BaseMapProvider {
   MapplsMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
-  final Map<String, Line> _lines = {};
-  final Map<String, Fill> _fills = {};
+  final List<GeoJsonPolygon> _polygons = [];
+  final List<GeoJsonPolyline> _lines = [];
+
+  late MapConfig _config;
 
   SelectedLocation? selectedLocation;
 
   final String _clusterSourceId = 'markers-source';
+  final String _normalMarkerLayerId = 'normal-markers-layer';
+  final String _priorityMarkerLayerId = 'priority-source-layer';
+
+  final String _compassBasedMarkers = 'compass-markers-source';
+  final String _userMarkerLayerId = 'user-markers-layer';
+
+  final String _polygonSourceId = 'polygons-source';
+  final String _normalPolygonLayerId = 'normal-polygons-layer';
+  final String _selectedPolygonLayerId = 'selected-polygon-layer';
+  final String _patchPolygonLayerId = 'patch-polygon-layer';
+
+  final String _polylineSourceId = 'polylines-source';
+  final String _pathLayerId = 'path-polyline-layer';
+  final String _polylineLayerId = 'normal-polyline-layer';
 
   @override
   Widget buildMap({required MapConfig config}) {
@@ -38,42 +55,40 @@ class MapplsMapProvider extends BaseMapProvider {
         zoom: config.initialLocation.zoom,
       ),
       onMapCreated: (MapplsMapController controller) async {
+        _config = config;
         _controller = controller;
         config.onMapCreated(controller);
-        enableClustering(controller);
-        controller.onFillTapped.add((Fill){
-          var polygons = _fills.entries.where((entry)=>entry.value == Fill);
-          print("polygons $polygons");
-          if(polygons.isNotEmpty){
-            var entry = polygons.first;
-            print("key ${entry.key}");
-            var keyMap = GeoJsonUtils.extractKeyValueMap(entry.key);
-            if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
-            config.onPolygonTap!(
-                coordinates: Fill.options.geometry!.first.map((point)=>MapLocation(latitude: point.latitude, longitude: point.longitude)).toList(),
-                polygonId: keyMap["id"]!
-            );
-            selectLocation(controller,keyMap["id"]!);
-          }
+        await enableClustering(controller);
+        await enablePolygonLayers(controller);
+        await enablePolylineLayers(controller);
+
+        // Handle polygon taps
+        controller.onFeatureTapped.add((id, point, coordinates) {
+          print("id $id $point $coordinates");
+            // Extract polygon ID from the feature
+            final polygonId = _extractPolygonIdFromTap(id);
+            if (polygonId != null && !polygonId.toLowerCase().contains("boundary")) {
+              selectLocation(controller, polygonId);
+            }
         });
       },
-      onCameraIdle: ()async{
+      onCameraIdle: () async {
         if (_controller != null) {
           try {
             final bounds = await _controller!.getVisibleRegion();
-              final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
-              final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
-              final cameraPos = _controller!.cameraPosition;
-              config.onCameraMove(
-                  UnifiedCameraPosition(
-                    mapLocation: MapLocation(
-                      latitude: centerLat,
-                      longitude: centerLng,
-                    ),
-                    zoom: cameraPos?.zoom ?? 0.0,
-                    bearing: cameraPos?.bearing ?? 0.0,
-                  )
-              );
+
+            final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+            final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+            final cameraPos = _controller!.cameraPosition;
+            config.onCameraMove(UnifiedCameraPosition(
+              mapLocation: MapLocation(
+                latitude: centerLat,
+                longitude: centerLng,
+              ),
+              zoom: cameraPos?.zoom ?? 0.0,
+              bearing: cameraPos?.bearing ?? 0.0,
+            ));
           } catch (e) {
             print("Error getting camera position: $e");
           }
@@ -104,7 +119,6 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> animateCamera(dynamic controller, MapLocation location, double zoom) async {
-    
     if (controller is MapplsMapController) {
       await controller.animateCamera(
         CameraUpdate.newLatLngZoom(
@@ -120,7 +134,7 @@ class MapplsMapProvider extends BaseMapProvider {
     if (controller is MapplsMapController) {
       try {
         final cameraPosition = await controller.cameraPosition;
-        if(cameraPosition == null) return null;
+        if (cameraPosition == null) return null;
         return MapLocation(
           latitude: cameraPosition.target.latitude,
           longitude: cameraPosition.target.longitude,
@@ -142,18 +156,32 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
-
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     print("addMarker ${StackTrace.current}");
     if (controller is MapplsMapController) {
-      if(marker.properties == null || marker.properties!["polyId"] == null) return;
       _symbols.add(marker);
 
       // Load marker icon if provided
       // if (marker.assetPath != null && marker.iconName != null) {
-        await _loadMarkerIcon(controller, marker);
+      await _loadMarkerIcon(controller, marker);
       // }
+      try{
+        setGeoJsonSource(controller, _symbols);
+      }catch(e){
+        print("error adding marker $e");
+      }
+    }
+  }
+
+  @override
+  Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
+    if (controller is MapplsMapController) {
+      _symbols.addAll(markers);
+      for (var marker in markers) {
+        if(marker.properties == null || marker.properties!["polyId"] == null) continue;
+        await _loadMarkerIcon(controller, marker);
+      }
       try{
         setGeoJsonSource(controller, _symbols);
       }catch(e){
@@ -165,7 +193,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols) async {
     if (controller is MapplsMapController) {
       final features = _symbols.map((marker)=>
-       {
+      {
         'type': 'Feature',
         'geometry': {
           'type': 'Point',
@@ -175,7 +203,8 @@ class MapplsMapProvider extends BaseMapProvider {
           'title': '',
           'id': marker.id,
           if(marker.iconName != null || true) 'icon': marker.id,
-        'isPriority': marker.priority ?? false,
+          'isPriority': marker.priority ?? false,
+          'intractable': marker.properties?["polyId"] != null
         }
       }).toList();
 
@@ -186,7 +215,7 @@ class MapplsMapProvider extends BaseMapProvider {
           "features": features,
         },
       );}
-    }
+  }
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
@@ -210,7 +239,7 @@ class MapplsMapProvider extends BaseMapProvider {
         _symbols.clear();
 
         // Update the GeoJSON source with empty features
-       setGeoJsonSource(controller, []);
+        setGeoJsonSource(controller, []);
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -221,39 +250,8 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
     if (controller is MapplsMapController) {
       try {
-        final String? rawType = polygon.properties?["type"]??polygon.properties?["polygonType"];
-        final String? type = rawType?.toLowerCase();
-
-        final String? fillColorHex = polygon.properties?["fillColor"];
-        final String? strokeColorHex = polygon.properties?["strokeColor"];
-
-        final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
-            ? RenderingUtilities.hexToColor(fillColorHex)
-            : RenderingUtilities.polygonColorMap[type]?["fillColor"]
-            ?? Colors.white;
-
-        final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
-            ? RenderingUtilities.hexToColor(strokeColorHex)
-            : RenderingUtilities.polygonColorMap[type]?["strokeColor"]
-            ?? Color(0xffD3D3D3);
-
-        final coordinates = polygon.points
-            .map((p) => LatLng(p.latitude, p.longitude))
-            .toList();
-
-        String fillHex = RenderingUtilities.colorToMapplsHex(fillColor);
-        String strokeHex = RenderingUtilities.colorToMapplsHex(strokeColor);
-
-        final fill = await controller.addFill(
-          FillOptions(
-            geometry: [coordinates],
-            fillColor: '#$fillHex',
-            fillOpacity: fillColor.opacity,
-            fillOutlineColor: '#$strokeHex',
-          ),
-        );
-
-        _fills[polygon.id] = fill;
+        _polygons.add(polygon);
+        await _updatePolygonSource(controller);
       } catch (e) {
         print('Error adding polygon: $e');
       }
@@ -261,40 +259,91 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude}) async {
+  Future<void> addPolygons(dynamic controller, List<GeoJsonPolygon> polygons) async {
+    if (controller is MapplsMapController) {
+      try {
+        _polygons.addAll(polygons);
+        await _updatePolygonSource(controller);
+      } catch (e) {
+        print('Error adding polygons: $e');
+      }
+    }
+  }
+
+  Future<void> _updatePolygonSource(MapplsMapController controller) async {
+    final features = _polygons.map((polygon) {
+      final String? rawType = polygon.properties?["type"] ?? polygon.properties?["polygonType"];
+      final String? type = rawType?.toLowerCase();
+
+      final String? fillColorHex = polygon.properties?["fillColor"];
+      final String? strokeColorHex = polygon.properties?["strokeColor"];
+
+      final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
+          ? RenderingUtilities.hexToColor(fillColorHex)
+          : RenderingUtilities.polygonColorMap[type]?["fillColor"] ?? Colors.white;
+
+      final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
+          ? RenderingUtilities.hexToColor(strokeColorHex)
+          : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ?? Color(0xffD3D3D3);
+
+      final coordinates = polygon.points
+          .map((p) => [p.longitude, p.latitude])
+          .toList();
+
+      return {
+        'type': 'Feature',
+        'id': polygon.id,
+        'geometry': {
+          'type': 'Polygon',
+          'coordinates': [coordinates],
+        },
+        'properties': {
+          'id': polygon.id,
+          'type': type ?? 'default',
+          'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
+          'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
+          'fillOpacity': fillColor.opacity,
+          'isSelected': false,
+          'boundary' : polygon.id.toLowerCase().contains("boundary")
+        }
+      };
+    }).toList();
+
+    await controller.setGeoJsonSource(
+      _polygonSourceId,
+      {
+        "type": "FeatureCollection",
+        "features": features,
+      },
+    );
+  }
+
+  @override
+  Future<void> removePolygon(dynamic controller, String polygonId, {String? exclude}) async {
     if (controller is! MapplsMapController) return;
 
-    final entriesToRemove = _fills.entries.where((entry) {
-      final id = entry.key;
+    _polygons.removeWhere((polygon) {
+      final id = polygon.id;
 
       if (exclude != null && id.contains(exclude)) {
         return false;
       }
 
-      if (id.contains(polygonId)) {
-        return true;
-      }
+      return id.contains(polygonId);
+    });
 
-      return false;
-    }).toList();
-    for (final entry in entriesToRemove) {
-      await controller.removeFill(entry.value);
-      _fills.remove(entry.key);
-    }
+    await _updatePolygonSource(controller);
   }
 
   @override
   Future<void> clearPolygons(dynamic controller) async {
     if (controller is MapplsMapController) {
-      final fills = List<Fill>.from(_fills.values);
-
-      for (final fill in fills) {
-        try {
-          await controller.removeFill(fill);
-        } catch (_) {}
+      try {
+        _polygons.clear();
+        await _updatePolygonSource(controller);
+      } catch (e) {
+        print('Error clearing polygons: $e');
       }
-
-      _fills.clear();
     }
   }
 
@@ -302,29 +351,18 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
     if (controller is MapplsMapController) {
       bool isWaypoint = false;
-      if(polyline.properties?["lineCategory"] != null){
+      if (polyline.properties?["lineCategory"] != null) {
         isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint";
       }
-      if(polyline.properties?["polygonType"] != null){
+      if (polyline.properties?["polygonType"] != null) {
         isWaypoint = polyline.properties!["polygonType"].toLowerCase() == "waypoints";
       }
 
-      if(isWaypoint) return;
+      if (isWaypoint) return;
+
       try {
-        final coordinates = polyline.points
-            .map((p) => LatLng(p.latitude, p.longitude))
-            .toList();
-
-        final line = await controller.addLine(
-          LineOptions(
-            geometry: coordinates,
-            lineColor: '#fa9b9c9',
-            lineWidth: 1.0,
-            lineOpacity: 0.8,
-          ),
-        );
-
-        _lines[polyline.id] = line;
+        _lines.add(polyline);
+        await _updatePolylineSource(controller);
       } catch (e) {
         print('Error adding polyline: $e');
       }
@@ -332,30 +370,77 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
+  Future<void> addPolylines(controller, List<GeoJsonPolyline> polylines) async {
+    if (controller is MapplsMapController) {
+      for (var polyline in polylines) {
+        bool isWaypoint = false;
+        if (polyline.properties?["lineCategory"] != null) {
+          isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint";
+        }
+        if (polyline.properties?["polygonType"] != null) {
+          isWaypoint = polyline.properties!["polygonType"].toLowerCase() == "waypoints";
+        }
+
+        if (isWaypoint) continue;
+
+        try {
+          _lines.add(polyline);
+        } catch (e) {
+          print('Error adding polyline: $e');
+        }
+      }
+      await _updatePolylineSource(controller);
+    }
+  }
+
+  Future<void> _updatePolylineSource(MapplsMapController controller) async {
+    final features = _lines.map((line) {
+      return {
+        'type': 'Feature',
+        'id': line.id,
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': line.points.map((point) => [point.longitude, point.latitude]).toList(),
+        },
+        'properties': {
+          'id': line.id,
+          'type': 'default',
+          'isSelected': false,
+          'strokeColor': '#000000',
+          'fillColor': '#000000',
+          'fillOpacity': 1.0,
+          'path': line.id.toLowerCase().contains("path")
+        }
+      };
+    }).toList();
+
+    await controller.setGeoJsonSource(
+      _polylineSourceId,
+      {
+        "type": "FeatureCollection",
+        "features": features,
+      },
+    );
+  }
+
+  @override
   Future<void> removePolyline(dynamic controller, String polylineId) async {
     if (controller is! MapplsMapController) return;
 
-    final matchingEntries = _lines.entries
-        .where((entry) => entry.key.contains(polylineId))
-        .toList();
+    _lines.removeWhere((line) {
+      final id = line.id;
+      return id.contains(polylineId);
+    });
 
-    for (final entry in matchingEntries) {
-      try {
-        await controller.removeLine(entry.value);
-      } catch (_) {}
-
-      _lines.remove(entry.key);
-    }
+    await _updatePolylineSource(controller);
   }
 
   @override
   Future<void> clearPolylines(dynamic controller) async {
     if (controller is MapplsMapController) {
       try {
-        for (var line in _lines.values) {
-          await controller.removeLine(line);
-        }
         _lines.clear();
+        await _updatePolylineSource(controller);
       } catch (e) {
         print('Error clearing polylines: $e');
       }
@@ -370,12 +455,13 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   final creator = UnifiedMarkerCreator();
+
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     try {
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
-        imageSize: const Size(25, 25),
+        imageSize: marker.imageSize??const Size(25, 25),
         fontSize: 8.5,
-        text: marker.assetPath != null ? "":marker.title ?? "",
+        text: marker.assetPath != null ? "" : marker.title ?? "",
         imageSource: marker.assetPath,
         layout: MarkerLayout.horizontal,
         textFormat: TextFormat.smartWrap,
@@ -383,11 +469,6 @@ class MapplsMapProvider extends BaseMapProvider {
       );
 
       final Uint8List iconBytes = markerIconWithAnchor.icon;
-
-      // final ByteData bytes = await rootBundle.load(
-      //     marker.assetPath!
-      // );
-      // final Uint8List image = bytes.buffer.asUint8List();
       await controller.addImage(marker.id, iconBytes);
       return true;
     } catch (e) {
@@ -407,34 +488,35 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Layer 1: Normal markers (rendered first, can be hidden)
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        'normal-markers',
-        SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 1.5,
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: ["case", ["has", "icon"], "left", "center"],
-          textOffset: [
-            "case",
-            ["has", "icon"],
-            ["literal", [3.5, 0]],
-            ["literal", [0, 0]]
-          ],
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
-        ),
-        filter: ["!=", ["get", "isPriority"], true], // Only non-priority markers
-        enableInteraction: true,
+          _clusterSourceId,
+          _normalMarkerLayerId,
+          SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: ["case", ["has", "icon"], "left", "center"],
+            textOffset: [
+              "case",
+              ["has", "icon"],
+              ["literal", [3.5, 0]],
+              ["literal", [0, 0]]
+            ],
+            iconAllowOverlap: false,
+            textAllowOverlap: false,
+          ),
+          filter: ["!=", ["get", "isPriority"], true],
+          enableInteraction: true,
+          belowLayerId: 'priority-markers'
       );
 
       // Layer 2: Priority markers (rendered last, always visible)
       await controller.addSymbolLayer(
         _clusterSourceId,
-        'priority-markers',
+        _priorityMarkerLayerId,
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 1.5,
@@ -450,10 +532,10 @@ class MapplsMapProvider extends BaseMapProvider {
             ["literal", [3.5, 0]],
             ["literal", [0, 0]]
           ],
-          iconAllowOverlap: true,  // Priority markers always show
+          iconAllowOverlap: true,
           textAllowOverlap: true,
         ),
-        filter: ["==", ["get", "isPriority"], true], // Only priority markers
+        filter: ["==", ["get", "isPriority"], true],
         enableInteraction: true,
       );
 
@@ -462,88 +544,180 @@ class MapplsMapProvider extends BaseMapProvider {
         clearMarkers(controller);
         setGeoJsonSource(controller, symbols);
       }
-
     } catch (e) {
       print('Error enabling clustering: $e');
     }
   }
 
-  @override
-  Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) {
-    // TODO: implement addPolygons
-    throw UnimplementedError();
+  /// Enable polygon layers with GeoJSON source
+  Future<void> enablePolygonLayers(MapplsMapController controller) async {
+    try {
+      // Create GeoJSON source for polygons
+      await controller.addGeoJsonSource(_polygonSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      // Add fill layer for patch polygons (bottom-most)
+      await controller.addFillLayer(
+          _polygonSourceId,
+          _patchPolygonLayerId,
+          FillLayerProperties(
+            fillColor: ["get", "fillColor"],
+            fillOpacity: ["get", "fillOpacity"],
+            fillOutlineColor: ["get", "strokeColor"],
+          ),
+          filter: ["==", ["get", "boundary"], true],
+          enableInteraction: true,
+          belowLayerId: 'normal-markers' // Position below markers
+      );
+
+      // Add fill layer for normal polygons
+      await controller.addFillLayer(
+          _polygonSourceId,
+          _normalPolygonLayerId,
+          FillLayerProperties(
+            fillColor: ["get", "fillColor"],
+            fillOpacity: ["get", "fillOpacity"],
+            fillOutlineColor: ["get", "strokeColor"],
+          ),
+          filter: ["!=", ["get", "isSelected"], true],
+          enableInteraction: true,
+          belowLayerId: 'normal-markers' // Position below markers
+      );
+
+      // Add fill layer for selected polygon
+      await controller.addFillLayer(
+          _polygonSourceId,
+          _selectedPolygonLayerId,
+          FillLayerProperties(
+            fillColor: "#4CAF50",
+            fillOpacity: 0.6,
+            fillOutlineColor: "#2E7D32",
+          ),
+          filter: ["==", ["get", "isSelected"], true],
+          enableInteraction: true,
+          belowLayerId: 'normal-markers' // Position below markers
+      );
+
+      if (_polygons.isNotEmpty) {
+        await _updatePolygonSource(controller);
+      }
+    } catch (e) {
+      print('Error enabling polygon layers: $e');
+    }
+  }
+
+  Future<void> enablePolylineLayers(MapplsMapController controller) async {
+    try {
+      // Create GeoJSON source for polylines
+      await controller.addGeoJsonSource(_polylineSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      // Add line layer for path polylines
+      await controller.addLineLayer(
+          _polylineSourceId,
+          _pathLayerId,
+          LineLayerProperties(
+            lineColor: '#448AFF',
+            lineWidth: 4.0,
+            lineOpacity: 1.0,
+          ),
+          filter: ["==", ["get", "path"], true],
+          enableInteraction: true,
+          belowLayerId: 'normal-markers' // Position below markers
+      );
+
+      // Add line layer for normal polylines
+      await controller.addLineLayer(
+          _polylineSourceId,
+          _polylineLayerId,
+          LineLayerProperties(
+            lineColor: ["get", "strokeColor"],
+            lineWidth: ["get", "strokeWidth"],
+            lineOpacity: ["get", "strokeOpacity"],
+          ),
+          filter: ["!=", ["get", "path"], true],
+          enableInteraction: true,
+          belowLayerId: 'normal-markers' // Position below markers
+      );
+
+      if (_lines.isNotEmpty) {
+        await _updatePolylineSource(controller);
+      }
+    } catch (e) {
+      print('Error enabling polyline layers: $e');
+    }
+  }
+
+  /// Extract polygon ID from tap coordinates
+  String? _extractPolygonIdFromTap(String key) {
+    var keyMap = GeoJsonUtils.extractKeyValueMap(key);
+    if(keyMap["id"] != null) return keyMap["id"];
+    return null;
   }
 
   @override
   Future<void> selectLocation(controller, String polyID) async {
-
-    // Edge case: Validate controller type
     if (controller is! MapplsMapController) {
       print('Error: Invalid controller type');
       return;
     }
 
-    // Edge case: Validate polyID
     if (polyID.isEmpty) {
       print('Error: polyID cannot be empty');
       return;
     }
 
-    // Edge case: Deselect previous location if exists
+    // Deselect previous location if exists
     if (selectedLocation != null) {
       await deSelectLocation(controller);
     }
 
     try {
-      // Edge case: Check if _fills map is empty
-      if (_fills.isEmpty) {
+      if (_polygons.isEmpty) {
         print('Error: No polygons available to select');
         return;
       }
 
-      // Find the polygon that contains polyID
-      final polygonEntry = _fills.entries.firstWhere(
-            (entry) => entry.key.contains(polyID),
+      // Find the polygon
+      final polygon = _polygons.firstWhere(
+            (p) => p.id.contains(polyID),
         orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
       );
 
-      final Fill polygonFill = polygonEntry.value;
-      final String polygonId = polygonEntry.key;
-
-      // Edge case: Validate polygon options
-      if (polygonFill.options == null) {
-        print('Error: Polygon options are null for $polygonId');
+      // Validate coordinates
+      if (polygon.points.isEmpty) {
+        print('Error: No coordinates found for polygon: ${polygon.id}');
         return;
       }
 
-      // Get the polygon's coordinates
-      final coordinates = polygonFill.options.geometry?.first;
-
-      // Edge case: Validate coordinates exist and have sufficient points
-      if (coordinates == null || coordinates.isEmpty) {
-        print('Error: No coordinates found for polygon: $polygonId');
+      if (polygon.points.length < 3) {
+        print('Error: Polygon must have at least 3 points: ${polygon.id}');
         return;
       }
 
-      if (coordinates.length < 3) {
-        print('Error: Polygon must have at least 3 points: $polygonId');
-        return;
-      }
+      // Trigger callback
+      _config.onPolygonTap?.call(
+        coordinates: polygon.points,
+        polygonId: polyID,
+      );
 
-      // Calculate bounds of the polygon with validation
-      double minLat = coordinates.first.latitude;
-      double maxLat = coordinates.first.latitude;
-      double minLng = coordinates.first.longitude;
-      double maxLng = coordinates.first.longitude;
+      // Calculate bounds
+      double minLat = polygon.points.first.latitude;
+      double maxLat = polygon.points.first.latitude;
+      double minLng = polygon.points.first.longitude;
+      double maxLng = polygon.points.first.longitude;
 
-      for (final point in coordinates) {
-        // Edge case: Validate coordinate values
+      for (final point in polygon.points) {
         if (point.latitude < -90 || point.latitude > 90) {
-          print('Warning: Invalid latitude ${point.latitude} for $polygonId');
+          print('Warning: Invalid latitude ${point.latitude}');
           continue;
         }
         if (point.longitude < -180 || point.longitude > 180) {
-          print('Warning: Invalid longitude ${point.longitude} for $polygonId');
+          print('Warning: Invalid longitude ${point.longitude}');
           continue;
         }
 
@@ -553,97 +727,53 @@ class MapplsMapProvider extends BaseMapProvider {
         maxLng = max(maxLng, point.longitude);
       }
 
-      // Edge case: Check for degenerate polygon (all points are the same)
-      if (minLat == maxLat && minLng == maxLng) {
-        print('Warning: Polygon has no area (all points identical): $polygonId');
-        // Still proceed but with a default zoom or fixed offset
-      }
-
-      // Calculate center point
+      // Calculate center
       final centerLat = (minLat + maxLat) / 2;
       final centerLng = (minLng + maxLng) / 2;
 
-      // Edge case: Validate center coordinates
-      if (centerLat.isNaN || centerLng.isNaN ||
-          centerLat.isInfinite || centerLng.isInfinite) {
-        print('Error: Invalid center coordinates calculated for $polygonId');
+      if (centerLat.isNaN || centerLng.isNaN || centerLat.isInfinite || centerLng.isInfinite) {
+        print('Error: Invalid center coordinates calculated');
         return;
       }
 
-      // Remove the old polygon
-      try {
-        await controller.removeFill(polygonFill);
-      } catch (e) {
-        print('Warning: Failed to remove old polygon: $e');
-        // Continue anyway as it might have been already removed
-      }
+      // Update polygon selection state in source
+      await _updatePolygonSelectionState(controller, polygon.id, true);
 
-      // Add the polygon back with highlighted colors
-      final highlightedFill = await controller.addFill(
-        FillOptions(
-          geometry: [coordinates],
-          fillColor: '#4CAF50', // Bright green for highlight
-          fillOpacity: 0.6,
-          fillOutlineColor: '#2E7D32', // Darker green for border
-        ),
-      );
-
-      // Edge case: Validate the highlighted fill was created
-      if (highlightedFill == null) {
-        print('Error: Failed to create highlighted fill for $polygonId');
-        return;
-      }
-
-      // Update the fills map with the new highlighted fill
-      _fills[polygonId] = highlightedFill;
-
+      // Store selected location
       selectedLocation = SelectedLocation(
-          polyID: polyID,
-          polygon: polygonFill,
-          marker: null
+        polyID: polyID,
+        polygon: polygon,
+        marker: null,
       );
 
-      // Find and show the marker associated with this polygon
+      // Handle marker
       try {
-        // Edge case: Check if _symbols list is empty
-        if (_symbols.isEmpty) {
-          print('No markers available for polyID: $polyID');
-        } else {
+        if (_symbols.isNotEmpty) {
           final marker = _symbols.firstWhere(
                 (m) => m.id.contains(polyID),
             orElse: () => throw Exception('Marker not found'),
           );
 
           selectedLocation?.setLocation(
-              polyID: polyID,
-              polygon: polygonFill,
-              marker: marker
+            polyID: polyID,
+            polygon: polygon,
+            marker: marker,
           );
 
-          final genericMarker = GeoJsonMarker.getGenericMarker(marker);
-
-          // Edge case: Validate generic marker creation
-          if (genericMarker == null) {
-            print('Error: Failed to create generic marker for $polyID');
-          } else {
-            // Remove the marker first if it exists
-            removeMarker(controller, polyID);
-            addMarker(controller, genericMarker);
-          }
+          final genericMarker = PredefinedMarkers.getGenericMarker(marker);
+          await removeMarker(controller, polyID);
+          await addMarker(controller, genericMarker);
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
-        // Not a critical error, continue without marker
       }
 
-      // Animate camera to the polygon center
+      // Animate camera
       try {
-        // Edge case: Calculate appropriate zoom level based on polygon size
         final latSpan = maxLat - minLat;
         final lngSpan = maxLng - minLng;
         final maxSpan = max(latSpan, lngSpan);
 
-        // Adjust zoom based on polygon size (larger polygons need lower zoom)
         double targetZoom = 20.0;
         if (maxSpan > 0.01) targetZoom = 15.0;
         if (maxSpan > 0.1) targetZoom = 12.0;
@@ -657,36 +787,84 @@ class MapplsMapProvider extends BaseMapProvider {
         );
       } catch (e) {
         print('Warning: Failed to animate camera: $e');
-        // Not critical, polygon is still selected
       }
-
     } catch (e, stackTrace) {
       print('Error selecting location: $e');
       print('Stack trace: $stackTrace');
-
-      // Edge case: Cleanup on failure
-      if (selectedLocation != null) {
-        selectedLocation = null;
-      }
+      selectedLocation = null;
     }
+  }
+
+  /// Update polygon selection state in GeoJSON source
+  Future<void> _updatePolygonSelectionState(
+      MapplsMapController controller,
+      String polygonId,
+      bool isSelected,
+      ) async {
+    // Update the polygon's isSelected property in the list
+    final index = _polygons.indexWhere((p) => p.id == polygonId);
+    if (index == -1) return;
+
+    // Rebuild the GeoJSON with updated selection state
+    final features = _polygons.map((polygon) {
+      final String? rawType = polygon.properties?["type"] ?? polygon.properties?["polygonType"];
+      final String? type = rawType?.toLowerCase();
+
+      final String? fillColorHex = polygon.properties?["fillColor"];
+      final String? strokeColorHex = polygon.properties?["strokeColor"];
+
+      final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
+          ? RenderingUtilities.hexToColor(fillColorHex)
+          : RenderingUtilities.polygonColorMap[type]?["fillColor"] ?? Colors.white;
+
+      final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
+          ? RenderingUtilities.hexToColor(strokeColorHex)
+          : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ?? Color(0xffD3D3D3);
+
+      final coordinates = polygon.points
+          .map((p) => [p.longitude, p.latitude])
+          .toList();
+
+      return {
+        'type': 'Feature',
+        'id': polygon.id,
+        'geometry': {
+          'type': 'Polygon',
+          'coordinates': [coordinates],
+        },
+        'properties': {
+          'id': polygon.id,
+          'type': type ?? 'default',
+          'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
+          'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
+          'fillOpacity': fillColor.opacity,
+          'isSelected': polygon.id == polygonId ? isSelected : false,
+        }
+      };
+    }).toList();
+
+    await controller.setGeoJsonSource(
+      _polygonSourceId,
+      {
+        "type": "FeatureCollection",
+        "features": features,
+      },
+    );
   }
 
   /// Deselect a polygon and restore its original colors
   Future<void> deSelectLocation(dynamic controller) async {
-    // Edge case: Validate controller type
     if (controller is! MapplsMapController) {
       print('Error: Invalid controller type in deSelectLocation');
       return;
     }
 
-    // Edge case: Check if there's anything to deselect
     if (selectedLocation == null) {
       return;
     }
 
-    var polyID = selectedLocation!.polyID;
+    final polyID = selectedLocation!.polyID;
 
-    // Edge case: Validate polyID
     if (polyID.isEmpty) {
       print('Error: polyID is empty in selectedLocation');
       selectedLocation = null;
@@ -694,101 +872,106 @@ class MapplsMapProvider extends BaseMapProvider {
     }
 
     try {
-      // Edge case: Check if _fills map is empty
-      if (_fills.isEmpty) {
-        print('Error: No polygons available in _fills map');
-        selectedLocation = null;
-        return;
-      }
+      // Update polygon selection state
+      await _updatePolygonSelectionState(controller, polyID, false);
 
-      // Find the polygon that contains polyID
-      final polygonEntry = _fills.entries.firstWhere(
-            (entry) => entry.key.contains(polyID),
-        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
-      );
-
-      final Fill polygonFill = polygonEntry.value;
-      final String polygonId = polygonEntry.key;
-
-      // Edge case: Validate polygon options
-      if (polygonFill.options == null) {
-        print('Error: Polygon options are null for $polygonId');
-        selectedLocation = null;
-        return;
-      }
-
-      // Get the polygon's coordinates
-      final coordinates = polygonFill.options.geometry?.first;
-
-      // Edge case: Validate coordinates
-      if (coordinates == null || coordinates.isEmpty) {
-        print('Error: No coordinates found for polygon: $polygonId');
-        selectedLocation = null;
-        return;
-      }
-
-      // Get the original properties
-      final originalProps = selectedLocation?.polygon as Fill?;
-
-      // Edge case: Handle missing original properties
-      if (originalProps == null || originalProps.options == null) {
-        print('Warning: No original properties found, using defaults for: $polygonId');
-        // Use default colors instead of failing
-      }
-
-      // Remove the highlighted polygon
-      try {
-        await controller.removeFill(polygonFill);
-      } catch (e) {
-        print('Warning: Failed to remove highlighted polygon: $e');
-        // Continue anyway
-      }
-
-      // Add the polygon back with original colors (or defaults if not available)
-      final restoredFill = await controller.addFill(
-        FillOptions(
-          geometry: [coordinates],
-          fillColor: originalProps?.options.fillColor ?? '#FFFFFF',
-          fillOpacity: originalProps?.options.fillOpacity ?? 0.5,
-          fillOutlineColor: originalProps?.options.fillOutlineColor ?? '#D3D3D3',
-        ),
-      );
-
-      // Edge case: Validate restored fill was created
-      if (restoredFill == null) {
-        print('Error: Failed to create restored fill for $polygonId');
-      } else {
-        // Update the fills map with the restored fill
-        _fills[polygonId] = restoredFill;
-      }
-
-      // Hide the marker associated with this polygon
+      // Handle marker
       try {
         final marker = selectedLocation?.marker as GeoJsonMarker?;
-
-        // Edge case: Check if marker exists before trying to hide it
         if (marker != null) {
-          // Remove the marker from the symbols list
-          removeMarker(controller, polyID);
-            // Marker was removed, now add it back with original state
-            await addMarker(controller, marker);
-        } else {
-          print('No marker associated with this location');
+          await removeMarker(controller, polyID);
+          await addMarker(controller, marker);
         }
       } catch (e) {
-        print('Error hiding marker: $e');
-        // Not critical, continue with deselection
+        print('Error handling marker during deselection: $e');
       }
 
-      // Remove the stored original properties as it's now restored
       selectedLocation = null;
-
     } catch (e, stackTrace) {
       print('Error deselecting location: $e');
       print('Stack trace: $stackTrace');
-
-      // Edge case: Force cleanup even on error
       selectedLocation = null;
     }
+  }
+
+  @override
+  Future<void> zoom(dynamic controller, {double zoom = 0.0}) async {
+    try {
+      final bounds = await _controller!.getVisibleRegion();
+      final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+      final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+      final cameraPos = _controller!.cameraPosition;
+
+      await animateCamera(
+        controller,
+        MapLocation(
+          latitude: centerLat,
+          longitude: centerLng,
+        ),
+        (cameraPos?.zoom ?? 0.0) + zoom,
+      );
+    } catch (e) {
+      print("Error zoom: $e");
+    }
+  }
+
+  @override
+  Future<void> zoomTo(controller, double zoom) async {
+    try {
+      final bounds = await _controller!.getVisibleRegion();
+      final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+      final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+      await animateCamera(
+        controller,
+        MapLocation(
+          latitude: centerLat,
+          longitude: centerLng,
+        ),
+        zoom,
+      );
+    } catch (e) {
+      print("Error zoomTo: $e");
+    }
+  }
+
+  @override
+  Future<void> fitCameraToLine(controller, GeoJsonPolyline polyline) async {
+    if (polyline.points.isEmpty) return;
+
+    // Calculate bounds from all points in the line
+    double minLat = polyline.points.first.latitude;
+    double maxLat = polyline.points.first.latitude;
+    double minLng = polyline.points.first.longitude;
+    double maxLng = polyline.points.first.longitude;
+
+    for (final point in polyline.points) {
+      minLat = min(minLat, point.latitude);
+      maxLat = max(maxLat, point.latitude);
+      minLng = min(minLng, point.longitude);
+      maxLng = max(maxLng, point.longitude);
+    }
+
+    // Add padding to the bounds (adjust these values as needed)
+    final latPadding = (maxLat - minLat) * 0.1; // 10% padding
+    final lngPadding = (maxLng - minLng) * 0.1;
+
+    // Create bounds with padding
+    final bounds = LatLngBounds(
+      southwest: LatLng(minLat - latPadding, minLng - lngPadding),
+      northeast: LatLng(maxLat + latPadding, maxLng + lngPadding),
+    );
+
+    // Animate camera to fit bounds
+    await controller.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        bounds,
+        left: 50,    // Edge padding in pixels
+        top: 50,
+        right: 50,
+        bottom: 50,
+      ),
+    );
   }
 }

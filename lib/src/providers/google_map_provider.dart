@@ -264,4 +264,34 @@ class GoogleMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> zoom(controller, {double zoom = 0.0}) {
+    // TODO: implement zoomOut
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> zoomTo(controller, double zoom) {
+    // TODO: implement zoomTo
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> addPolylines(controller, List<GeoJsonPolyline> polylines) {
+    // TODO: implement addPolylines
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> addMarkers(controller, List<GeoJsonMarker> marker) {
+    // TODO: implement addMarkers
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> fitCameraToLine(controller, GeoJsonPolyline polyline) {
+    // TODO: implement fitCameraToLine
+    throw UnimplementedError();
+  }
+
 }

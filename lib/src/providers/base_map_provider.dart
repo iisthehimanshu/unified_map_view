@@ -17,8 +17,15 @@ abstract class BaseMapProvider {
   /// Move camera to a specific location
   Future<void> moveCamera(dynamic controller, MapLocation location, double zoom);
 
+  Future<void> zoom(dynamic controller, {double zoom = 0.0});
+
+  Future<void> zoomTo(dynamic controller, double zoom);
+
+  Future<void> fitCameraToLine(dynamic controller, GeoJsonPolyline polyline);
+
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
+  Future<void> addMarkers(dynamic controller, List<GeoJsonMarker> markers);
 
   /// Remove a marker from the map
   Future<void> removeMarker(dynamic controller, String markerId);
@@ -48,6 +55,7 @@ abstract class BaseMapProvider {
 
   /// Add a polyline to the map
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline);
+  Future<void> addPolylines(dynamic controller, List<GeoJsonPolyline> polylines);
 
   /// Remove a polyline from the map
   Future<void> removePolyline(dynamic controller, String polylineId);
