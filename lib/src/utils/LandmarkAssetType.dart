@@ -44,7 +44,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.genericMarker:
         return 'packages/unified_map_view/assets/markers/generic_marker.png';
       case LandmarkAssetType.user:
-        return 'packages/unified_map_view/assets/markers/generic_marker.png';
+        return 'packages/unified_map_view/assets/markers/user.png';
       case LandmarkAssetType.source:
         return 'packages/unified_map_view/assets/markers/source.png';
       case LandmarkAssetType.destination:

@@ -21,6 +21,7 @@ import '../models/geojson_models.dart';
 class MapplsMapProvider extends BaseMapProvider {
   MapplsMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
+  final List<GeoJsonMarker> _rotatingSymbols = [];
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _lines = [];
 
@@ -30,10 +31,10 @@ class MapplsMapProvider extends BaseMapProvider {
 
   final String _clusterSourceId = 'markers-source';
   final String _normalMarkerLayerId = 'normal-markers-layer';
-  final String _priorityMarkerLayerId = 'priority-source-layer';
+  final String _priorityMarkerLayerId = 'priority-marker-layer';
 
-  final String _compassBasedMarkers = 'compass-markers-source';
-  final String _userMarkerLayerId = 'user-markers-layer';
+  final String _rotationSourceId = 'rotation-markers-source';
+  final String _rotationMarkerLayerId = 'rotation-marker-layer';
 
   final String _polygonSourceId = 'polygons-source';
   final String _normalPolygonLayerId = 'normal-polygons-layer';
@@ -160,17 +161,27 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     print("addMarker ${StackTrace.current}");
     if (controller is MapplsMapController) {
-      _symbols.add(marker);
+
+      await _loadMarkerIcon(controller, marker);
+      if(marker.compassBasedRotation){
+        _rotatingSymbols.add(marker);
+        try{
+          setGeoJsonSource(controller, _rotatingSymbols, sourceID: _rotationSourceId);
+        }catch(e){
+          print("error adding marker $e");
+        }
+      }else{
+        _symbols.add(marker);
+        try{
+          setGeoJsonSource(controller, _symbols);
+        }catch(e){
+          print("error adding marker $e");
+        }
+      }
 
       // Load marker icon if provided
       // if (marker.assetPath != null && marker.iconName != null) {
-      await _loadMarkerIcon(controller, marker);
       // }
-      try{
-        setGeoJsonSource(controller, _symbols);
-      }catch(e){
-        print("error adding marker $e");
-      }
     }
   }
 
@@ -190,7 +201,7 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols) async {
+  Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, {String? sourceID}) async {
     if (controller is MapplsMapController) {
       final features = _symbols.map((marker)=>
       {
@@ -209,7 +220,7 @@ class MapplsMapProvider extends BaseMapProvider {
       }).toList();
 
       await controller.setGeoJsonSource(
-        _clusterSourceId,
+        sourceID??_clusterSourceId,
         {
           "type": "FeatureCollection",
           "features": features,
@@ -510,7 +521,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["!=", ["get", "isPriority"], true],
           enableInteraction: true,
-          belowLayerId: 'priority-markers'
+          belowLayerId: _priorityMarkerLayerId
       );
 
       // Layer 2: Priority markers (rendered last, always visible)
@@ -537,6 +548,34 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["==", ["get", "isPriority"], true],
         enableInteraction: true,
+      );
+
+      await controller.addSymbolLayer(
+          _rotationSourceId,
+          _rotationMarkerLayerId,
+          SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: ["case", ["has", "icon"], "left", "center"],
+            textOffset: [
+              "case",
+              ["has", "icon"],
+              ["literal", [3.5, 0]],
+              ["literal", [0, 0]]
+            ],
+            iconRotate: ["get", "bearing"],
+            iconRotationAlignment: "map",
+            iconAllowOverlap: true,
+            textAllowOverlap: false,
+          ),
+          filter: ["!=", ["get", "isPriority"], true],
+          enableInteraction: true,
+          belowLayerId: _priorityMarkerLayerId
       );
 
       if(_symbols.isNotEmpty){
@@ -569,7 +608,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["==", ["get", "boundary"], true],
           enableInteraction: true,
-          belowLayerId: 'normal-markers' // Position below markers
+          belowLayerId: _normalMarkerLayerId // Position below markers
       );
 
       // Add fill layer for normal polygons
@@ -583,7 +622,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["!=", ["get", "isSelected"], true],
           enableInteraction: true,
-          belowLayerId: 'normal-markers' // Position below markers
+          belowLayerId: _normalMarkerLayerId // Position below markers
       );
 
       // Add fill layer for selected polygon
@@ -597,7 +636,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["==", ["get", "isSelected"], true],
           enableInteraction: true,
-          belowLayerId: 'normal-markers' // Position below markers
+          belowLayerId: _normalMarkerLayerId // Position below markers
       );
 
       if (_polygons.isNotEmpty) {
@@ -627,7 +666,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["==", ["get", "path"], true],
           enableInteraction: true,
-          belowLayerId: 'normal-markers' // Position below markers
+          belowLayerId: _normalMarkerLayerId // Position below markers
       );
 
       // Add line layer for normal polylines
@@ -641,7 +680,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["!=", ["get", "path"], true],
           enableInteraction: true,
-          belowLayerId: 'normal-markers' // Position below markers
+          belowLayerId: _normalMarkerLayerId // Position below markers
       );
 
       if (_lines.isNotEmpty) {
