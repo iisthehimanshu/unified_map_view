@@ -5,11 +5,10 @@ import '../VenueManager/VenueData.dart';
 import '../apis/BuildingByVenue.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
 import '../models/Cell.dart';
-import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
 
 class AnnotationController{
-  UnifiedMapController _unifiedMapController;
+  final UnifiedMapController _unifiedMapController;
   late VenueData _venueData;
 
   String? _focusedBuilding;
@@ -64,7 +63,6 @@ class AnnotationController{
       if (_venueData.buildingCenters.isEmpty) return;
 
       final MapLocation cameraTarget = cameraPosition.mapLocation;
-      final variabrl = _focusedBuildingAvailableFloors;
 
       String? nearestBuildingId = _focusedBuilding;
       double minDistance = double.infinity;
@@ -96,9 +94,9 @@ class AnnotationController{
   }
 
   bool addPath(List<Cell> path){
-    _path ??= Map();
+    _path ??= <String, Map<int, List<Cell>>>{};
     for (var cell in path) {
-      _path!.putIfAbsent(cell.bid!, ()=>Map());
+      _path!.putIfAbsent(cell.bid!, ()=><int, List<Cell>>{});
       _path![cell.bid]!.putIfAbsent(cell.floor, ()=>[]);
       _path![cell.bid]![cell.floor]!.add(cell);
     }
@@ -141,6 +139,12 @@ class AnnotationController{
         _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
       }
     }
+  }
+
+  void localizeUser(MapLocation location, String bid, int floor){
+    String id = GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), id: "user");
+    GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(location, id);
+    _unifiedMapController.addMarker(userMarker);
   }
 
 }

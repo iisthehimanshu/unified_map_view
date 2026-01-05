@@ -17,7 +17,7 @@ class PredefinedMarkers{
     );
   }
 
-  static GeoJsonMarker getUserMarker(MapLocation location){
+  static GeoJsonMarker getUserMarker(MapLocation location, String id){
     return GeoJsonMarker(
         id: "user",
         position: location,

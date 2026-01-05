@@ -29,11 +29,18 @@ class MapplsMapProvider extends BaseMapProvider {
   SelectedLocation? selectedLocation;
 
   final String _clusterSourceId = 'markers-source';
+  final String _normalMarkerLayerId = 'normal-markers-layer';
+  final String _priorityMarkerLayerId = 'priority-source-layer';
+
+  final String _compassBasedMarkers = 'compass-markers-source';
+  final String _userMarkerLayerId = 'user-markers-layer';
+
   final String _polygonSourceId = 'polygons-source';
-  final String _polylineSourceId = 'polylines-source';
   final String _normalPolygonLayerId = 'normal-polygons-layer';
   final String _selectedPolygonLayerId = 'selected-polygon-layer';
   final String _patchPolygonLayerId = 'patch-polygon-layer';
+
+  final String _polylineSourceId = 'polylines-source';
   final String _pathLayerId = 'path-polyline-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
 
@@ -480,7 +487,7 @@ class MapplsMapProvider extends BaseMapProvider {
       // Layer 1: Normal markers (rendered first, can be hidden)
       await controller.addSymbolLayer(
           _clusterSourceId,
-          'normal-markers',
+          _normalMarkerLayerId,
           SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
@@ -507,7 +514,7 @@ class MapplsMapProvider extends BaseMapProvider {
       // Layer 2: Priority markers (rendered last, always visible)
       await controller.addSymbolLayer(
         _clusterSourceId,
-        'priority-markers',
+        _priorityMarkerLayerId,
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 1.5,
