@@ -141,9 +141,9 @@ class AnnotationController{
     }
   }
 
-  void localizeUser(MapLocation location, String bid, int floor){
-    String id = GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), id: "user");
-    GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(location, id);
+  void localizeUser(User user){
+    String id = GeoJsonUtils.buildKey(buildingID: user.bid, floor: user.floor.toString(), id: "user");
+    GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
     _unifiedMapController.addMarker(userMarker);
   }
 

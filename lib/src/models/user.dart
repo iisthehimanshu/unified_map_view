@@ -1,0 +1,15 @@
+import 'package:unified_map_view/src/models/map_location.dart';
+
+class User{
+  final MapLocation _location;
+  final String _bid;
+  final int _floor;
+
+  MapLocation get location => _location;
+
+  User(this._location, this._bid, this._floor);
+
+  String get bid => _bid;
+
+  int get floor => _floor;
+}

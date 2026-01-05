@@ -25,7 +25,8 @@ class PredefinedMarkers{
         snippet: "",
         assetPath: LandmarkAssetType.user.assetPath,
         iconName: "User",
-        priority: true
+        priority: true,
+      compassBasedRotation: true
     );
   }
 
