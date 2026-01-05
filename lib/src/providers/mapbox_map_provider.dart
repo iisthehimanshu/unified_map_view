@@ -6,10 +6,11 @@ import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import '../../unified_map_view.dart';
 import '../models/camera_position.dart';
 import '../models/selectedLocation.dart';
 import '../utils/LandmarkAssetType.dart';
-import '../utils/geoJsonUtils.dart';
+import '../utils/geoJson/predefined_markers.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -27,6 +28,11 @@ class MapboxMapProvider extends BaseMapProvider {
   static const String _polygonSourceId = 'polygon-source';
   static const String _polygonLayerId  = 'polygon-extrusion-layer';
   final Map<String, GeoJsonPolygon> _polygons = {};
+
+  static const String _polylineSourceId = 'polyline-source';
+  static const String _pathPolylineLayerId = 'path-polyline-layer';
+  static const String _normalPolylineLayerId = 'normal-polyline-layer';
+  final Map<String, GeoJsonPolyline> _polylines = {};
 
   SelectedLocation? selectedLocation;
 
@@ -63,7 +69,7 @@ class MapboxMapProvider extends BaseMapProvider {
                }).toList();
                if(coordinates.length == 1){
                  config.onPolygonTap!(coordinates: polygonPoints, polygonId: value.queriedFeature.feature['id']!.toString());
-                 var keyMap = GeoJsonUtils.extractKeyValueMap(value!.queriedFeature.feature['id'].toString());
+                 var keyMap = GeoJsonUtils.extractKeyValueMap(value.queriedFeature.feature['id'].toString());
                  print("keyMap $keyMap");
                  if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
                  selectLocation(mapboxMap,keyMap["id"]!);
@@ -192,9 +198,11 @@ class MapboxMapProvider extends BaseMapProvider {
           'type': 'Wall',
 
         },
+        textVisibility: false
       );
-      await removeMarker(controller, "landmark_");
-      await addMarker(controller, landmarkMarker);
+      final marker = PredefinedMarkers.getGenericMarker(_markers[polyID]??landmarkMarker);
+      await removeMarker(controller, polyID);
+      await addMarker(controller, marker);
 
       // Store for deselection
       selectedLocation = SelectedLocation(
@@ -254,35 +262,8 @@ class MapboxMapProvider extends BaseMapProvider {
 
 
   Future<void> _initMarkerLayer(MapboxMap mapboxMap) async {
+    print("_initMarkerLayer${StackTrace.current}");
     final style = mapboxMap.style;
-
-    // Load icons (shared by both layers)
-    Future<void> addIcon(String id, String path) async {
-      if (await style.styleLayerExists(id)) return;
-
-      final bytes = await rootBundle.load(path);
-      final list = bytes.buffer.asUint8List();
-      final image = await decodeImageFromList(list);
-
-      await style.addStyleImage(
-        id,
-        1.0,
-        MbxImage(
-          width: image.width,
-          height: image.height,
-          data: list,
-        ),
-        false,
-        [],
-        [],
-        null,
-      );
-    }
-
-    await addIcon(LandmarkAssetType.entrance.iconImageId, LandmarkAssetType.entrance.assetPath);
-    await addIcon(LandmarkAssetType.femaleWashroom.iconImageId, LandmarkAssetType.femaleWashroom.assetPath);
-    await addIcon(LandmarkAssetType.maleWashroom.iconImageId, LandmarkAssetType.maleWashroom.assetPath);
-    await addIcon(LandmarkAssetType.genericMarker.iconImageId, LandmarkAssetType.genericMarker.assetPath);
 
     // ============================================
     // Create single GeoJSON source
@@ -364,20 +345,47 @@ class MapboxMapProvider extends BaseMapProvider {
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is! MapboxMap) return;
     if (marker.properties == null || marker.properties!["polyId"] == null) return;
-
     _markers[marker.id] = marker;
+    if(marker.assetPath != null && marker.iconName != null) await _loadMarkerIcon(controller, marker);
 
-    try {
+    // try {
       await _updateMarkerSource(controller);
+    // } catch (e) {
+    //   print("Error adding marker: $e");
+    // }
+  }
+
+  Future<void> _loadMarkerIcon(MapboxMap mapboxMap, GeoJsonMarker marker) async {
+    try {
+
+      final bytes = await rootBundle.load(marker.assetPath??"");
+      final list = bytes.buffer.asUint8List();
+      final image = await decodeImageFromList(list);
+
+      await mapboxMap.style.addStyleImage(
+        marker.iconName??"",
+        1.0,
+        MbxImage(
+          width: image.width,
+          height: image.height,
+          data: list,
+        ),
+        false,
+        [],
+        [],
+        null,
+      );
     } catch (e) {
-      print("Error adding marker: $e");
+      print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
     }
   }
 
   /// Update marker source - single source feeds both layers
   Future<void> _updateMarkerSource(MapboxMap mapboxMap) async {
+    print("_updateMarkerSource${StackTrace.current}");
+    print("_markers ${_markers.length}");
     final features = _markers.values.map((marker) {
-      final result = RenderingUtilities.getIconIdByType(marker.title ?? "");
+
       return {
         'type': 'Feature',
         'id': marker.id,
@@ -389,11 +397,9 @@ class MapboxMapProvider extends BaseMapProvider {
           ],
         },
         'properties': {
-          'title': (marker.title != null && marker.title!.toLowerCase().contains("washroom"))
-              ? ""
-              : marker.title,
-          'icon': result.$1,
-          'iconSize': result.$2,
+          'title': marker.textVisibility == true ? marker.title : "",
+          'icon': marker.iconName,
+          'iconSize': marker.iconSizeRatio,
           'isPriority': marker.priority ?? false,  // This determines which layer renders it
         },
       };
@@ -411,6 +417,7 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId, {String? exclude}) async {
+    print("removeMarker ${StackTrace.current}");
     if (controller is! MapboxMap) return;
 
     final markersToRemove = _markers.entries.where((entry) {
@@ -619,20 +626,24 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
-    // Mapbox polylines require style layer implementation
-    if (controller is MapboxMap) {
-      // TODO: Implement polyline rendering using Mapbox style layers
+    if (controller is! MapboxMap) return;
+
+    bool isWaypoint = false;
+    if (polyline.properties?["lineCategory"] != null) {
+      isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint";
     }
-  }
+    if (polyline.properties?["polygonType"] != null) {
+      isWaypoint = polyline.properties!["polygonType"].toLowerCase() == "waypoints";
+    }
 
-  @override
-  Future<void> removePolyline(dynamic controller, String polylineId) async {
-    // Mapbox polyline removal
-  }
+    if (isWaypoint) return;
 
-  @override
-  Future<void> clearPolylines(dynamic controller) async {
-    // Clear all Mapbox polylines
+    try {
+      _polylines[polyline.id] = polyline;
+      await _updatePolylineSource(controller);
+    } catch (e) {
+      print('Error adding polyline: $e');
+    }
   }
 
   @override
@@ -665,9 +676,15 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> zoom(controller, {double zoom = 0.0}) {
-    // TODO: implement zoomOut
-    throw UnimplementedError();
+  Future<void> zoom(controller, {double zoom = 0.0}) async {
+    if(controller is MapboxMap){
+      final bounds = await controller.getBounds();
+
+      controller.flyTo(
+        CameraOptions(zoom: zoom),
+        MapAnimationOptions(duration: 2000, startDelay: 0)
+      );
+    }
   }
 
   @override
@@ -677,21 +694,174 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> addPolylines(controller, List<GeoJsonPolyline> polylines) {
-    // TODO: implement addPolylines
-    throw UnimplementedError();
+  Future<void> addPolylines(controller, List<GeoJsonPolyline> polylines) async {
+    if (controller is! MapboxMap) return;
+
+    for (var polyline in polylines) {
+      bool isWaypoint = false;
+      if (polyline.properties?["lineCategory"] != null) {
+        isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint";
+      }
+      if (polyline.properties?["polygonType"] != null) {
+        isWaypoint = polyline.properties!["polygonType"].toLowerCase() == "waypoints";
+      }
+
+      if (isWaypoint) continue;
+
+      try {
+        _polylines[polyline.id] = polyline;
+      } catch (e) {
+        print('Error adding polyline: $e');
+      }
+    }
+
+    await _updatePolylineSource(controller);
+  }
+
+  Future<void> _updatePolylineSource(MapboxMap mapboxMap) async {
+    final style = mapboxMap.style;
+
+    final features = _polylines.values.map((line) {
+      final isPath = line.id.toLowerCase().contains("path");
+
+      return {
+        'type': 'Feature',
+        'id': line.id,
+        'geometry': {
+          'type': 'LineString',
+          'coordinates': line.points
+              .map((point) => [point.longitude, point.latitude])
+              .toList(),
+        },
+        'properties': {
+          'id': line.id,
+          'strokeColor': line.properties?['strokeColor'] ?? '#000000',
+          'strokeWidth': line.properties?['strokeWidth'] ?? 2.0,
+          'strokeOpacity': line.properties?['strokeOpacity'] ?? 1.0,
+          'isPath': isPath,
+        },
+      };
+    }).toList();
+
+    // Create or update source
+    if (!await style.styleSourceExists(_polylineSourceId)) {
+      await style.addSource(
+        GeoJsonSource(
+          id: _polylineSourceId,
+          data: jsonEncode({
+            'type': 'FeatureCollection',
+            'features': features,
+          }),
+        ),
+      );
+    } else {
+      await style.setStyleSourceProperty(
+        _polylineSourceId,
+        'data',
+        jsonEncode({
+          'type': 'FeatureCollection',
+          'features': features,
+        }),
+      );
+    }
   }
 
   @override
-  Future<void> addMarkers(controller, List<GeoJsonMarker> marker) {
-    // TODO: implement addMarkers
-    throw UnimplementedError();
+  Future<void> removePolyline(dynamic controller, String polylineId) async {
+    if (controller is! MapboxMap) return;
+
+    final linesToRemove = _polylines.entries
+        .where((entry) => entry.key.contains(polylineId))
+        .toList();
+
+    for (final entry in linesToRemove) {
+      _polylines.remove(entry.key);
+    }
+
+    await _updatePolylineSource(controller);
   }
 
   @override
-  Future<void> fitCameraToLine(controller, GeoJsonPolyline polyline) {
-    // TODO: implement fitCameraToLine
-    throw UnimplementedError();
+  Future<void> clearPolylines(dynamic controller) async {
+    if (controller is! MapboxMap) return;
+
+    try {
+      _polylines.clear();
+      await _updatePolylineSource(controller);
+    } catch (e) {
+      print('Error clearing polylines: $e');
+    }
+  }
+
+  @override
+  Future<void> addMarkers(controller, List<GeoJsonMarker> marker) async {
+    print("addMarkers${StackTrace.current}");
+    if (controller is! MapboxMap) return;
+    for(var ele in marker) {
+      if (ele.properties == null || ele.properties!["polyId"] == null){
+        print("ele.properties == null");
+        // return;
+      };
+      _markers[ele.id] = ele;
+      if(ele.iconName != null && ele.assetPath!= null){
+        await _loadMarkerIcon(controller, ele);
+      }
+      // debugPrint("_loadMarkerIcon ${ele.iconName} ${ele.assetPath}");
+    }
+
+    try{
+      await _updateMarkerSource(controller);
+    }catch(e){
+      print("Error adding markers: $e");
+    }
+  }
+
+  @override
+  Future<void> fitCameraToLine(dynamic controller, GeoJsonPolyline polyline) async {
+    if (controller is! MapboxMap) return;
+    if (polyline.points.isEmpty) return;
+
+    // Calculate bounds from all points in the line
+    double minLat = polyline.points.first.latitude;
+    double maxLat = polyline.points.first.latitude;
+    double minLng = polyline.points.first.longitude;
+    double maxLng = polyline.points.first.longitude;
+
+    for (final point in polyline.points) {
+      minLat = min(minLat, point.latitude);
+      maxLat = max(maxLat, point.latitude);
+      minLng = min(minLng, point.longitude);
+      maxLng = max(maxLng, point.longitude);
+    }
+
+    // Add padding (10%)
+    final latPadding = (maxLat - minLat) * 0.1;
+    final lngPadding = (maxLng - minLng) * 0.1;
+
+    // Create camera bounds
+    final bounds = CoordinateBounds(
+      southwest: Point(
+        coordinates: Position(minLng - lngPadding, minLat - latPadding),
+      ),
+      northeast: Point(
+        coordinates: Position(maxLng + lngPadding, maxLat + latPadding),
+      ),
+      infiniteBounds: false,
+    );
+
+    // Animate camera to fit bounds
+    await controller.flyTo(
+      CameraOptions(
+        // bounds: CameraOptions(bounds: bounds),
+        padding: MbxEdgeInsets(
+          top: 50,
+          left: 50,
+          bottom: 50,
+          right: 50,
+        ),
+      ),
+      MapAnimationOptions(duration: 1000),
+    );
   }
 
 }

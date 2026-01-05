@@ -13,7 +13,8 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.genericMarker.assetPath,
         iconName: "Generic Marker",
         properties: marker.properties,
-        priority: true
+        priority: true,
+      iconSizeRatio: marker.iconSizeRatio
     );
   }
 

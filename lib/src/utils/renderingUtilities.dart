@@ -88,22 +88,7 @@ class RenderingUtilities{
     return "#bdbdbd";
   }
 
-  static (String,double) getIconIdByType(String input) {
-    final s = input.toLowerCase();
-    if (s.contains("female washroom")) {
-      return (LandmarkAssetType.femaleWashroom.iconImageId, LandmarkAssetType.femaleWashroom.iconSize);
-    } else if (s.contains("male washroom")) {
-      return (LandmarkAssetType.maleWashroom.iconImageId, LandmarkAssetType.maleWashroom.iconSize);
-    } else if(s.contains("entrance")){
-      return (LandmarkAssetType.entrance.iconImageId, LandmarkAssetType.entrance.iconSize);
-    } else if(s.contains("generic")) {
-      return (LandmarkAssetType.genericMarker.iconImageId, LandmarkAssetType
-          .genericMarker.iconSize);
-    }
-    return ("",0.0);
-  }
-
-  static String? getAssetNameForLandmark(Map<String, dynamic>? landmarkProperties) {
+  static bool? getTextVisiblity(Map<String, dynamic>? landmarkProperties){
     try {
       if (landmarkProperties == null) return null;
 
@@ -118,12 +103,12 @@ class RenderingUtilities{
         switch (subType?.toLowerCase()) {
           case 'lift':
           case 'elevator':
-            return LandmarkAssetType.lift.assetPath;
+            return false;
           case 'stairs':
           case 'staircase':
-            return LandmarkAssetType.stairs.assetPath;
+            return false;
           case 'escalator':
-            return LandmarkAssetType.escalator.assetPath;
+            return false;
           default:
             return null;
         }
@@ -138,21 +123,21 @@ class RenderingUtilities{
             final washroomType = landmarkProperties['washroomType'] as String?;
             switch (washroomType?.toLowerCase()) {
               case 'female':
-                return LandmarkAssetType.femaleWashroom.assetPath;
+                return false;
               case 'male':
-                return LandmarkAssetType.maleWashroom.assetPath;
+                return false;
               case 'unisex':
               case 'accessible':
-                return LandmarkAssetType.accessibleWashroom.assetPath;
+                return false;
               default:
-                return LandmarkAssetType.washroom.assetPath;
+                return false;
             }
           case 'water':
           case 'waterfountain':
-            return LandmarkAssetType.waterFountain.assetPath;
+            return true;
           case 'cafe':
           case 'cafeteria':
-            return LandmarkAssetType.cafeteria.assetPath;
+            return false;
           default:
             return null;
         }
@@ -162,12 +147,87 @@ class RenderingUtilities{
       switch (type?.toLowerCase()) {
         case 'room':
         case 'office':
-          return LandmarkAssetType.room.assetPath;
+          return true;
         case 'entrance':
         case 'exit':
-          return LandmarkAssetType.entrance.assetPath;
+          return false;
         case 'emergency':
-          return LandmarkAssetType.emergency.assetPath;
+          return false;
+        default:
+          return null;
+      }
+
+    } catch (e) {
+      print('Error in getTextVisiblity$e');
+      return null;
+    }
+  }
+
+  static LandmarkAssetType? getAssetForLandmark(Map<String, dynamic>? landmarkProperties) {
+    try {
+      if (landmarkProperties == null) return null;
+
+      final element = landmarkProperties['element'] as Map<String, dynamic>?;
+      if (element == null) return null;
+
+      final type = element['type'] as String?;
+      final subType = element['subType'] as String?;
+
+      // Handle FloorConnection type (Lifts, Stairs, etc.)
+      if (type == 'FloorConnection') {
+        switch (subType?.toLowerCase()) {
+          case 'lift':
+          case 'elevator':
+            return LandmarkAssetType.lift;
+          case 'stairs':
+          case 'staircase':
+            return LandmarkAssetType.stairs;
+          case 'escalator':
+            return LandmarkAssetType.escalator;
+          default:
+            return null;
+        }
+      }
+
+      // Handle Services type (Washrooms, etc.)
+      if (type == 'Services') {
+        switch (subType?.toLowerCase()) {
+          case 'restroom':
+          case 'washroom':
+          // Check washroom type from properties
+            final washroomType = landmarkProperties['washroomType'] as String?;
+            switch (washroomType?.toLowerCase()) {
+              case 'female':
+                return LandmarkAssetType.femaleWashroom;
+              case 'male':
+                return LandmarkAssetType.maleWashroom;
+              case 'unisex':
+              case 'accessible':
+                return LandmarkAssetType.accessibleWashroom;
+              default:
+                return LandmarkAssetType.washroom;
+            }
+          case 'water':
+          case 'waterfountain':
+            return LandmarkAssetType.waterFountain;
+          case 'cafe':
+          case 'cafeteria':
+            return LandmarkAssetType.cafeteria;
+          default:
+            return null;
+        }
+      }
+
+      // Handle other common types
+      switch (type?.toLowerCase()) {
+        case 'room':
+        case 'office':
+          return LandmarkAssetType.room;
+        case 'entrance':
+        case 'exit':
+          return LandmarkAssetType.entrance;
+        case 'emergency':
+          return LandmarkAssetType.emergency;
         default:
           return null;
       }

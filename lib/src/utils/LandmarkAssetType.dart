@@ -56,36 +56,7 @@ enum LandmarkAssetType {
     }
   }
 
-  String get iconImageId {
-    switch (this) {
-      case LandmarkAssetType.lift:
-        return 'lift-icon';
-      case LandmarkAssetType.stairs:
-        return 'stairs-icon';
-      case LandmarkAssetType.escalator:
-        return 'escalator-icon';
-      case LandmarkAssetType.femaleWashroom:
-        return 'female-washroom-icon';
-      case LandmarkAssetType.maleWashroom:
-        return 'male-washroom-icon';
-      case LandmarkAssetType.accessibleWashroom:
-        return 'accessible-washroom-icon';
-      case LandmarkAssetType.washroom:
-        return 'washroom-icon';
-      case LandmarkAssetType.waterFountain:
-        return 'water-fountain-icon';
-      case LandmarkAssetType.cafeteria:
-        return 'cafeteria-icon';
-      case LandmarkAssetType.room:
-        return 'room-icon';
-      case LandmarkAssetType.entrance:
-        return 'entrance-icon';
-      case LandmarkAssetType.genericMarker:
-        return 'generic-marker-icon';
-      case LandmarkAssetType.emergency:
-        return 'emergency-icon';
-    }
-  }
+
 
   double get iconSize {
     switch (this) {
@@ -112,8 +83,18 @@ enum LandmarkAssetType {
       case LandmarkAssetType.entrance:
         return 0.3;
       case LandmarkAssetType.genericMarker:
+        return 0.1;
+      case LandmarkAssetType.emergency:
+        return 0.3;
+      case LandmarkAssetType.source:
+        return 0.3;
+      case LandmarkAssetType.destination:
+        return 0.3;
+      case LandmarkAssetType.floorConnection:
         return 0.3;
       case LandmarkAssetType.emergency:
+        return 0.3;
+      case LandmarkAssetType.user:
         return 0.3;
     }
   }

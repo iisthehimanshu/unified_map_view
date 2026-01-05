@@ -25,6 +25,7 @@ abstract class BaseMapProvider {
 
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
+
   Future<void> addMarkers(dynamic controller, List<GeoJsonMarker> markers);
 
   /// Remove a marker from the map
