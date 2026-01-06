@@ -171,6 +171,14 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> addUserMarker(GeoJsonMarker marker) async {
+    _markers.add(marker);
+    if (_currentMapController != null) {
+      await currentProviderImplementation.localizeUser(_currentMapController, marker);
+    }
+    notifyListeners();
+  }
+
   Future<void> addMarkers(List<GeoJsonMarker> markers) async {
     _markers.addAll(markers);
     if (_currentMapController != null) {
@@ -426,6 +434,11 @@ class UnifiedMapController extends ChangeNotifier {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }
     await _annotationController.annotatePath(sourceFloor);
+    notifyListeners();
+  }
+
+  void localizeUser(User user) async {
+    await _annotationController.localizeUser(user);
     notifyListeners();
   }
 

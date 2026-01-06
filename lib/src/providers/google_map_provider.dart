@@ -599,4 +599,10 @@ class GoogleMapProvider extends BaseMapProvider {
 
   }
 
+  @override
+  Future<void> localizeUser(controller, GeoJsonMarker marker) {
+    // TODO: implement localizeUser
+    throw UnimplementedError();
+  }
+
 }

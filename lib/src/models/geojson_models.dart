@@ -190,6 +190,7 @@ class GeoJsonMarker {
   final double? iconSizeRatio;
   final bool? textVisibility;
   final bool compassBasedRotation;
+  Offset? anchor;
 
   GeoJsonMarker({
     required this.id,
@@ -204,6 +205,8 @@ class GeoJsonMarker {
     this.iconSizeRatio,
     this.textVisibility,
     this.compassBasedRotation = false
+      this.compassBasedRotation = false,
+    this.anchor
   });
 
   /// Create from GeoJSON Feature

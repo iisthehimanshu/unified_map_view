@@ -21,6 +21,8 @@ class AnnotationController{
 
   Map<String, Map<int, List<Cell>>>? _path;
 
+  User? _user;
+
   AnnotationController(this._unifiedMapController, {required String venueName}){
     _setVenue(venueName);
   }
@@ -105,7 +107,6 @@ class AnnotationController{
 
   Future<bool> annotatePath(int sourceFloor) async {
     if(_path == null) return false;
-
     _path!.forEach((bid, value){
       value.forEach((floor, path) async {
         if(floor == sourceFloor){
@@ -141,10 +142,13 @@ class AnnotationController{
     }
   }
 
-  void localizeUser(User user){
+  Future<void> localizeUser(User user) async {
+    _user = user;
     String id = GeoJsonUtils.buildKey(buildingID: user.bid, floor: user.floor.toString(), id: "user");
     GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
-    _unifiedMapController.addMarker(userMarker);
+    await changeBuildingFloor(user.bid, user.floor);
+    await _unifiedMapController.removeMarker("user");
+    await _unifiedMapController.addUserMarker(userMarker);
   }
 
 }
