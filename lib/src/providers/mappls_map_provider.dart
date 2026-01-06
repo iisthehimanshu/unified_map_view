@@ -1,5 +1,6 @@
 // lib/src/providers/mappls_map_provider.dart
 
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -15,6 +16,7 @@ import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 
 /// Mappls GL implementation of BaseMapProvider
 /// Supports Mappls (MapmyIndia) maps - India's own mapping platform
@@ -157,51 +159,106 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
+  Future<void> localizeUser(controller, GeoJsonMarker marker) async {
+    if (controller is MapplsMapController) {
+
+      _rotatingSymbols.add(marker);
+      await _loadMarkerIcon(controller, marker);
+      try{
+        await setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
+        _startCompassListening(controller, _rotationSourceId);
+      }catch(e){
+        print("error adding marker $e");
+      }
+
+    }
+  }
+
+  @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
 
-      await _loadMarkerIcon(controller, marker);
-      if(marker.compassBasedRotation){
-        _rotatingSymbols.add(marker);
-        try{
-          setGeoJsonSource(controller, _rotatingSymbols, sourceID: _rotationSourceId);
-        }catch(e){
-          print("error adding marker $e");
-        }
-      }else{
-        _symbols.add(marker);
-        try{
-          setGeoJsonSource(controller, _symbols);
-        }catch(e){
-          print("error adding marker $e");
-        }
+      var markerIconWithAnchor = await _loadMarkerIcon(controller, marker);
+      _symbols.add(marker);
+      try{
+        setGeoJsonSource(controller, _symbols, _clusterSourceId);
+      }catch(e){
+        print("error adding marker $e");
       }
 
-      // Load marker icon if provided
-      // if (marker.assetPath != null && marker.iconName != null) {
-      // }
     }
   }
 
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
     if (controller is MapplsMapController) {
-      _symbols.addAll(markers);
       for (var marker in markers) {
-        if(marker.properties == null || marker.properties!["polyId"] == null) continue;
-        await _loadMarkerIcon(controller, marker);
+        var markerIconWithAnchor = await _loadMarkerIcon(controller, marker);
+        _symbols.add(marker);
       }
       try{
-        setGeoJsonSource(controller, _symbols);
+        setGeoJsonSource(controller, _symbols, _clusterSourceId);
       }catch(e){
         print("error adding marker $e");
       }
     }
   }
 
-  Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, {String? sourceID}) async {
+  Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, String sourceID) async {
     if (controller is MapplsMapController) {
-      final features = _symbols.map((marker)=>
+      final features = symbols.map((marker) {
+        // Get anchor and size
+        final anchor = marker.anchor ?? const Offset(0.5, 0.5);
+        final size = marker.imageSize ?? const Size(25, 25);
+
+        // Calculate pixel offset from center
+        // (0.5, 0.5) = [0, 0] (no offset, centered)
+        // (0.5, 1.0) = [0, height/2] (bottom anchor)
+        // (0.5, 0.0) = [0, -height/2] (top anchor)
+        final offsetX = (0.5 - anchor.dx) * size.width;
+        final offsetY = (0.5 - anchor.dy) * size.height;
+
+        return {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [marker.position.longitude, marker.position.latitude],
+          },
+          'properties': {
+            'title': '',
+            'id': marker.id,
+            if (marker.iconName != null || true) 'icon': marker.id,
+            'isPriority': marker.priority ?? false,
+            'intractable': marker.properties?["polyId"] != null,
+            if (marker.compassBasedRotation) "bearing": 0.0,
+            if (marker.anchor != null) ...{
+              'offsetX': offsetX,
+              'offsetY': offsetY,
+            }
+          }
+        };
+      }).toList();
+
+      await controller.setGeoJsonSource(
+        sourceID,
+        {
+          "type": "FeatureCollection",
+          "features": features,
+        },
+      );
+    }
+  }
+
+  StreamSubscription<CompassEvent>? _compassSub;
+  void _startCompassListening(MapplsMapController controller, String sourceID) {
+    if(_compassSub != null) return;
+    _compassSub = FlutterCompass.events?.listen((event) async {
+      if (event.heading == null) return;
+
+      final cameraPos = controller.cameraPosition;
+      if (cameraPos == null) return;
+
+      final features = _rotatingSymbols.map((marker)=>
       {
         'type': 'Feature',
         'geometry': {
@@ -213,18 +270,18 @@ class MapplsMapProvider extends BaseMapProvider {
           'id': marker.id,
           if(marker.iconName != null || true) 'icon': marker.id,
           'isPriority': marker.priority ?? false,
-          'intractable': marker.properties?["polyId"] != null
+          'intractable': marker.properties?["polyId"] != null,
+          if(marker.compassBasedRotation) "bearing": event.heading!
         }
       }).toList();
 
-      await controller.setGeoJsonSource(
-        sourceID??_clusterSourceId,
-        {
-          "type": "FeatureCollection",
-          "features": features,
-        },
-      );}
+      await controller.setGeoJsonSource(sourceID, {
+        "type": "FeatureCollection",
+        "features": features
+      });
+    });
   }
+
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
@@ -233,7 +290,7 @@ class MapplsMapProvider extends BaseMapProvider {
         // Remove marker from the list
         _symbols.removeWhere((marker) => marker.id.toLowerCase().contains(markerId));
 
-        setGeoJsonSource(controller, _symbols);
+        setGeoJsonSource(controller, _symbols, _clusterSourceId);
       } catch (e) {
         print('Error removing marker: $e');
       }
@@ -248,7 +305,8 @@ class MapplsMapProvider extends BaseMapProvider {
         _symbols.clear();
 
         // Update the GeoJSON source with empty features
-        setGeoJsonSource(controller, []);
+        setGeoJsonSource(controller, [], _clusterSourceId);
+        setGeoJsonSource(controller, [], _rotationSourceId);
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -465,7 +523,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   final creator = UnifiedMarkerCreator();
 
-  Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
+  Future<MarkerIconWithAnchor?> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     try {
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
         imageSize: marker.imageSize??const Size(25, 25),
@@ -479,10 +537,11 @@ class MapplsMapProvider extends BaseMapProvider {
 
       final Uint8List iconBytes = markerIconWithAnchor.icon;
       await controller.addImage(marker.id, iconBytes);
-      return true;
+      marker.anchor = markerIconWithAnchor.anchor;
+      return markerIconWithAnchor;
     } catch (e) {
       print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
-      return false;
+      return null;
     }
   }
 
@@ -495,6 +554,11 @@ class MapplsMapProvider extends BaseMapProvider {
         'features': [],
       });
 
+      await controller.addGeoJsonSource(_rotationSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
       // Layer 1: Normal markers (rendered first, can be hidden)
       await controller.addSymbolLayer(
           _clusterSourceId,
@@ -502,6 +566,10 @@ class MapplsMapProvider extends BaseMapProvider {
           SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
+            iconOffset: [
+              ["coalesce", ["get", "offsetX"], 0],
+              ["coalesce", ["get", "offsetY"], 0]
+            ],
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
@@ -529,6 +597,10 @@ class MapplsMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 1.5,
+          iconOffset: [
+            ["coalesce", ["get", "offsetX"], 0],
+            ["coalesce", ["get", "offsetY"], 0]
+          ],
           textField: ["get", "title"],
           textSize: 12,
           textColor: "#000000",
@@ -554,24 +626,15 @@ class MapplsMapProvider extends BaseMapProvider {
           SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
-            textField: ["get", "title"],
-            textSize: 12,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
-            textAnchor: ["case", ["has", "icon"], "left", "center"],
-            textOffset: [
-              "case",
-              ["has", "icon"],
-              ["literal", [3.5, 0]],
-              ["literal", [0, 0]]
+            iconOffset: [
+              ["coalesce", ["get", "offsetX"], 0],
+              ["coalesce", ["get", "offsetY"], 0]
             ],
             iconRotate: ["get", "bearing"],
             iconRotationAlignment: "map",
             iconAllowOverlap: true,
             textAllowOverlap: false,
           ),
-          filter: ["!=", ["get", "isPriority"], true],
           enableInteraction: true,
           belowLayerId: _priorityMarkerLayerId
       );
@@ -579,7 +642,7 @@ class MapplsMapProvider extends BaseMapProvider {
       if(_symbols.isNotEmpty){
         List<GeoJsonMarker> symbols = [..._symbols];
         clearMarkers(controller);
-        setGeoJsonSource(controller, symbols);
+        setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
     } catch (e) {
       print('Error enabling clustering: $e');
@@ -1011,4 +1074,5 @@ class MapplsMapProvider extends BaseMapProvider {
       ),
     );
   }
+
 }

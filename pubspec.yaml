@@ -17,6 +17,7 @@ dependencies:
   mappls_gl: ^1.2.0
   http:
   flutter_speed_dial: ^7.0.0
+  flutter_compass: ^0.8.1
 
 dev_dependencies:
   flutter_test:

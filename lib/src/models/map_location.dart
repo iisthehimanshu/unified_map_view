@@ -23,4 +23,9 @@ class MapLocation {
 
   @override
   int get hashCode => latitude.hashCode ^ longitude.hashCode;
+
+  @override
+  String toString() {
+    return 'MapLocation{latitude: $latitude, longitude: $longitude}';
+  }
 }

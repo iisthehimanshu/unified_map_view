@@ -188,6 +188,7 @@ class GeoJsonMarker {
   final Map<String, dynamic>? properties;
   final Size? imageSize;
   final bool compassBasedRotation;
+  Offset? anchor;
 
   GeoJsonMarker({
     required this.id,
@@ -199,7 +200,8 @@ class GeoJsonMarker {
     this.priority,
     this.properties,
     this.imageSize,
-    this.compassBasedRotation = false
+    this.compassBasedRotation = false,
+    this.anchor
   });
 
   /// Create from GeoJSON Feature

@@ -200,4 +200,10 @@ class AppleMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> localizeUser(controller, GeoJsonMarker marker) {
+    // TODO: implement localizeUser
+    throw UnimplementedError();
+  }
+
 }

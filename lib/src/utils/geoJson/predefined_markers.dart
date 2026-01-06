@@ -26,6 +26,8 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.user.assetPath,
         iconName: "User",
         priority: true,
+        imageSize: Size(35, 35),
+      anchor: Offset(0.5, 0.829),
       compassBasedRotation: true
     );
   }

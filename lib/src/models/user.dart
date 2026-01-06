@@ -12,4 +12,11 @@ class User{
   String get bid => _bid;
 
   int get floor => _floor;
+
+  @override
+  String toString() {
+    return 'User{_location: ${_location.toString()}, _bid: $_bid, _floor: $_floor}';
+  }
+
+
 }
