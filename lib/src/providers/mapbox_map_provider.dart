@@ -386,9 +386,6 @@ class MapboxMapProvider extends BaseMapProvider {
       // Decode the image to get dimensions
       final image = await decodeImageFromList(iconBytes);
 
-      // Get the scale factor from marker's iconSizeRatio (default to 1.0 if null)
-      final scale = marker.iconSizeRatio ?? 1.0;
-
       await mapboxMap.style.addStyleImage(
         marker.id,  // Use marker.id instead of marker.iconName
         1.0,

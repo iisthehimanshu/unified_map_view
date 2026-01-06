@@ -56,46 +56,33 @@ enum LandmarkAssetType {
     }
   }
 
-
-
-  double get iconSize {
+  bool get textVisibility {
     switch (this) {
       case LandmarkAssetType.lift:
-        return 0.3;
       case LandmarkAssetType.stairs:
-        return 0.3;
       case LandmarkAssetType.escalator:
-        return 0.3;
       case LandmarkAssetType.femaleWashroom:
-        return 0.3;
       case LandmarkAssetType.maleWashroom:
-        return 0.3;
       case LandmarkAssetType.accessibleWashroom:
-        return 0.3;
       case LandmarkAssetType.washroom:
-        return 0.3;
-      case LandmarkAssetType.waterFountain:
-        return 0.3;
       case LandmarkAssetType.cafeteria:
-        return 0.3;
-      case LandmarkAssetType.room:
-        return 0.3;
       case LandmarkAssetType.entrance:
-        return 0.3;
-      case LandmarkAssetType.genericMarker:
-        return 0.1;
-      case LandmarkAssetType.emergency:
-        return 0.3;
-      case LandmarkAssetType.source:
-        return 0.03;
-      case LandmarkAssetType.destination:
-        return 0.3;
       case LandmarkAssetType.floorConnection:
-        return 0.3;
       case LandmarkAssetType.emergency:
-        return 0.3;
+        return false;
+
+      case LandmarkAssetType.waterFountain:
+      case LandmarkAssetType.room:
+      case LandmarkAssetType.genericMarker:
+        return true;
+
       case LandmarkAssetType.user:
-        return 2;
+        return false;
+        
+      case LandmarkAssetType.source:
+      case LandmarkAssetType.destination:
+        return true;
     }
   }
+
 }

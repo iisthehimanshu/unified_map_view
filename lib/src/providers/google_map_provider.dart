@@ -595,7 +595,7 @@ class GoogleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> fitCameraToLine(controller, GeoJsonPolyline polyline) {
+  Future<void> fitCameraToLine(controller, GeoJsonPolyline polyline) async {
 
   }
 

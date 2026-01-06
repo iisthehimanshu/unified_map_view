@@ -14,7 +14,6 @@ class PredefinedMarkers{
         iconName: "Generic Marker",
         properties: marker.properties,
         priority: true,
-      iconSizeRatio: marker.iconSizeRatio
     );
   }
 
