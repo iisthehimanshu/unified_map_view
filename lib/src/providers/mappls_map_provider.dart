@@ -79,6 +79,7 @@ class MapplsMapProvider extends BaseMapProvider {
         if (_controller != null) {
           try {
             final bounds = await _controller!.getVisibleRegion();
+
             final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
             final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
 
@@ -176,6 +177,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
+    print("addMarker ${StackTrace.current}");
     if (controller is MapplsMapController) {
 
       var markerIconWithAnchor = await _loadMarkerIcon(controller, marker);

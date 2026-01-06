@@ -42,7 +42,7 @@ class AnnotationController{
       var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
       venueRenderData.addAll(floorData);
     });
-    await _unifiedMapController.moveCamera(_venueData.venueLatLng, zoom: 20);
+    await _unifiedMapController.moveCamera(_venueData.venueLatLng, zoom: 18);
 
     await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
   }

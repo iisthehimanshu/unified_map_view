@@ -235,13 +235,14 @@ class UnifiedMapController extends ChangeNotifier {
     // for (var polygon in boundaryPolygons) {
     //   await addPolygon(polygon);
     // }
-    await addPolygons(boundaryPolygons);
-
-    await addPolygons(otherPolygons);
-
+    //
     // for (var polygon in otherPolygons) {
     //   await addPolygon(polygon);
     // }
+
+    await addPolygons(boundaryPolygons);
+
+    await addPolygons(otherPolygons);
 
     // Add polylines
     final polylines = GeoJsonLoader.extractPolylines(collection);

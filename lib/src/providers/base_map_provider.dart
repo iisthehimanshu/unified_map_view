@@ -25,6 +25,7 @@ abstract class BaseMapProvider {
 
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
+
   Future<void> addMarkers(dynamic controller, List<GeoJsonMarker> markers);
 
   Future<void> localizeUser(dynamic controller, GeoJsonMarker marker);
@@ -46,6 +47,7 @@ abstract class BaseMapProvider {
 
   /// Add a polygon to the map
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon);
+
   Future<void> addPolygons(dynamic controller, List<GeoJsonPolygon> polygons);
 
   /// Remove a polygon from the map

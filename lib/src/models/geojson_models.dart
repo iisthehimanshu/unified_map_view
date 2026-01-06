@@ -187,6 +187,8 @@ class GeoJsonMarker {
   final bool? priority;
   final Map<String, dynamic>? properties;
   final Size? imageSize;
+  final double? iconSizeRatio;
+  final bool? textVisibility;
   final bool compassBasedRotation;
   Offset? anchor;
 
@@ -200,7 +202,10 @@ class GeoJsonMarker {
     this.priority,
     this.properties,
     this.imageSize,
-    this.compassBasedRotation = false,
+    this.iconSizeRatio,
+    this.textVisibility,
+    this.compassBasedRotation = false
+      this.compassBasedRotation = false,
     this.anchor
   });
 
@@ -210,8 +215,16 @@ class GeoJsonMarker {
 
     final coords = feature.geometry.coordinates[0];
 
-    final assetPath = RenderingUtilities.getAssetNameForLandmark(feature.properties);
-    final iconName = assetPath?.split('/').last.split('.').first;
+    final asset = RenderingUtilities.getAssetForLandmark(feature.properties);
+    var assetPath;
+    var iconName;
+    var iconSizeRatio;
+    bool? getTextVisibility = RenderingUtilities.getTextVisiblity(feature.properties);
+    if(asset != null){
+      assetPath = asset.assetPath;
+      iconName = assetPath?.split('/').last.split('.').first;
+      iconSizeRatio = asset.iconSize;
+    }
 
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.building_ID, polyId:feature.properties?["polyId"]),
@@ -220,7 +233,9 @@ class GeoJsonMarker {
       snippet: "",
       assetPath: assetPath,
       iconName: iconName,
+        iconSizeRatio: iconSizeRatio,
       properties: feature.properties,
+      textVisibility: getTextVisibility??true,
       priority: false
     );
   }
