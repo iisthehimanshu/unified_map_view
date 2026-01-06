@@ -958,4 +958,10 @@ class MapboxMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> moveUser(controller, String id, MapLocation location) {
+    // TODO: implement moveMarker
+    throw UnimplementedError();
+  }
+
 }

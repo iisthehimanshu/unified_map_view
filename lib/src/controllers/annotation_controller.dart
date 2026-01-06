@@ -151,4 +151,9 @@ class AnnotationController{
     await _unifiedMapController.addUserMarker(userMarker);
   }
 
+  Future<void> moveUser(MapLocation location)async {
+    _user?.location = location;
+    await _unifiedMapController.moveMarker("user", location);
+  }
+
 }

@@ -61,9 +61,9 @@ class MapplsMapProvider extends BaseMapProvider {
         _config = config;
         _controller = controller;
         config.onMapCreated(controller);
-        await enableClustering(controller);
-        await enablePolygonLayers(controller);
-        await enablePolylineLayers(controller);
+        enableClustering(controller);
+        enablePolygonLayers(controller);
+        enablePolylineLayers(controller);
 
         // Handle polygon taps
         controller.onFeatureTapped.add((id, point, coordinates) {
@@ -177,7 +177,6 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
-    print("addMarker ${StackTrace.current}");
     if (controller is MapplsMapController) {
 
       var markerIconWithAnchor = await _loadMarkerIcon(controller, marker);
@@ -206,20 +205,53 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
+  @override
+  Future<void> moveUser(controller, String id, MapLocation location) async {
+    if(controller is MapplsMapController){
+      // Find and update the marker position in the list
+      for (var marker in _rotatingSymbols) {
+        if (marker.id.toLowerCase().contains(id)) {
+          // Update the position directly
+          marker.position = location;
+          break;
+        }
+      }
+
+      // The compass listener will use the updated position automatically
+      // Force an immediate update of the source
+      final features = _rotatingSymbols.map((marker) => {
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [marker.position.longitude, marker.position.latitude],
+        },
+        'properties': {
+          'title': '',
+          'id': marker.id,
+          if(marker.iconName != null || true) 'icon': marker.id,
+          'isPriority': marker.priority ?? false,
+          'intractable': marker.properties?["polyId"] != null,
+        }
+      }).toList();
+
+      await controller.setGeoJsonSource(_rotationSourceId, {
+        "type": "FeatureCollection",
+        "features": features
+      });
+    }
+  }
+
   Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, String sourceID) async {
     if (controller is MapplsMapController) {
       final features = symbols.map((marker) {
         // Get anchor and size
-        final anchor = marker.anchor ?? const Offset(0.5, 0.5);
+        final anchor = marker.anchor ?? const Offset(0.5, 1.0);
         final size = marker.imageSize ?? const Size(25, 25);
 
         // Calculate pixel offset from center
         // (0.5, 0.5) = [0, 0] (no offset, centered)
         // (0.5, 1.0) = [0, height/2] (bottom anchor)
         // (0.5, 0.0) = [0, -height/2] (top anchor)
-        final offsetX = (0.5 - anchor.dx) * size.width;
-        final offsetY = (0.5 - anchor.dy) * size.height;
-
         return {
           'type': 'Feature',
           'geometry': {
@@ -233,10 +265,7 @@ class MapplsMapProvider extends BaseMapProvider {
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             if (marker.compassBasedRotation) "bearing": 0.0,
-            if (marker.anchor != null) ...{
-              'offsetX': offsetX,
-              'offsetY': offsetY,
-            }
+            'iconOffset': [anchor.dy, anchor.dx]
           }
         };
       }).toList();
@@ -418,6 +447,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
+    print("addPolyline ${StackTrace.current}");
     if (controller is MapplsMapController) {
       bool isWaypoint = false;
       if (polyline.properties?["lineCategory"] != null) {
@@ -458,7 +488,11 @@ class MapplsMapProvider extends BaseMapProvider {
           print('Error adding polyline: $e');
         }
       }
-      await _updatePolylineSource(controller);
+      try{
+        await _updatePolylineSource(controller);
+      }catch (e) {
+        print('Error adding polyline: $e');
+      }
     }
   }
 
@@ -525,7 +559,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   final creator = UnifiedMarkerCreator();
 
-  Future<MarkerIconWithAnchor?> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
+  Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     try {
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
         imageSize: marker.imageSize??const Size(25, 25),
@@ -535,15 +569,16 @@ class MapplsMapProvider extends BaseMapProvider {
         layout: MarkerLayout.horizontal,
         textFormat: TextFormat.smartWrap,
         textColor: const Color(0xff000000),
+        customAnchor: marker.anchor??Offset(0.5, 0.5),
+          expandCanvasForRotation: true
       );
-
       final Uint8List iconBytes = markerIconWithAnchor.icon;
       await controller.addImage(marker.id, iconBytes);
       marker.anchor = markerIconWithAnchor.anchor;
-      return markerIconWithAnchor;
+      return true;
     } catch (e) {
       print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
-      return null;
+      return false;
     }
   }
 
@@ -568,10 +603,7 @@ class MapplsMapProvider extends BaseMapProvider {
           SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
-            iconOffset: [
-              ["coalesce", ["get", "offsetX"], 0],
-              ["coalesce", ["get", "offsetY"], 0]
-            ],
+            iconOffset: ["get", "iconOffset"],
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
@@ -599,10 +631,7 @@ class MapplsMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 1.5,
-          iconOffset: [
-            ["coalesce", ["get", "offsetX"], 0],
-            ["coalesce", ["get", "offsetY"], 0]
-          ],
+          iconOffset: ["get", "iconOffset"],
           textField: ["get", "title"],
           textSize: 12,
           textColor: "#000000",
@@ -620,25 +649,22 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["==", ["get", "isPriority"], true],
         enableInteraction: true,
+        belowLayerId: _rotationMarkerLayerId
       );
 
       await controller.addSymbolLayer(
-          _rotationSourceId,
-          _rotationMarkerLayerId,
-          SymbolLayerProperties(
-            iconImage: ["get", "icon"],
-            iconSize: 1.5,
-            iconOffset: [
-              ["coalesce", ["get", "offsetX"], 0],
-              ["coalesce", ["get", "offsetY"], 0]
-            ],
-            iconRotate: ["get", "bearing"],
-            iconRotationAlignment: "map",
-            iconAllowOverlap: true,
-            textAllowOverlap: false,
-          ),
-          enableInteraction: true,
-          belowLayerId: _priorityMarkerLayerId
+        _rotationSourceId,
+        _rotationMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          iconOffset: ["get", "iconOffset"],
+          iconRotate: ["get", "bearing"],
+          iconRotationAlignment: "map",
+          iconAllowOverlap: true,
+        ),
+        enableInteraction: true,
+        belowLayerId: _normalMarkerLayerId,
       );
 
       if(_symbols.isNotEmpty){
@@ -647,6 +673,7 @@ class MapplsMapProvider extends BaseMapProvider {
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
     } catch (e) {
+      rethrow;
       print('Error enabling clustering: $e');
     }
   }
@@ -662,44 +689,42 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Add fill layer for patch polygons (bottom-most)
       await controller.addFillLayer(
-          _polygonSourceId,
-          _patchPolygonLayerId,
-          FillLayerProperties(
-            fillColor: ["get", "fillColor"],
-            fillOpacity: ["get", "fillOpacity"],
-            fillOutlineColor: ["get", "strokeColor"],
-          ),
-          filter: ["==", ["get", "boundary"], true],
-          enableInteraction: true,
-          belowLayerId: _normalMarkerLayerId // Position below markers
+        _polygonSourceId,
+        _patchPolygonLayerId,
+        FillLayerProperties(
+          fillColor: ["get", "fillColor"],
+          fillOpacity: ["get", "fillOpacity"],
+          fillOutlineColor: ["get", "strokeColor"],
+        ),
+        filter: ["==", ["get", "boundary"], true],
+        enableInteraction: true,
+        belowLayerId: _polylineLayerId, // ⬅️ BELOW POLYLINES
       );
 
-      // Add fill layer for normal polygons
       await controller.addFillLayer(
-          _polygonSourceId,
-          _normalPolygonLayerId,
-          FillLayerProperties(
-            fillColor: ["get", "fillColor"],
-            fillOpacity: ["get", "fillOpacity"],
-            fillOutlineColor: ["get", "strokeColor"],
-          ),
-          filter: ["!=", ["get", "isSelected"], true],
-          enableInteraction: true,
-          belowLayerId: _normalMarkerLayerId // Position below markers
+        _polygonSourceId,
+        _normalPolygonLayerId,
+        FillLayerProperties(
+          fillColor: ["get", "fillColor"],
+          fillOpacity: ["get", "fillOpacity"],
+          fillOutlineColor: ["get", "strokeColor"],
+        ),
+        filter: ["!=", ["get", "isSelected"], true],
+        enableInteraction: true,
+        belowLayerId: _polylineLayerId,
       );
 
-      // Add fill layer for selected polygon
       await controller.addFillLayer(
-          _polygonSourceId,
-          _selectedPolygonLayerId,
-          FillLayerProperties(
-            fillColor: "#4CAF50",
-            fillOpacity: 0.6,
-            fillOutlineColor: "#2E7D32",
-          ),
-          filter: ["==", ["get", "isSelected"], true],
-          enableInteraction: true,
-          belowLayerId: _normalMarkerLayerId // Position below markers
+        _polygonSourceId,
+        _selectedPolygonLayerId,
+        FillLayerProperties(
+          fillColor: "#4CAF50",
+          fillOpacity: 0.6,
+          fillOutlineColor: "#2E7D32",
+        ),
+        filter: ["==", ["get", "isSelected"], true],
+        enableInteraction: true,
+        belowLayerId: _polylineLayerId,
       );
 
       if (_polygons.isNotEmpty) {
@@ -720,30 +745,29 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Add line layer for path polylines
       await controller.addLineLayer(
-          _polylineSourceId,
-          _pathLayerId,
-          LineLayerProperties(
-            lineColor: '#448AFF',
-            lineWidth: 4.0,
-            lineOpacity: 1.0,
-          ),
-          filter: ["==", ["get", "path"], true],
-          enableInteraction: true,
-          belowLayerId: _normalMarkerLayerId // Position below markers
+        _polylineSourceId,
+        _polylineLayerId,
+        LineLayerProperties(
+          lineColor: ["get", "strokeColor"],
+          lineWidth: ["get", "strokeWidth"],
+          lineOpacity: ["get", "strokeOpacity"],
+        ),
+        filter: ["!=", ["get", "path"], true],
+        enableInteraction: true,
+        belowLayerId: _rotationMarkerLayerId, // ⬅️ BELOW MARKERS
       );
 
-      // Add line layer for normal polylines
       await controller.addLineLayer(
-          _polylineSourceId,
-          _polylineLayerId,
-          LineLayerProperties(
-            lineColor: ["get", "strokeColor"],
-            lineWidth: ["get", "strokeWidth"],
-            lineOpacity: ["get", "strokeOpacity"],
-          ),
-          filter: ["!=", ["get", "path"], true],
-          enableInteraction: true,
-          belowLayerId: _normalMarkerLayerId // Position below markers
+        _polylineSourceId,
+        _pathLayerId,
+        LineLayerProperties(
+          lineColor: '#448AFF',
+          lineWidth: 4.0,
+          lineOpacity: 1.0,
+        ),
+        filter: ["==", ["get", "path"], true],
+        enableInteraction: true,
+        belowLayerId: _rotationMarkerLayerId,
       );
 
       if (_lines.isNotEmpty) {

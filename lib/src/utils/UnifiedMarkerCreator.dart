@@ -30,6 +30,9 @@ enum TextFormat {
 class UnifiedMarkerCreator {
   /// Creates a crisp marker that keeps the same *physical* size across devices.
   /// imageSize is in logical dp (same units you'd expect for Flutter widgets).
+  ///
+  /// When [expandCanvasForRotation] is true, creates a larger canvas to allow
+  /// proper rotation around the anchor point without clipping.
   Future<MarkerIconWithAnchor> createUnifiedMarker({
     required String text,
     String? imageSource,
@@ -43,6 +46,7 @@ class UnifiedMarkerCreator {
     double spacing = 0.0, // logical
     Offset? customAnchor, // normalized if provided
     bool maintainAspectRatio = true,
+    bool expandCanvasForRotation = false,
   }) async {
     final double ratio = ui.window.devicePixelRatio; // device pixel ratio
 
@@ -167,22 +171,30 @@ class UnifiedMarkerCreator {
     double canvasHeightPx;
     double imageX = 0, imageY = 0, textX = 0, textY = 0;
 
+    // Calculate content size first (before expansion)
+    double contentWidthPx;
+    double contentHeightPx;
+
     switch (layout) {
       case MarkerLayout.horizontal:
         if (markerImage != null) {
-          canvasWidthPx = actualImageSizePx.width +
+          contentWidthPx = actualImageSizePx.width +
               spacingPx +
               textWidthPx +
               strokeWidthPx * 2;
-          canvasHeightPx =
+          contentHeightPx =
               max(actualImageSizePx.height, textHeightPx) + strokeWidthPx * 2;
+          canvasWidthPx = contentWidthPx;
+          canvasHeightPx = contentHeightPx;
           imageX = strokeWidthPx;
           imageY = (canvasHeightPx - actualImageSizePx.height) / 2;
           textX = imageX + actualImageSizePx.width + spacingPx;
           textY = (canvasHeightPx - textHeightPx) / 2;
         } else {
-          canvasWidthPx = textWidthPx + strokeWidthPx * 2;
-          canvasHeightPx = textHeightPx + strokeWidthPx * 2;
+          contentWidthPx = textWidthPx + strokeWidthPx * 2;
+          contentHeightPx = textHeightPx + strokeWidthPx * 2;
+          canvasWidthPx = contentWidthPx;
+          canvasHeightPx = contentHeightPx;
           textX = strokeWidthPx;
           textY = strokeWidthPx;
         }
@@ -190,37 +202,130 @@ class UnifiedMarkerCreator {
 
       case MarkerLayout.vertical:
         if (markerImage != null) {
-          canvasWidthPx =
+          contentWidthPx =
               max(actualImageSizePx.width, textWidthPx) + strokeWidthPx * 2;
-          canvasHeightPx = actualImageSizePx.height +
+          contentHeightPx = actualImageSizePx.height +
               spacingPx +
               textHeightPx +
               strokeWidthPx * 2;
+          canvasWidthPx = contentWidthPx;
+          canvasHeightPx = contentHeightPx;
           imageX = (canvasWidthPx - actualImageSizePx.width) / 2;
           imageY = strokeWidthPx;
           textX = (canvasWidthPx - textWidthPx) / 2;
           textY = imageY + actualImageSizePx.height + spacingPx;
         } else {
-          canvasWidthPx = textWidthPx + strokeWidthPx * 2;
-          canvasHeightPx = textHeightPx + strokeWidthPx * 2;
+          contentWidthPx = textWidthPx + strokeWidthPx * 2;
+          contentHeightPx = textHeightPx + strokeWidthPx * 2;
+          canvasWidthPx = contentWidthPx;
+          canvasHeightPx = contentHeightPx;
           textX = strokeWidthPx;
           textY = strokeWidthPx;
         }
         break;
 
       case MarkerLayout.textOnly:
-        canvasWidthPx = textWidthPx + strokeWidthPx * 2;
-        canvasHeightPx = textHeightPx + strokeWidthPx * 2;
+        contentWidthPx = textWidthPx + strokeWidthPx * 2;
+        contentHeightPx = textHeightPx + strokeWidthPx * 2;
+        canvasWidthPx = contentWidthPx;
+        canvasHeightPx = contentHeightPx;
         textX = strokeWidthPx;
         textY = strokeWidthPx;
         break;
 
       case MarkerLayout.imageOnly:
-        canvasWidthPx = actualImageSizePx.width;
-        canvasHeightPx = actualImageSizePx.height;
+        contentWidthPx = actualImageSizePx.width;
+        contentHeightPx = actualImageSizePx.height;
+        canvasWidthPx = contentWidthPx;
+        canvasHeightPx = contentHeightPx;
         imageX = 0;
         imageY = 0;
         break;
+    }
+
+    // Calculate initial anchor before expansion
+    Offset initialAnchor;
+    if (customAnchor != null) {
+      initialAnchor = customAnchor;
+    } else {
+      // Default anchors depending on layout:
+      if (markerImage == null) {
+        // Center for text-only
+        initialAnchor = Offset(0.5, 0.5);
+      } else {
+        switch (layout) {
+          case MarkerLayout.horizontal:
+          // center of image horizontally, bottom of canvas vertically
+            final double ax = (imageX + actualImageSizePx.width / 2) / canvasWidthPx;
+            final double ay = (imageY + actualImageSizePx.height) / canvasHeightPx;
+            initialAnchor = Offset(ax.clamp(0.0, 1.0), ay.clamp(0.0, 1.0));
+            break;
+          case MarkerLayout.vertical:
+          // center horizontally, bottom of image vertically (so marker tip aligns)
+            final double ax2 = (imageX + actualImageSizePx.width / 2) / canvasWidthPx;
+            final double ay2 = (imageY + actualImageSizePx.height) / canvasHeightPx;
+            initialAnchor = Offset(ax2.clamp(0.0, 1.0), ay2.clamp(0.0, 1.0));
+            break;
+          case MarkerLayout.imageOnly:
+            initialAnchor = Offset(0.5, 0.5);
+            break;
+          case MarkerLayout.textOnly:
+            initialAnchor = Offset(0.5, 0.5);
+            break;
+        }
+      }
+    }
+
+    // Expand canvas for rotation if requested
+    double offsetX = 0;
+    double offsetY = 0;
+    Offset finalAnchor = initialAnchor;
+
+    if (expandCanvasForRotation) {
+      // Calculate the pivot point in pixels
+      final double pivotX = canvasWidthPx * initialAnchor.dx;
+      final double pivotY = canvasHeightPx * initialAnchor.dy;
+
+      // Calculate maximum distance from pivot to any corner
+      final corners = [
+        Offset(0, 0),
+        Offset(canvasWidthPx, 0),
+        Offset(0, canvasHeightPx),
+        Offset(canvasWidthPx, canvasHeightPx),
+      ];
+
+      double maxDistance = 0;
+      for (final corner in corners) {
+        final distance = sqrt(
+            pow(corner.dx - pivotX, 2) + pow(corner.dy - pivotY, 2)
+        );
+        maxDistance = max(maxDistance, distance);
+      }
+
+      // New canvas should be a square that can contain the full rotation
+      // Add some padding for safety (10%)
+      final double expandedSize = maxDistance * 2 * 1.1;
+
+      // Calculate new canvas dimensions
+      final double expandedCanvasWidth = max(canvasWidthPx, expandedSize);
+      final double expandedCanvasHeight = max(canvasHeightPx, expandedSize);
+
+      // Calculate offset to center the original content with pivot at canvas center
+      offsetX = (expandedCanvasWidth / 2) - pivotX;
+      offsetY = (expandedCanvasHeight / 2) - pivotY;
+
+      // Update drawing positions
+      imageX += offsetX;
+      imageY += offsetY;
+      textX += offsetX;
+      textY += offsetY;
+
+      // Update canvas dimensions
+      canvasWidthPx = expandedCanvasWidth;
+      canvasHeightPx = expandedCanvasHeight;
+
+      // Anchor is now at the center of the expanded canvas
+      finalAnchor = Offset(0.5, 0.5);
     }
 
     // Ensure integer pixel dimensions at least 1
@@ -230,6 +335,18 @@ class UnifiedMarkerCreator {
     // Draw into picture recorder (working in pixel units)
     final ui.PictureRecorder recorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(recorder);
+
+    // Optional: Draw debug circle at pivot point (comment out in production)
+    // if (expandCanvasForRotation) {
+    //   final paint = Paint()
+    //     ..color = Colors.red.withOpacity(0.5)
+    //     ..style = PaintingStyle.fill;
+    //   canvas.drawCircle(
+    //     Offset(canvasWidthPx / 2, canvasHeightPx / 2),
+    //     5 * ratio,
+    //     paint,
+    //   );
+    // }
 
     // Draw image (if exists) with high quality
     if (markerImage != null) {
@@ -273,47 +390,14 @@ class UnifiedMarkerCreator {
 
     // Finish and convert to image at final pixel dimensions
     final ui.Image finalImage =
-        await recorder.endRecording().toImage(canvasW, canvasH);
+    await recorder.endRecording().toImage(canvasW, canvasH);
     final ByteData? pngBytesData =
-        await finalImage.toByteData(format: ui.ImageByteFormat.png);
+    await finalImage.toByteData(format: ui.ImageByteFormat.png);
     if (pngBytesData == null)
       throw Exception('Failed to encode marker image to PNG.');
     final Uint8List pngBytes = pngBytesData.buffer.asUint8List();
 
-    // Calculate normalized anchor (0..1)
-    Offset anchor;
-    if (customAnchor != null) {
-      anchor = customAnchor;
-    } else {
-      // Default anchors depending on layout:
-      if (markerImage == null) {
-        // Center for text-only
-        anchor = Offset(0.5, 0.5);
-      } else {
-        switch (layout) {
-          case MarkerLayout.horizontal:
-            // center of image horizontally, bottom of canvas vertically
-            final double ax = (imageX + actualImageSizePx.width / 2) / canvasW;
-            final double ay = (imageY + actualImageSizePx.height) / canvasH;
-            anchor = Offset(ax.clamp(0.0, 1.0), ay.clamp(0.0, 1.0));
-            break;
-          case MarkerLayout.vertical:
-            // center horizontally, bottom of image vertically (so marker tip aligns)
-            final double ax2 = (imageX + actualImageSizePx.width / 2) / canvasW;
-            final double ay2 = (imageY + actualImageSizePx.height) / canvasH;
-            anchor = Offset(ax2.clamp(0.0, 1.0), ay2.clamp(0.0, 1.0));
-            break;
-          case MarkerLayout.imageOnly:
-            anchor = Offset(0.5, 0.5);
-            break;
-          case MarkerLayout.textOnly:
-            anchor = Offset(0.5, 0.5);
-            break;
-        }
-      }
-    }
-
-    return MarkerIconWithAnchor(pngBytes, anchor);
+    return MarkerIconWithAnchor(pngBytes, finalAnchor);
   }
 
   String _formatText(String text, TextFormat format) {

@@ -14,6 +14,7 @@ class PredefinedMarkers{
         iconName: "Generic Marker",
         properties: marker.properties,
         priority: true,
+      anchor: Offset(0.5, 1.0)
     );
   }
 
@@ -41,7 +42,8 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.source.assetPath,
         iconName: "source",
         priority: true,
-        imageSize: Size(15, 15)
+        imageSize: Size(15, 15),
+        anchor: Offset(0.5, 0.5)
     );
   }
 
@@ -54,7 +56,8 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.destination.assetPath,
         iconName: "Destination",
         priority: true,
-        imageSize: Size(30, 30)
+        imageSize: Size(30, 30),
+        anchor: Offset(0.5, 1.0)
     );
   }
 
@@ -66,7 +69,8 @@ class PredefinedMarkers{
         snippet: "",
         assetPath: LandmarkAssetType.floorConnection.assetPath,
         iconName: "Floor Connection",
-        priority: true
+        priority: true,
+        anchor: Offset(0.5, 0.5)
     );
   }
 }

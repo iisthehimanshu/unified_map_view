@@ -2,9 +2,7 @@
 
 import 'dart:ui';
 import 'dart:convert';
-import 'dart:typed_data';
 import '../../unified_map_view.dart';
-import '../utils/LandmarkAssetType.dart';
 import '../utils/renderingUtilities.dart';
 
 export 'dart:typed_data';
@@ -22,13 +20,13 @@ enum GeoJsonGeometryType {
 
 /// Represents a GeoJSON Feature
 class GeoJsonFeature {
-  final String? building_ID;
+  final String? buildingId;
   final String? id;
   final GeoJsonGeometry geometry;
   final Map<String, dynamic>? properties;
 
   GeoJsonFeature({
-    this.building_ID,
+    this.buildingId,
     this.id,
     required this.geometry,
     this.properties,
@@ -36,7 +34,7 @@ class GeoJsonFeature {
 
   factory GeoJsonFeature.fromJson(Map<String, dynamic> json) {
     return GeoJsonFeature(
-      building_ID: json["building_ID"]?.toString(),
+      buildingId: json["building_ID"]?.toString(),
       id: json['id']?.toString(),
       geometry: GeoJsonGeometry.fromJson(json['geometry']),
       properties: json['properties'] as Map<String, dynamic>?,
@@ -138,7 +136,7 @@ class GeoJsonPolygon {
     final ring = coords[0] as List; // First ring (outer boundary)
 
     return GeoJsonPolygon(
-      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.building_ID),
+      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId),
       points: ring.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],
@@ -167,7 +165,7 @@ class GeoJsonPolyline {
     final coords = feature.geometry.coordinates as List;
 
     return GeoJsonPolyline(
-      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.building_ID),
+      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId),
       points: coords.map((coord) => MapLocation(
         latitude: coord[1],
         longitude: coord[0],
@@ -179,7 +177,7 @@ class GeoJsonPolyline {
 
 class GeoJsonMarker {
   final String id;
-  final MapLocation position;
+  MapLocation position;
   final String? title;
   final String? snippet;
   final String? assetPath; // Add icon name/identifier
@@ -201,7 +199,7 @@ class GeoJsonMarker {
     this.priority,
     this.properties,
     this.imageSize,
-    this.textVisibility,
+    this.textVisibility = false,
     this.compassBasedRotation = false,
     this.anchor
   });
@@ -215,15 +213,17 @@ class GeoJsonMarker {
     final asset = RenderingUtilities.getAssetForLandmark(feature.properties);
     String? assetPath;
     String? iconName;
-    bool getTextVisibility = false;
+    bool? getTextVisibility;
+    Offset? anchor;
     if(asset != null){
       assetPath = asset.assetPath;
       iconName = assetPath.split('/').last.split('.').first;
       getTextVisibility = asset.textVisibility;
+      anchor = asset.anchor;
     }
 
     return GeoJsonMarker(
-      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.building_ID, polyId:feature.properties?["polyId"]),
+      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:feature.properties?["polyId"]),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
       title: feature.properties?["name"],
       snippet: "",
@@ -231,7 +231,8 @@ class GeoJsonMarker {
       iconName: iconName,
       properties: feature.properties,
       textVisibility: getTextVisibility,
-      priority: false
+      priority: false,
+      anchor: anchor
     );
   }
 }

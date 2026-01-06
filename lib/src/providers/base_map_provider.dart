@@ -30,6 +30,8 @@ abstract class BaseMapProvider {
 
   Future<void> localizeUser(dynamic controller, GeoJsonMarker marker);
 
+  Future<void> moveUser(dynamic controller, String id, MapLocation location);
+
   /// Remove a marker from the map
   Future<void> removeMarker(dynamic controller, String markerId);
 

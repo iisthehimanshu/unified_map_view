@@ -187,6 +187,13 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> moveMarker(String id, MapLocation location) async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.moveUser(_currentMapController, id, location);
+    }
+    notifyListeners();
+  }
+
   /// Remove a marker from the map
   Future<void> removeMarker(String markerId) async {
     _markers.removeWhere((m) => m.id == markerId);
@@ -439,6 +446,11 @@ class UnifiedMapController extends ChangeNotifier {
 
   void localizeUser(User user) async {
     await _annotationController.localizeUser(user);
+    notifyListeners();
+  }
+
+  Future<void> moveUser(MapLocation location) async {
+    await _annotationController.moveUser(location);
     notifyListeners();
   }
 

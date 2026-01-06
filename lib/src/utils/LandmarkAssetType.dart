@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 enum LandmarkAssetType {
   lift,
   stairs,
@@ -78,10 +80,37 @@ enum LandmarkAssetType {
 
       case LandmarkAssetType.user:
         return false;
-        
+
       case LandmarkAssetType.source:
       case LandmarkAssetType.destination:
         return true;
+    }
+  }
+
+  Offset get anchor {
+    switch (this) {
+      case LandmarkAssetType.lift:
+      case LandmarkAssetType.stairs:
+      case LandmarkAssetType.escalator:
+      case LandmarkAssetType.entrance:
+      case LandmarkAssetType.user:
+      case LandmarkAssetType.source:
+      case LandmarkAssetType.destination:
+        return const Offset(0.5, 0.5);
+
+      case LandmarkAssetType.washroom:
+      case LandmarkAssetType.femaleWashroom:
+      case LandmarkAssetType.maleWashroom:
+      case LandmarkAssetType.accessibleWashroom:
+        return const Offset(0.5, 1.0);
+
+      case LandmarkAssetType.cafeteria:
+      case LandmarkAssetType.room:
+      case LandmarkAssetType.genericMarker:
+      case LandmarkAssetType.waterFountain:
+      case LandmarkAssetType.floorConnection:
+      case LandmarkAssetType.emergency:
+        return const Offset(0.5, 0.5);
     }
   }
 
