@@ -87,7 +87,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.emergency:
         return 0.3;
       case LandmarkAssetType.source:
-        return 0.3;
+        return 0.03;
       case LandmarkAssetType.destination:
         return 0.3;
       case LandmarkAssetType.floorConnection:
@@ -95,7 +95,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.emergency:
         return 0.3;
       case LandmarkAssetType.user:
-        return 0.3;
+        return 2;
     }
   }
 }

@@ -1,11 +1,14 @@
 // lib/src/providers/google_map_provider.dart
-
 import 'dart:io';
-
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:unified_map_view/src/utils/UnifiedMarkerCreator.dart';
+import 'package:unified_map_view/src/utils/geoJson/predefined_markers.dart';
+import 'package:unified_map_view/src/utils/mapCalculations.dart';
+import '../../unified_map_view.dart';
 import '../models/camera_position.dart';
+import '../models/selectedLocation.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -18,6 +21,11 @@ class GoogleMapProvider extends BaseMapProvider {
   final Set<Polygon> _polygons = {};
   final Set<Polyline> _polylines = {};
   GoogleMapController? _controller;
+
+  SelectedLocation? selectedLocation;
+
+  late MapConfig _config;
+
 
   @override
   Widget buildMap({required MapConfig config}) {
@@ -40,6 +48,7 @@ class GoogleMapProvider extends BaseMapProvider {
       polylines: _polylines,
       onMapCreated: (GoogleMapController controller) {
         _controller = controller;
+        _config = config;
         config.onMapCreated(controller);
       },
       onCameraIdle: () async {
@@ -148,7 +157,9 @@ class GoogleMapProvider extends BaseMapProvider {
         title: marker.title,
         snippet: marker.snippet,
       ),
-      onTap: (){},
+      onTap: (){
+        print("marker tap");
+      },
       anchor: markerIconWithAnchor.anchor
     );
   }
@@ -183,6 +194,13 @@ class GoogleMapProvider extends BaseMapProvider {
         strokeWidth: 2,
         strokeColor: stroke,
         fillColor: fill,
+        consumeTapEvents: true,
+        onTap: (){
+          final polygonId = _extractPolygonIdFromTap(polygon.id);
+          if(polygonId != null){
+            selectLocation(controller,polygonId);
+          }
+        }
       ),
     );
   }
@@ -205,7 +223,6 @@ class GoogleMapProvider extends BaseMapProvider {
     });
   }
 
-
   @override
   Future<void> clearPolygons(dynamic controller) async {
     _polygons.clear();
@@ -213,20 +230,25 @@ class GoogleMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
+    print("addPolyline ${StackTrace.current}");
     bool isWaypoint = false;
     if(polyline.properties?["lineCategory"] != null){
       isWaypoint = polyline.properties!["lineCategory"].toLowerCase() == "waypoint" ;
-    }else{
+    }
+    if (polyline.properties?["polygonType"] != null) {
       isWaypoint = polyline.properties!["polygonType"].toLowerCase() == "waypoints" ;
     }
 
-    _polylines.add(Polyline(
+    if (isWaypoint) return;
+
+    _polylines.add(
+        Polyline(
       polylineId: PolylineId(polyline.id),
       points: polyline.points
           .map((p) => LatLng(p.latitude, p.longitude))
           .toList(),
-      width: 1,
-      color: Color(0xfffa9b9c9),
+      color: Colors.blueAccent,
+      width: 8,
         patterns: [
           if(isWaypoint)PatternItem.dash(
               Platform.isIOS ? 2 : 10), // length of each dash
@@ -238,7 +260,10 @@ class GoogleMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removePolyline(dynamic controller, String polylineId) async {
+    print("removePolyline${_polylines.length}");
     _polylines.removeWhere((p) => p.polylineId.value.contains(polylineId));
+    print("removePolyline1${_polylines.length}");
+
   }
 
   @override
@@ -247,51 +272,331 @@ class GoogleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) {
-    // TODO: implement addPolygons
-    throw UnimplementedError();
+  Future<void> addPolygons(controller, List<GeoJsonPolygon> polygons) async {
+    for (final polygon in polygons) {
+      await addPolygon(controller, polygon);
+    }
+  }
+
+  String? _extractPolygonIdFromTap(String key) {
+    var keyMap = GeoJsonUtils.extractKeyValueMap(key);
+    if(keyMap["id"] != null) return keyMap["id"];
+    return null;
   }
 
   @override
-  Future<void> selectLocation(controller, String polyID) {
-    // TODO: implement selectLocation
-    throw UnimplementedError();
+  Future<void> selectLocation(controller, String polyID) async {
+    if (controller is! GoogleMapController) {
+      print('Error: Invalid controller type');
+      return;
+    }
+    if (polyID.isEmpty) {
+      print('Error: polyID cannot be empty');
+      return;
+    }
+
+    // Deselect previous location if exists
+    if (selectedLocation != null) {
+      await deSelectLocation(controller);
+    }
+
+    // try {
+      if (_polygons.isEmpty) {
+        print('Error: No polygons available to select');
+        return;
+      }
+
+      // Find the polygon
+      final polygon = _polygons.firstWhere(
+            (p) => p.polygonId.value.contains(polyID),
+        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+      );
+
+      // Validate coordinates
+      if (polygon.points.isEmpty) {
+        print('Error: No coordinates found for polygon: ${polygon.polygonId}');
+        return;
+      }
+
+      if (polygon.points.length < 3) {
+        print('Error: Polygon must have at least 3 points: ${polygon.polygonId}');
+        return;
+      }
+
+      final List<MapLocation> mapLocations = polygon.points.map((latLng) {
+        return MapLocation(
+          latitude: latLng.latitude,
+          longitude: latLng.longitude,
+        );
+      }).toList();
+
+      print("mapLocations${mapLocations}");
+      // Trigger callback
+      _config.onPolygonTap?.call(
+        coordinates: mapLocations,
+        polygonId: polyID,
+      );
+
+      // Calculate bounds
+      double minLat = polygon.points.first.latitude;
+      double maxLat = polygon.points.first.latitude;
+      double minLng = polygon.points.first.longitude;
+      double maxLng = polygon.points.first.longitude;
+
+      for (final point in polygon.points) {
+        if (point.latitude < -90 || point.latitude > 90) {
+          print('Warning: Invalid latitude ${point.latitude}');
+          continue;
+        }
+        if (point.longitude < -180 || point.longitude > 180) {
+          print('Warning: Invalid longitude ${point.longitude}');
+          continue;
+        }
+
+        minLat = min(minLat, point.latitude);
+        maxLat = max(maxLat, point.latitude);
+        minLng = min(minLng, point.longitude);
+        maxLng = max(maxLng, point.longitude);
+      }
+
+      // Calculate center
+      final centerLat = (minLat + maxLat) / 2;
+      final centerLng = (minLng + maxLng) / 2;
+
+      if (centerLat.isNaN || centerLng.isNaN || centerLat.isInfinite || centerLng.isInfinite) {
+        print('Error: Invalid center coordinates calculated');
+        return;
+      }
+
+      // Store selected location BEFORE updating polygon state (to preserve original)
+      selectedLocation = SelectedLocation(
+        polyID: polyID,
+        polygon: polygon,
+        marker: null,
+      );
+
+      // Update polygon selection state (this will highlight it)
+      await _updatePolygonSelectionState(controller, polygon.polygonId, true);
+
+      // Handle existing marker
+      Marker? existingMarker;
+      try {
+        existingMarker = _markers.firstWhere(
+              (m) => m.markerId.value.contains(polyID),
+        );
+
+        // Store the existing marker's info
+        if (existingMarker != null) {
+          // Remove the existing marker
+          _markers.removeWhere((m) => m.markerId.value.contains(polyID));
+        }
+      } catch (e) {
+        print('No existing marker found for polyID: $polyID');
+      }
+
+      // Add a selection marker at the center of the polygon
+      try {
+        final centerMarker = GeoJsonMarker(
+          id: 'selected_$polyID',
+          position: MapLocation(
+            latitude: centerLat,
+            longitude: centerLng,
+          ),
+          title: 'Selected',
+          priority: true,
+        );
+        
+        await addMarker(controller, PredefinedMarkers.getGenericMarker(centerMarker));
+      } catch (e) {
+        print('Error adding center marker: $e');
+      }
+
+      // Animate camera
+      try {
+        final latSpan = maxLat - minLat;
+        final lngSpan = maxLng - minLng;
+        final maxSpan = max(latSpan, lngSpan);
+
+        double targetZoom = 20.0;
+        if (maxSpan > 0.01) targetZoom = 15.0;
+        if (maxSpan > 0.1) targetZoom = 12.0;
+        if (maxSpan > 1.0) targetZoom = 8.0;
+
+        await controller.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(centerLat, centerLng),
+            targetZoom,
+          ),
+        );
+      } catch (e) {
+        print('Warning: Failed to animate camera: $e');
+      }
+    // } catch (e, stackTrace) {
+    //   print('Error selecting location: $e');
+    //   print('Stack trace: $stackTrace');
+    //   selectedLocation = null;
+    // }
+  }
+
+  Future<void> _updatePolygonSelectionState(
+      GoogleMapController controller,
+      PolygonId polygonId,
+      bool isSelected,
+      ) async {
+    // Find the polygon to update
+    final polygon = _polygons.firstWhere(
+          (p) => p.polygonId == polygonId,
+      orElse: () => throw Exception('Polygon not found'),
+    );
+
+    // Remove the old polygon
+    _polygons.removeWhere((p) => p.polygonId == polygonId);
+
+    if (isSelected) {
+      // Add highlighted version with green colors
+      _polygons.add(
+        Polygon(
+          polygonId: polygon.polygonId,
+          points: polygon.points,
+          strokeWidth: 1,
+          strokeColor: Colors.blue, // Dark green stroke
+          fillColor: Colors.lightBlueAccent.withOpacity(0.3), // Light green fill with transparency
+          consumeTapEvents: polygon.consumeTapEvents,
+          geodesic: polygon.geodesic,
+          visible: polygon.visible,
+          zIndex: polygon.zIndex + 10, // Ensure it's on top
+        ),
+      );
+    } else {
+      // Add back the original polygon
+      _polygons.add(polygon);
+    }
   }
 
   @override
-  Future<void> deSelectLocation(controller) {
-    // TODO: implement deSelectLocation
-    throw UnimplementedError();
+  Future<void> deSelectLocation(dynamic controller) async {
+    if (controller is! GoogleMapController) {
+      print('Error: Invalid controller type in deSelectLocation');
+      return;
+    }
+
+    if (selectedLocation == null) {
+      return;
+    }
+
+    final polyID = selectedLocation!.polyID;
+
+    if (polyID.isEmpty) {
+      print('Error: polyID is empty in selectedLocation');
+      selectedLocation = null;
+      return;
+    }
+
+    try {
+      // Find the original polygon
+      final originalPolygon = selectedLocation!.polygon as Polygon?;
+      if (originalPolygon == null) {
+        print('Error: Original polygon not found');
+        selectedLocation = null;
+        return;
+      }
+
+      // Restore the original polygon (remove highlighted version and add original back)
+      _polygons.removeWhere((p) => p.polygonId.value.contains(polyID));
+      _polygons.add(originalPolygon);
+
+      // Remove the selection marker
+      try {
+        _markers.removeWhere((m) => m.markerId.value.contains('selected_$polyID'));
+      } catch (e) {
+        print('Error removing selection marker: $e');
+      }
+
+      // Restore original marker if it existed
+      try {
+        final marker = selectedLocation?.marker;
+        if (marker != null && marker is GeoJsonMarker) {
+          await removeMarker(controller, polyID);
+          await addMarker(controller, marker);
+        }
+      } catch (e) {
+        print('Error restoring original marker: $e');
+      }
+
+      selectedLocation = null;
+    } catch (e, stackTrace) {
+      print('Error deselecting location: $e');
+      print('Stack trace: $stackTrace');
+      selectedLocation = null;
+    }
   }
 
   @override
-  Future<void> zoom(controller, {double zoom = 0.0}) {
-    // TODO: implement zoomOut
-    throw UnimplementedError();
+  Future<void> zoom(controller, {double zoom = 0.0}) async {
+    if (controller is GoogleMapController && _controller != null) {
+      try {
+        // Get current visible region to calculate center
+        final bounds = await _controller!.getVisibleRegion();
+        final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+        final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+        // Get current zoom level (approximate based on visible region)
+        final latDiff = bounds.northeast.latitude - bounds.southwest.latitude;
+        final currentZoom = MapCalculations.approximateZoomLevel(latDiff);
+
+        // Apply zoom delta
+        final newZoom = currentZoom + zoom;
+
+        await controller.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(centerLat, centerLng),
+            newZoom.clamp(0.0, 21.0), // Google Maps zoom range
+          ),
+        );
+      } catch (e) {
+        print("Error during zoom: $e");
+      }
+    }
   }
 
   @override
-  Future<void> zoomTo(controller, double zoom) {
-    // TODO: implement zoomTo
-    throw UnimplementedError();
+  Future<void> zoomTo(controller, double zoom) async {
+    if (controller is GoogleMapController && _controller != null) {
+      try {
+        // Get current visible region to maintain center position
+        final bounds = await _controller!.getVisibleRegion();
+        final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+        final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+
+        await controller.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(centerLat, centerLng),
+            zoom.clamp(0.0, 21.0),
+          ),
+        );
+      } catch (e) {
+        print("Error during zoomTo: $e");
+      }
+    }
   }
 
   @override
-  Future<void> addPolylines(controller, List<GeoJsonPolyline> polylines) {
-    // TODO: implement addPolylines
-    throw UnimplementedError();
+  Future<void> addPolylines(controller, List<GeoJsonPolyline> polylines) async {
+    for (final polyline in polylines) {
+      await addPolyline(controller, polyline);
+    }
   }
 
   @override
-  Future<void> addMarkers(controller, List<GeoJsonMarker> marker) {
-    // TODO: implement addMarkers
-    throw UnimplementedError();
+  Future<void> addMarkers(controller, List<GeoJsonMarker> marker) async {
+    for (final singleMarker in marker) {
+      await addMarker(controller, singleMarker);
+    }
   }
 
   @override
   Future<void> fitCameraToLine(controller, GeoJsonPolyline polyline) {
-    // TODO: implement fitCameraToLine
-    throw UnimplementedError();
+
   }
 
 }

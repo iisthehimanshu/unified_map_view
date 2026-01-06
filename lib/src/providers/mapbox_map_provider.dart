@@ -10,12 +10,14 @@ import '../../unified_map_view.dart';
 import '../models/camera_position.dart';
 import '../models/selectedLocation.dart';
 import '../utils/LandmarkAssetType.dart';
+import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/predefined_markers.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
+import 'dart:ui' as ui;
 
 /// Mapbox implementation of BaseMapProvider
 class MapboxMapProvider extends BaseMapProvider {
@@ -35,6 +37,7 @@ class MapboxMapProvider extends BaseMapProvider {
   final Map<String, GeoJsonPolyline> _polylines = {};
 
   SelectedLocation? selectedLocation;
+  late MapConfig _config;
 
   @override
   Widget buildMap({
@@ -42,8 +45,10 @@ class MapboxMapProvider extends BaseMapProvider {
     return MapWidget(       
       onMapCreated: (mapboxMap) async {
         config.onMapCreated(mapboxMap);
+        _config = config;
         _mapboxMap = mapboxMap;
          await _initMarkerLayer(mapboxMap);
+         await _initPolylineLayers(mapboxMap);
          mapboxMap.setOnMapTapListener((value) async {
            print("🟢 Map tapped at: ${value.point.coordinates.lat}, ${value.point.coordinates.lng}");
            final screenCoordinate = await mapboxMap.pixelForCoordinate(value.point);
@@ -70,7 +75,6 @@ class MapboxMapProvider extends BaseMapProvider {
                if(coordinates.length == 1){
                  config.onPolygonTap!(coordinates: polygonPoints, polygonId: value.queriedFeature.feature['id']!.toString());
                  var keyMap = GeoJsonUtils.extractKeyValueMap(value.queriedFeature.feature['id'].toString());
-                 print("keyMap $keyMap");
                  if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
                  selectLocation(mapboxMap,keyMap["id"]!);
                }
@@ -129,6 +133,7 @@ class MapboxMapProvider extends BaseMapProvider {
         return;
       }
 
+
       final polygonEntry = _polygons.entries.firstWhere(
             (entry) => entry.key.contains(polyID),
         orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
@@ -145,6 +150,10 @@ class MapboxMapProvider extends BaseMapProvider {
         return;
       }
 
+      _config.onPolygonTap?.call(
+        coordinates: polygon.points,
+        polygonId: polyID,
+      );
       // Calculate bounds and center
       double minLat = coordinates.first.latitude;
       double maxLat = coordinates.first.latitude;
@@ -201,7 +210,7 @@ class MapboxMapProvider extends BaseMapProvider {
         textVisibility: false
       );
       final marker = PredefinedMarkers.getGenericMarker(_markers[polyID]??landmarkMarker);
-      await removeMarker(controller, polyID);
+      await removeMarker(controller, "landmark_");
       await addMarker(controller, marker);
 
       // Store for deselection
@@ -344,7 +353,7 @@ class MapboxMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is! MapboxMap) return;
-    if (marker.properties == null || marker.properties!["polyId"] == null) return;
+
     _markers[marker.id] = marker;
     if(marker.assetPath != null && marker.iconName != null) await _loadMarkerIcon(controller, marker);
 
@@ -355,28 +364,48 @@ class MapboxMapProvider extends BaseMapProvider {
     // }
   }
 
-  Future<void> _loadMarkerIcon(MapboxMap mapboxMap, GeoJsonMarker marker) async {
-    try {
+  final creator = UnifiedMarkerCreator();
 
-      final bytes = await rootBundle.load(marker.assetPath??"");
-      final list = bytes.buffer.asUint8List();
-      final image = await decodeImageFromList(list);
+  Future<bool> _loadMarkerIcon(MapboxMap mapboxMap, GeoJsonMarker marker) async {
+    try {
+      ui.Size size = marker.imageSize?? ui.Size(25, 25);
+      size = ui.Size(size.width * 0.4, size.height * 0.4);
+
+      MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
+        imageSize: size,
+        fontSize: 8.5,
+        text: marker.assetPath != null ? "" : marker.title ?? "",
+        imageSource: marker.assetPath,
+        layout: MarkerLayout.horizontal,
+        textFormat: TextFormat.smartWrap,
+        textColor: const Color(0xff000000),
+      );
+
+      final Uint8List iconBytes = markerIconWithAnchor.icon;
+
+      // Decode the image to get dimensions
+      final image = await decodeImageFromList(iconBytes);
+
+      // Get the scale factor from marker's iconSizeRatio (default to 1.0 if null)
+      final scale = marker.iconSizeRatio ?? 1.0;
 
       await mapboxMap.style.addStyleImage(
-        marker.iconName??"",
+        marker.id,  // Use marker.id instead of marker.iconName
         1.0,
         MbxImage(
           width: image.width,
           height: image.height,
-          data: list,
+          data: iconBytes,
         ),
         false,
         [],
         [],
         null,
       );
+      return true;
     } catch (e) {
-      print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
+      print('Error creating marker icon: $e');
+      return false;
     }
   }
 
@@ -398,8 +427,7 @@ class MapboxMapProvider extends BaseMapProvider {
         },
         'properties': {
           'title': marker.textVisibility == true ? marker.title : "",
-          'icon': marker.iconName,
-          'iconSize': marker.iconSizeRatio,
+          'icon': marker.id,
           'isPriority': marker.priority ?? false,  // This determines which layer renders it
         },
       };
@@ -626,7 +654,9 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
+    print("addPolyline${StackTrace.current}");
     if (controller is! MapboxMap) return;
+    print("addPolyline1");
 
     bool isWaypoint = false;
     if (polyline.properties?["lineCategory"] != null) {
@@ -637,6 +667,7 @@ class MapboxMapProvider extends BaseMapProvider {
     }
 
     if (isWaypoint) return;
+    print("addPolyline2");
 
     try {
       _polylines[polyline.id] = polyline;
@@ -718,6 +749,58 @@ class MapboxMapProvider extends BaseMapProvider {
     await _updatePolylineSource(controller);
   }
 
+  Future<void> _initPolylineLayers(MapboxMap mapboxMap) async {
+    print("_initPolylineLayers${StackTrace.current}");
+    final style = mapboxMap.style;
+
+    // Create GeoJSON source for polylines
+    if (!await style.styleSourceExists(_polylineSourceId)) {
+      await style.addSource(
+        GeoJsonSource(
+          id: _polylineSourceId,
+          data: jsonEncode({
+            'type': 'FeatureCollection',
+            'features': [],
+          }),
+        ),
+      );
+    }
+
+    // Add path polyline layer (for special "path" lines)
+    if (!await style.styleLayerExists(_pathPolylineLayerId)) {
+      await style.addLayerAt(
+        LineLayer(
+          id: _pathPolylineLayerId,
+          sourceId: _polylineSourceId,
+          lineColorExpression: ['literal', '#448AFF'],
+          lineWidth: 4.0,
+          lineOcclusionOpacity: 1.0,
+          filter: ['==', ['get', 'isPath'], true],
+        ),
+        LayerPosition(above: _normalMarkerLayerId),
+      );
+    }
+
+    // Add normal polyline layer
+    if (!await style.styleLayerExists(_normalPolylineLayerId)) {
+      await style.addLayerAt(
+        LineLayer(
+          id: _normalPolylineLayerId,
+          sourceId: _polylineSourceId,
+          lineColorExpression: ['get', 'strokeColor'],
+          lineWidthExpression: ['get', 'strokeWidth'],
+          lineOpacityExpression: ['get', 'strokeOpacity'],
+          filter: ['!=', ['get', 'isPath'], true],
+        ),
+        LayerPosition(above: _normalMarkerLayerId),
+      );
+    }
+
+    if (_polylines.isNotEmpty) {
+      await _updatePolylineSource(mapboxMap);
+    }
+  }
+
   Future<void> _updatePolylineSource(MapboxMap mapboxMap) async {
     final style = mapboxMap.style;
 
@@ -735,6 +818,8 @@ class MapboxMapProvider extends BaseMapProvider {
         },
         'properties': {
           'id': line.id,
+          'type': 'default',
+          'isSelected': false,
           'strokeColor': line.properties?['strokeColor'] ?? '#000000',
           'strokeWidth': line.properties?['strokeWidth'] ?? 2.0,
           'strokeOpacity': line.properties?['strokeOpacity'] ?? 1.0,
@@ -849,17 +934,23 @@ class MapboxMapProvider extends BaseMapProvider {
       infiniteBounds: false,
     );
 
+    final cameraOptions = await controller.cameraForCoordinateBounds(
+      bounds,
+      MbxEdgeInsets(
+        top: 50,
+        left: 50,
+        bottom: 50,
+        right: 50,
+      ),
+      null, // bearing
+      null,
+      null,
+      null
+      // pitch
+    );
     // Animate camera to fit bounds
     await controller.flyTo(
-      CameraOptions(
-        // bounds: CameraOptions(bounds: bounds),
-        padding: MbxEdgeInsets(
-          top: 50,
-          left: 50,
-          bottom: 50,
-          right: 50,
-        ),
-      ),
+      cameraOptions,
       MapAnimationOptions(duration: 1000),
     );
   }

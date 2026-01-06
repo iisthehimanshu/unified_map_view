@@ -23,4 +23,12 @@ class MapCalculations{
 
   static double _degToRad(double deg) => deg * (3.141592653589793 / 180);
 
+  // Helper method to approximate zoom level from latitude difference
+  static double approximateZoomLevel(double latDiff) {
+    // Approximate formula: zoom ≈ log2(360 / latDiff)
+    // This is a rough estimate; actual zoom may vary
+    if (latDiff <= 0) return 21.0;
+    return (Math.log(360 / latDiff) / Math.ln2).clamp(0.0, 21.0);
+  }
+
 }
