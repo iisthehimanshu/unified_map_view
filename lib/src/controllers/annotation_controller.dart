@@ -23,6 +23,8 @@ class AnnotationController{
 
   User? _user;
 
+  List<MapLocation>? _pinSelectionLocation;
+
   AnnotationController(this._unifiedMapController, {required String venueName}){
     _setVenue(venueName);
   }
@@ -55,6 +57,18 @@ class AnnotationController{
     _unifiedMapController.removeMarker(buildingID);
     var floorData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
     await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
+  }
+
+  Future<void> switchToLocationFloor(String polyId) async {
+    GeoJsonFeature? feature = _venueData.findLocation(polyId);
+    if(feature == null) return;
+
+    int? floor = feature.properties?["floor"];
+    String? buildingID = feature.buildingId;
+
+    if(floor != null && buildingID != null){
+      await changeBuildingFloor(buildingID, floor);
+    }
   }
 
   List<int>? returnFocusedBuildingFloors(){
@@ -121,7 +135,7 @@ class AnnotationController{
           );
           await _unifiedMapController.fitCameraToLine(polyline);
           await _unifiedMapController.addPolyline(polyline);
-          annotatePathMarkers(path);
+          _annotatePathMarkers(path);
         }
       });
     });
@@ -129,7 +143,7 @@ class AnnotationController{
     return true;
   }
 
-  void annotatePathMarkers(List<Cell> path){
+  void _annotatePathMarkers(List<Cell> path){
     for (var cell in path) {
       if(cell.isDestination){
         _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
@@ -143,8 +157,45 @@ class AnnotationController{
     }
   }
 
-  void annotatePinSelectionLandmarks(){
+  Future<void> annotatePinSelectionLandmarks(List<MapLocation> locations, String buildingID, int floor) async {
+    _pinSelectionLocation = locations;
+    await changeBuildingFloor(buildingID, floor);
+    for (var location in locations) {
+      String id = GeoJsonUtils.buildKey(buildingID: buildingID, floor: floor.toString(), id: location.id??"optionPinSelection");
+      GeoJsonMarker marker = PredefinedMarkers.getOptionPinSelectionMarker(location, id);
+      await _unifiedMapController.addMarker(marker);
+    }
+  }
 
+  Future<void> selectPinSelectionLandmark(MapLocation selectedLocation, String buildingID, int floor) async {
+    if(selectedLocation.id == null) return;
+
+    if(_pinSelectionLocation != null && _pinSelectionLocation!.isNotEmpty){
+      for (var location in _pinSelectionLocation!) {
+        if(location.id == null) continue;
+        _unifiedMapController.removeMarker(location.id!);
+        if(location.id!.toLowerCase().contains(selectedLocation.id!)) continue;
+        String id = GeoJsonUtils.buildKey(buildingID: buildingID, floor: floor.toString(), id: location.id??"optionPinSelection");
+        GeoJsonMarker marker = PredefinedMarkers.getOptionPinSelectionMarker(location, id);
+        await _unifiedMapController.addMarker(marker);
+      }
+    }
+
+    String id = GeoJsonUtils.buildKey(buildingID: buildingID, floor: floor.toString(), id: selectedLocation.id??"selectedPinSelection");
+    GeoJsonMarker marker = PredefinedMarkers.getSelectedPinSelectionMarker(selectedLocation, id);
+    await _unifiedMapController.addMarker(marker);
+  }
+
+  Future<void> clearPinSelectionLandmarks() async {
+    await _unifiedMapController.removeMarker("optionPinSelection");
+    await _unifiedMapController.removeMarker("selectedPinSelection");
+    if(_pinSelectionLocation != null && _pinSelectionLocation!.isNotEmpty){
+      for (var location in _pinSelectionLocation!) {
+        if(location.id == null) continue;
+        await _unifiedMapController.removeMarker(location.id!);
+      }
+    }
+    _pinSelectionLocation = null;
   }
 
   Future<void> localizeUser(User user) async {

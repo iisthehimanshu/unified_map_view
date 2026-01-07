@@ -115,6 +115,15 @@ class VenueData{
     return _getFeaturesForBuildingAndFloor(buildingId, floor);
   }
 
+  GeoJsonFeature? findLocation(String polyId){
+    GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
+    if (model.data == null) return null;
+
+    final feature = model.data!.firstWhere((feature)=>(feature.id == polyId || feature.properties?["polyId"] == polyId));
+
+    return GeoJsonFeature.fromJson(feature.toJson());
+  }
+
   void findBuildingCenters() {
     buildingCenters.clear();
 
@@ -132,8 +141,5 @@ class VenueData{
       buildingCenters[building.id] = MapLocation(latitude: lat, longitude: lng);
     }
   }
-
-
-
 
 }

@@ -265,7 +265,7 @@ class UnifiedMapController extends ChangeNotifier {
     // for (var polyline in polylines) {
     //   await addPolyline(polyline);
     // }
-    addPolylines(polylines);
+    await addPolylines(polylines);
 
     // Add markers from Point features
     final markers = GeoJsonLoader.extractMarkers(collection);
@@ -279,6 +279,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> selectLocation({required String polyID}) async {
     if (_currentMapController != null) {
+      await _annotationController.switchToLocationFloor(polyID);
       await currentProviderImplementation.selectLocation(_currentMapController, polyID);
     }
     notifyListeners();
@@ -464,6 +465,21 @@ class UnifiedMapController extends ChangeNotifier {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }
     await _annotationController.annotatePath(sourceFloor);
+    notifyListeners();
+  }
+
+  Future<void> annotatePinSelectionLandmarks({required List<MapLocation> locations, required String bid, required int floor}) async {
+    await _annotationController.annotatePinSelectionLandmarks(locations, bid, floor);
+    notifyListeners();
+  }
+
+  Future<void> selectPinSelectionLandmarks({required MapLocation location, required String bid, required int floor}) async {
+    await _annotationController.selectPinSelectionLandmark(location, bid, floor);
+    notifyListeners();
+  }
+
+  Future<void> clearPinSelectionLandmarks() async {
+    await _annotationController.clearPinSelectionLandmarks();
     notifyListeners();
   }
 

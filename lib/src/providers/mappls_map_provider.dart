@@ -811,6 +811,8 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> selectLocation(controller, String polyID) async {
+    if(selectedLocation?.polyID == polyID) return;
+    print("selectLocation $polyID ${selectedLocation?.polyID} ${StackTrace.current}");
     if (controller is! MapplsMapController) {
       print('Error: Invalid controller type');
       return;
@@ -823,6 +825,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
     // Deselect previous location if exists
     if (selectedLocation != null) {
+      print("selectedLocation is ${selectedLocation.toString()}");
       await deSelectLocation(controller);
     }
 
@@ -854,6 +857,9 @@ class MapplsMapProvider extends BaseMapProvider {
       // Try to find marker
       try {
         if (_symbols.isNotEmpty) {
+          _symbols.forEach((symbol){
+            print("_symbols ${symbol.id}");
+          });
           marker = _symbols.firstWhere(
                 (m) => m.id.contains(polyID),
             orElse: () => throw Exception('Marker not found'),
@@ -867,19 +873,6 @@ class MapplsMapProvider extends BaseMapProvider {
       if (polygon == null && marker == null) {
         print('Error: Neither polygon nor marker found for polyID: $polyID');
         return;
-      }
-
-      // Trigger callback if polygon exists
-      if (polygon != null) {
-        _config.onPolygonTap?.call(
-          coordinates: polygon.points,
-          polygonId: polyID,
-        );
-      }else if(marker != null){
-        _config.onMarkerTap?.call(
-          coordinates: marker.position,
-          markerId: polyID,
-        );
       }
 
       // Calculate bounds and center
@@ -962,6 +955,21 @@ class MapplsMapProvider extends BaseMapProvider {
         } catch (e) {
           print('Warning: Failed to animate camera: $e');
         }
+      }
+
+      print("selectedLocation ${selectedLocation.toString()}");
+
+      // Trigger callback if polygon exists
+      if (polygon != null) {
+        _config.onPolygonTap?.call(
+          coordinates: polygon.points,
+          polygonId: polyID,
+        );
+      }else if(marker != null){
+        _config.onMarkerTap?.call(
+          coordinates: marker.position,
+          markerId: polyID,
+        );
       }
     } catch (e, stackTrace) {
       print('Error selecting location: $e');

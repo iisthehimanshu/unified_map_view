@@ -109,6 +109,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.user:
         return const Offset(0.51, 0.785);
 
+      case LandmarkAssetType.genericMarker:
       case LandmarkAssetType.washroom:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
@@ -118,7 +119,6 @@ enum LandmarkAssetType {
 
       case LandmarkAssetType.cafeteria:
       case LandmarkAssetType.room:
-      case LandmarkAssetType.genericMarker:
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:

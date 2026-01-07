@@ -21,4 +21,9 @@ class SelectedLocation{
     _polygon = polygon;
     _polyID = polyID;
   }
+
+  @override
+  String toString() {
+    return 'SelectedLocation{_polyID: $_polyID, _polygon: $_polygon, _marker: $_marker}';
+  }
 }
