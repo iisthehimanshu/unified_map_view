@@ -2,10 +2,10 @@
 
 import 'dart:async';
 import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mappls_gl/mappls_gl.dart';
+import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../utils/UnifiedMarkerCreator.dart';
@@ -66,13 +66,40 @@ class MapplsMapProvider extends BaseMapProvider {
         enablePolylineLayers(controller);
 
         // Handle polygon taps
-        controller.onFeatureTapped.add((id, point, coordinates) {
-          print("id $id $point $coordinates");
-            // Extract polygon ID from the feature
-            final polygonId = _extractPolygonIdFromTap(id);
-            if (polygonId != null && !polygonId.toLowerCase().contains("boundary")) {
-              selectLocation(controller, polygonId);
+        controller.onFeatureTapped.add((id, point, coordinates) async {
+          print("onFeatureTapped id $id $point $coordinates");
+
+          try {
+            // Query rendered features at the tap point for marker layers
+            final markerFeatures = await controller.queryRenderedFeatures(
+              point, [_normalMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
+            );
+
+            if (markerFeatures.isNotEmpty) {
+              // Marker was tapped
+              final feature = markerFeatures.first;
+              print("feature $feature ${feature['properties']?['id']}");
+              final id = _extractPolygonIdFromTap(feature['properties']?['id']);
+              print("Marker tapped with ID: $id");
+
+              // Handle marker tap
+              if (id != null) {
+                selectLocation(controller, id);
+                return; // Exit early, don't process as polygon
+              }
             }
+
+            // If no marker was found, check for polygon tap
+            if (id.isNotEmpty) {
+              final polygonId = _extractPolygonIdFromTap(id);
+              if (polygonId != null && !polygonId.toLowerCase().contains("boundary")) {
+                selectLocation(controller, polygonId);
+              }
+            }
+
+          } catch (e) {
+            print("Error handling feature tap: $e");
+          }
         });
       },
       onCameraIdle: () async {
@@ -136,7 +163,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<MapLocation?> getCurrentLocation(dynamic controller) async {
     if (controller is MapplsMapController) {
       try {
-        final cameraPosition = await controller.cameraPosition;
+        final cameraPosition = controller.cameraPosition;
         if (cameraPosition == null) return null;
         return MapLocation(
           latitude: cameraPosition.target.latitude,
@@ -179,7 +206,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
 
-      var markerIconWithAnchor = await _loadMarkerIcon(controller, marker);
+      await _loadMarkerIcon(controller, marker);
       _symbols.add(marker);
       try{
         setGeoJsonSource(controller, _symbols, _clusterSourceId);
@@ -194,7 +221,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
     if (controller is MapplsMapController) {
       for (var marker in markers) {
-        var markerIconWithAnchor = await _loadMarkerIcon(controller, marker);
+        await _loadMarkerIcon(controller, marker);
         _symbols.add(marker);
       }
       try{
@@ -246,8 +273,6 @@ class MapplsMapProvider extends BaseMapProvider {
       final features = symbols.map((marker) {
         // Get anchor and size
         final anchor = marker.anchor ?? const Offset(0.5, 1.0);
-        final size = marker.imageSize ?? const Size(25, 25);
-
         // Calculate pixel offset from center
         // (0.5, 0.5) = [0, 0] (no offset, centered)
         // (0.5, 1.0) = [0, height/2] (bottom anchor)
@@ -400,7 +425,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'type': type ?? 'default',
           'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
           'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillOpacity': fillColor.opacity,
+          'fillOpacity': fillColor.a,
           'isSelected': false,
           'boundary' : polygon.id.toLowerCase().contains("boundary")
         }
@@ -447,7 +472,6 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
-    print("addPolyline ${StackTrace.current}");
     if (controller is MapplsMapController) {
       bool isWaypoint = false;
       if (polyline.properties?["lineCategory"] != null) {
@@ -673,7 +697,6 @@ class MapplsMapProvider extends BaseMapProvider {
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
     } catch (e) {
-      rethrow;
       print('Error enabling clustering: $e');
     }
   }
@@ -781,6 +804,7 @@ class MapplsMapProvider extends BaseMapProvider {
   /// Extract polygon ID from tap coordinates
   String? _extractPolygonIdFromTap(String key) {
     var keyMap = GeoJsonUtils.extractKeyValueMap(key);
+    if(keyMap["polyId"] != null) return keyMap["polyId"];
     if(keyMap["id"] != null) return keyMap["id"];
     return null;
   }
@@ -803,116 +827,141 @@ class MapplsMapProvider extends BaseMapProvider {
     }
 
     try {
-      if (_polygons.isEmpty) {
-        print('Error: No polygons available to select');
-        return;
-      }
+      GeoJsonPolygon? polygon;
+      GeoJsonMarker? marker;
 
-      // Find the polygon
-      final polygon = _polygons.firstWhere(
-            (p) => p.id.contains(polyID),
-        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
-      );
+      // Try to find polygon
+      try {
+        if (_polygons.isNotEmpty) {
+          polygon = _polygons.firstWhere(
+                (p) => p.id.contains(polyID),
+            orElse: () => throw Exception('Polygon not found'),
+          );
 
-      // Validate coordinates
-      if (polygon.points.isEmpty) {
-        print('Error: No coordinates found for polygon: ${polygon.id}');
-        return;
-      }
-
-      if (polygon.points.length < 3) {
-        print('Error: Polygon must have at least 3 points: ${polygon.id}');
-        return;
-      }
-
-      // Trigger callback
-      _config.onPolygonTap?.call(
-        coordinates: polygon.points,
-        polygonId: polyID,
-      );
-
-      // Calculate bounds
-      double minLat = polygon.points.first.latitude;
-      double maxLat = polygon.points.first.latitude;
-      double minLng = polygon.points.first.longitude;
-      double maxLng = polygon.points.first.longitude;
-
-      for (final point in polygon.points) {
-        if (point.latitude < -90 || point.latitude > 90) {
-          print('Warning: Invalid latitude ${point.latitude}');
-          continue;
+          // Validate polygon coordinates
+          if (polygon.points.isEmpty) {
+            print('Warning: No coordinates found for polygon: ${polygon.id}');
+            polygon = null;
+          } else if (polygon.points.length < 3) {
+            print('Warning: Polygon must have at least 3 points: ${polygon.id}');
+            polygon = null;
+          }
         }
-        if (point.longitude < -180 || point.longitude > 180) {
-          print('Warning: Invalid longitude ${point.longitude}');
-          continue;
-        }
-
-        minLat = min(minLat, point.latitude);
-        maxLat = max(maxLat, point.latitude);
-        minLng = min(minLng, point.longitude);
-        maxLng = max(maxLng, point.longitude);
+      } catch (e) {
+        print('No polygon found for polyID: $polyID - $e');
       }
 
-      // Calculate center
-      final centerLat = (minLat + maxLat) / 2;
-      final centerLng = (minLng + maxLng) / 2;
-
-      if (centerLat.isNaN || centerLng.isNaN || centerLat.isInfinite || centerLng.isInfinite) {
-        print('Error: Invalid center coordinates calculated');
-        return;
-      }
-
-      // Update polygon selection state in source
-      await _updatePolygonSelectionState(controller, polygon.id, true);
-
-      // Store selected location
-      selectedLocation = SelectedLocation(
-        polyID: polyID,
-        polygon: polygon,
-        marker: null,
-      );
-
-      // Handle marker
+      // Try to find marker
       try {
         if (_symbols.isNotEmpty) {
-          final marker = _symbols.firstWhere(
+          marker = _symbols.firstWhere(
                 (m) => m.id.contains(polyID),
             orElse: () => throw Exception('Marker not found'),
           );
-
-          selectedLocation?.setLocation(
-            polyID: polyID,
-            polygon: polygon,
-            marker: marker,
-          );
-
-          final genericMarker = PredefinedMarkers.getGenericMarker(marker);
-          await removeMarker(controller, polyID);
-          await addMarker(controller, genericMarker);
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
       }
 
-      // Animate camera
-      try {
-        final latSpan = maxLat - minLat;
-        final lngSpan = maxLng - minLng;
-        final maxSpan = max(latSpan, lngSpan);
+      // Check if we found at least one
+      if (polygon == null && marker == null) {
+        print('Error: Neither polygon nor marker found for polyID: $polyID');
+        return;
+      }
 
-        double targetZoom = 20.0;
-        if (maxSpan > 0.01) targetZoom = 15.0;
-        if (maxSpan > 0.1) targetZoom = 12.0;
-        if (maxSpan > 1.0) targetZoom = 8.0;
-
-        await controller.animateCamera(
-          CameraUpdate.newLatLngZoom(
-            LatLng(centerLat, centerLng),
-            targetZoom,
-          ),
+      // Trigger callback if polygon exists
+      if (polygon != null) {
+        _config.onPolygonTap?.call(
+          coordinates: polygon.points,
+          polygonId: polyID,
         );
-      } catch (e) {
-        print('Warning: Failed to animate camera: $e');
+      }else if(marker != null){
+        _config.onMarkerTap?.call(
+          coordinates: marker.position,
+          markerId: polyID,
+        );
+      }
+
+      // Calculate bounds and center
+      MapLocation? center;
+      double? targetZoom;
+
+      if (polygon != null && polygon.points.isNotEmpty) {
+        // Calculate from polygon bounds
+        double minLat = polygon.points.first.latitude;
+        double maxLat = polygon.points.first.latitude;
+        double minLng = polygon.points.first.longitude;
+        double maxLng = polygon.points.first.longitude;
+
+        for (final point in polygon.points) {
+          if (point.latitude < -90 || point.latitude > 90) {
+            print('Warning: Invalid latitude ${point.latitude}');
+            continue;
+          }
+          if (point.longitude < -180 || point.longitude > 180) {
+            print('Warning: Invalid longitude ${point.longitude}');
+            continue;
+          }
+
+          minLat = min(minLat, point.latitude);
+          maxLat = max(maxLat, point.latitude);
+          minLng = min(minLng, point.longitude);
+          maxLng = max(maxLng, point.longitude);
+        }
+
+        final centerLat = (minLat + maxLat) / 2;
+        final centerLng = (minLng + maxLng) / 2;
+
+        if (!centerLat.isNaN && !centerLng.isNaN &&
+            !centerLat.isInfinite && !centerLng.isInfinite) {
+          center = MapLocation(latitude: centerLat, longitude: centerLng);
+
+          // Calculate zoom based on polygon size
+          final latSpan = maxLat - minLat;
+          final lngSpan = maxLng - minLng;
+          final maxSpan = max(latSpan, lngSpan);
+
+          targetZoom = 20.0;
+          if (maxSpan > 0.01) targetZoom = 15.0;
+          if (maxSpan > 0.1) targetZoom = 12.0;
+          if (maxSpan > 1.0) targetZoom = 8.0;
+        }
+      } else if (marker != null) {
+        // Use marker position if polygon not available
+        center = marker.position;
+        targetZoom = 22.0; // Default zoom for marker-only view
+      }
+
+      // Update polygon selection state if polygon exists
+      if (polygon != null) {
+        await _updatePolygonSelectionState(controller, polygon.id, true);
+      }
+
+      // Handle marker styling if marker exists
+      if (marker != null) {
+        try {
+          final genericMarker = PredefinedMarkers.getGenericMarker(marker);
+          await removeMarker(controller, polyID);
+          await addMarker(controller, genericMarker);
+        } catch (e) {
+          print('Warning: Failed to update marker styling: $e');
+        }
+      }
+
+      // Store selected location
+      selectedLocation = SelectedLocation(
+        polyID: polyID,
+        polygon: polygon,
+        marker: marker,
+      );
+
+      // Animate camera if we have a valid center
+      if (center != null && targetZoom != null) {
+        try {
+          animateCamera(controller, center, targetZoom);
+        } catch (e) {
+          print('Warning: Failed to animate camera: $e');
+        }
       }
     } catch (e, stackTrace) {
       print('Error selecting location: $e');
@@ -928,7 +977,7 @@ class MapplsMapProvider extends BaseMapProvider {
       bool isSelected,
       ) async {
     // Update the polygon's isSelected property in the list
-    final index = _polygons.indexWhere((p) => p.id == polygonId);
+    final index = _polygons.indexWhere((p) => p.id.toLowerCase().contains(polygonId.toLowerCase()));
     if (index == -1) return;
 
     // Rebuild the GeoJSON with updated selection state
@@ -963,7 +1012,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'type': type ?? 'default',
           'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
           'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillOpacity': fillColor.opacity,
+          'fillOpacity': fillColor.a,
           'isSelected': polygon.id == polygonId ? isSelected : false,
         }
       };
@@ -979,12 +1028,14 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   /// Deselect a polygon and restore its original colors
+  @override
   Future<void> deSelectLocation(dynamic controller) async {
     if (controller is! MapplsMapController) {
       print('Error: Invalid controller type in deSelectLocation');
       return;
     }
 
+    print("selectedLocation $selectedLocation");
     if (selectedLocation == null) {
       return;
     }
@@ -1099,6 +1150,25 @@ class MapplsMapProvider extends BaseMapProvider {
         bottom: 50,
       ),
     );
+  }
+
+  @override
+  Future<void> fitCameraToBounds(controller, CameraBound bound) async {
+    final bounds = LatLngBounds(
+      southwest: LatLng(bound.southwest.latitude, bound.southwest.longitude),
+      northeast: LatLng(bound.northeast.latitude, bound.northeast.longitude),
+    );
+
+    await controller.animateCamera(
+      CameraUpdate.newLatLngBounds(
+        bounds,
+        left: 50,    // Edge padding in pixels
+        top: 50,
+        right: 50,
+        bottom: 50,
+      ),
+    );
+
   }
 
 }

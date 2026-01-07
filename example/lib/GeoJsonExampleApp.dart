@@ -110,7 +110,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                 ElevatedButton.icon(
                   onPressed: _isLoading
                       ? null
-                      : () => _unifiedMapController.clearAllGeoJsonFeatures(),
+                      : () => _unifiedMapController.deSelectLocation(),
                   icon: const Icon(Icons.clear),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,

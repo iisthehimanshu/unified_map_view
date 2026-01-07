@@ -162,6 +162,15 @@ class UnifiedMapController extends ChangeNotifier {
     );
   }
 
+  /// Animate camera to a fit bound
+  Future<void> fitCameraToBounds(CameraBound bound) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.fitCameraToBounds(
+      _currentMapController,
+      bound
+    );
+  }
+
   /// Add a marker to the map
   Future<void> addMarker(GeoJsonMarker marker) async {
     _markers.add(marker);
@@ -278,7 +287,6 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> deSelectLocation() async {
     if (_currentMapController != null) {
       await currentProviderImplementation.deSelectLocation(_currentMapController);
-      clearPath();
     }
     notifyListeners();
   }
@@ -405,15 +413,29 @@ class UnifiedMapController extends ChangeNotifier {
       if (point.longitude > maxLng) maxLng = point.longitude;
     }
 
-    // Calculate center
-    final centerLat = (minLat + maxLat) / 2;
-    final centerLng = (minLng + maxLng) / 2;
-
     // Move to center
-    await animateCamera(
-      MapLocation(latitude: centerLat, longitude: centerLng),
-      zoom: 10.0, // You may want to calculate zoom based on bounds
-    );
+    try{
+      // Add padding to the bounds (adjust these values as needed)
+      final latPadding = (maxLat - minLat) * 0.1; // 10% padding
+      final lngPadding = (maxLng - minLng) * 0.1;
+
+      // Create bounds with padding
+      final bounds = CameraBound(
+        southwest: MapLocation(latitude: minLat - latPadding, longitude: minLng - lngPadding),
+        northeast: MapLocation(latitude: maxLat + latPadding, longitude: maxLng + lngPadding),
+      );
+
+      await fitCameraToBounds(bounds);
+    }catch(e){
+      // Calculate center
+      final centerLat = (minLat + maxLat) / 2;
+      final centerLng = (minLng + maxLng) / 2;
+
+      await animateCamera(
+        MapLocation(latitude: centerLat, longitude: centerLng),
+        zoom: 10.0, // You may want to calculate zoom based on bounds
+      );
+    }
   }
 
   /// Annotation Controller
@@ -437,6 +459,7 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   Future<void> annotatePath({required List<String> bids, required int sourceFloor}) async {
+    deSelectLocation();
     for (var bid in bids) {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }

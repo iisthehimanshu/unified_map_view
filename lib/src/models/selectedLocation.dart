@@ -14,6 +14,9 @@ class SelectedLocation{
   String get polyID => _polyID;
 
   void setLocation({required String polyID, required dynamic polygon, required dynamic marker}){
+    if (polygon == null && marker == null) {
+      throw ArgumentError('Both polygon and marker cannot be null at the same time');
+    }
     _marker = marker;
     _polygon = polygon;
     _polyID = polyID;

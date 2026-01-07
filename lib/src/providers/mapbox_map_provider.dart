@@ -6,6 +6,7 @@ import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
+import 'package:unified_map_view/src/models/CameraBound.dart';
 import '../../unified_map_view.dart';
 import '../models/camera_position.dart';
 import '../models/selectedLocation.dart';
@@ -961,6 +962,12 @@ class MapboxMapProvider extends BaseMapProvider {
   @override
   Future<void> moveUser(controller, String id, MapLocation location) {
     // TODO: implement moveMarker
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> fitCameraToBounds(controller, CameraBound bound) {
+    // TODO: implement fitCameraToBounds
     throw UnimplementedError();
   }
 

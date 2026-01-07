@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/utils/UnifiedMarkerCreator.dart';
 import 'package:unified_map_view/src/utils/geoJson/predefined_markers.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
@@ -608,6 +609,12 @@ class GoogleMapProvider extends BaseMapProvider {
   @override
   Future<void> moveUser(controller, String id, MapLocation location) {
     // TODO: implement moveMarker
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> fitCameraToBounds(controller, CameraBound bound) {
+    // TODO: implement fitCameraToBounds
     throw UnimplementedError();
   }
 

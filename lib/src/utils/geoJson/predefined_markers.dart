@@ -14,7 +14,7 @@ class PredefinedMarkers{
         iconName: "Generic Marker",
         properties: marker.properties,
         priority: true,
-      anchor: Offset(0.5, 1.0)
+      anchor: LandmarkAssetType.genericMarker.anchor
     );
   }
 
@@ -28,7 +28,7 @@ class PredefinedMarkers{
         iconName: "User",
         priority: true,
         imageSize: Size(35, 35),
-      anchor: Offset(0.5, 0.829),
+      anchor: LandmarkAssetType.user.anchor,
       compassBasedRotation: true
     );
   }
@@ -42,8 +42,8 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.source.assetPath,
         iconName: "source",
         priority: true,
-        imageSize: Size(15, 15),
-        anchor: Offset(0.5, 0.5)
+        imageSize: Size(14, 14),
+        anchor: LandmarkAssetType.source.anchor
     );
   }
 
@@ -57,7 +57,7 @@ class PredefinedMarkers{
         iconName: "Destination",
         priority: true,
         imageSize: Size(30, 30),
-        anchor: Offset(0.5, 1.0)
+        anchor: LandmarkAssetType.destination.anchor
     );
   }
 
@@ -70,7 +70,33 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.floorConnection.assetPath,
         iconName: "Floor Connection",
         priority: true,
-        anchor: Offset(0.5, 0.5)
+        anchor: LandmarkAssetType.floorConnection.anchor
+    );
+  }
+
+  static GeoJsonMarker getOptionPinSelectionMarker(MapLocation location, String id){
+    return GeoJsonMarker(
+        id: id,
+        position: location,
+        title: "",
+        snippet: "",
+        assetPath: LandmarkAssetType.optionPinSelection.assetPath,
+        iconName: "Option Pin Selection",
+        priority: true,
+        anchor: LandmarkAssetType.optionPinSelection.anchor
+    );
+  }
+
+  static GeoJsonMarker getSelectedPinSelectionMarker(MapLocation location, String id){
+    return GeoJsonMarker(
+        id: id,
+        position: location,
+        title: "",
+        snippet: "",
+        assetPath: LandmarkAssetType.selectedPinSelection.assetPath,
+        iconName: "Selected Pin Selection",
+        priority: true,
+        anchor: LandmarkAssetType.selectedPinSelection.anchor
     );
   }
 }

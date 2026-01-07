@@ -1,7 +1,7 @@
 // lib/src/providers/base_map_provider.dart
 
 import 'package:flutter/widgets.dart';
-import '../models/camera_position.dart';
+import '../models/CameraBound.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
@@ -22,6 +22,8 @@ abstract class BaseMapProvider {
   Future<void> zoomTo(dynamic controller, double zoom);
 
   Future<void> fitCameraToLine(dynamic controller, GeoJsonPolyline polyline);
+
+  Future<void> fitCameraToBounds(dynamic controller, CameraBound bound);
 
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);

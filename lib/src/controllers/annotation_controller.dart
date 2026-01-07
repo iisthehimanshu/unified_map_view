@@ -48,6 +48,7 @@ class AnnotationController{
   }
 
   Future<void> changeBuildingFloor(String buildingID, int floor) async {
+    if(_venueData.selectedFloor[buildingID] == floor) return;
     _focusBuildingSelectedFloor = floor;
     _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
     _unifiedMapController.removePolyline(buildingID);
@@ -140,6 +141,10 @@ class AnnotationController{
         _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
       }
     }
+  }
+
+  void annotatePinSelectionLandmarks(){
+
   }
 
   Future<void> localizeUser(User user) async {

@@ -4,13 +4,16 @@ class MapLocation {
   final double latitude;
   final double longitude;
 
+  final String? id;
+
   const MapLocation({
     required this.latitude,
     required this.longitude,
+    this.id
   });
 
 
-  MapLocation.fromLatLng(LatLng position):latitude = position.latitude, longitude = position.longitude;
+  MapLocation.fromLatLng(LatLng position):latitude = position.latitude, longitude = position.longitude, id = null;
 
 
   @override
@@ -26,6 +29,8 @@ class MapLocation {
 
   @override
   String toString() {
-    return 'MapLocation{latitude: $latitude, longitude: $longitude}';
+    return 'MapLocation{latitude: $latitude, longitude: $longitude}'
+        '${id != null ? ', id: $id' : ''}';
+
   }
 }

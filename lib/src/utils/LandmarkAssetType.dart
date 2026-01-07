@@ -17,7 +17,9 @@ enum LandmarkAssetType {
   source,
   destination,
   floorConnection,
-  emergency;
+  emergency,
+  optionPinSelection,
+  selectedPinSelection;
 
   String get assetPath {
     switch (this) {
@@ -55,6 +57,10 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/lift.png';
       case LandmarkAssetType.emergency:
         return 'packages/unified_map_view/assets/markers/entry.png';
+      case LandmarkAssetType.optionPinSelection:
+        return 'packages/unified_map_view/assets/markers/option_pin_selection.png';
+      case LandmarkAssetType.selectedPinSelection:
+        return 'packages/unified_map_view/assets/markers/selected_pin_selection.png';
     }
   }
 
@@ -84,6 +90,10 @@ enum LandmarkAssetType {
       case LandmarkAssetType.source:
       case LandmarkAssetType.destination:
         return true;
+
+      case LandmarkAssetType.optionPinSelection:
+      case LandmarkAssetType.selectedPinSelection:
+        return false;
     }
   }
 
@@ -93,15 +103,17 @@ enum LandmarkAssetType {
       case LandmarkAssetType.stairs:
       case LandmarkAssetType.escalator:
       case LandmarkAssetType.entrance:
-      case LandmarkAssetType.user:
       case LandmarkAssetType.source:
-      case LandmarkAssetType.destination:
         return const Offset(0.5, 0.5);
+
+      case LandmarkAssetType.user:
+        return const Offset(0.51, 0.785);
 
       case LandmarkAssetType.washroom:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
       case LandmarkAssetType.accessibleWashroom:
+      case LandmarkAssetType.destination:
         return const Offset(0.5, 1.0);
 
       case LandmarkAssetType.cafeteria:
@@ -110,6 +122,10 @@ enum LandmarkAssetType {
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:
+        return const Offset(0.5, 0.5);
+
+      case LandmarkAssetType.optionPinSelection:
+      case LandmarkAssetType.selectedPinSelection:
         return const Offset(0.5, 0.5);
     }
   }
