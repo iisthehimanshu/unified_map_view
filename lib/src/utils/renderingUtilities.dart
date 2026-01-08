@@ -88,19 +88,35 @@ class RenderingUtilities{
     return "#bdbdbd";
   }
 
-  static LandmarkAssetType? getAssetForLandmark(Map<String, dynamic>? landmarkProperties) {
+  static LandmarkAssetType? getAssetForLandmark(
+      Map<String, dynamic>? landmarkProperties) {
     try {
       if (landmarkProperties == null) return null;
 
-      final element = landmarkProperties['element'] as Map<String, dynamic>?;
-      if (element == null) return null;
+      final isGlobal = landmarkProperties['global'] == true;
 
-      final type = element['type'] as String?;
-      final subType = element['subType'] as String?;
+      String? type;
+      String? subType;
 
-      // Handle FloorConnection type (Lifts, Stairs, etc.)
-      if (type == 'FloorConnection') {
-        switch (subType?.toLowerCase()) {
+      if (isGlobal) {
+        // 🔹 Global landmarks: type is directly available
+        type = landmarkProperties['type'] as String?;
+        subType = landmarkProperties['subType'] as String?;
+      } else {
+        // 🔹 Non-global landmarks: type inside element
+        final element = landmarkProperties['element'] as Map<String, dynamic>?;
+        if (element == null) return null;
+
+        type = element['type'] as String?;
+        subType = element['subType'] as String?;
+      }
+
+      type = type?.toLowerCase();
+      subType = subType?.toLowerCase();
+
+      // ================= Floor Connections =================
+      if (type == 'floorconnection' || type == 'stairs' || type == 'lift') {
+        switch (subType ?? type) {
           case 'lift':
           case 'elevator':
             return LandmarkAssetType.lift;
@@ -109,42 +125,37 @@ class RenderingUtilities{
             return LandmarkAssetType.stairs;
           case 'escalator':
             return LandmarkAssetType.escalator;
-          default:
-            return null;
         }
       }
 
-      // Handle Services type (Washrooms, etc.)
-      if (type == 'Services') {
-        switch (subType?.toLowerCase()) {
-          case 'restroom':
-          case 'washroom':
-          // Check washroom type from properties
-            final washroomType = landmarkProperties['washroomType'] as String?;
-            switch (washroomType?.toLowerCase()) {
-              case 'female':
-                return LandmarkAssetType.femaleWashroom;
-              case 'male':
-                return LandmarkAssetType.maleWashroom;
-              case 'unisex':
-              case 'accessible':
-                return LandmarkAssetType.accessibleWashroom;
-              default:
-                return LandmarkAssetType.washroom;
-            }
-          case 'water':
-          case 'waterfountain':
-            return LandmarkAssetType.waterFountain;
-          case 'cafe':
-          case 'cafeteria':
-            return LandmarkAssetType.cafeteria;
+      // ================= Services =================
+      if (type == 'services' ||
+          type == 'washroom' ||
+          type == 'restroom') {
+        final washroomType =
+        (landmarkProperties['washroomType'] ??
+            landmarkProperties['type'])
+            ?.toString()
+            .toLowerCase();
+
+        switch (washroomType) {
+          case 'male':
+          case 'male washroom':
+            return LandmarkAssetType.maleWashroom;
+          case 'female':
+          case 'female washroom':
+            return LandmarkAssetType.femaleWashroom;
+          case 'unisex':
+          case 'accessible':
+          case 'accessible washroom':
+            return LandmarkAssetType.accessibleWashroom;
           default:
-            return null;
+            return LandmarkAssetType.washroom;
         }
       }
 
-      // Handle other common types
-      switch (type?.toLowerCase()) {
+      // ================= Other Types =================
+      switch (type) {
         case 'room':
         case 'office':
           return LandmarkAssetType.room;
@@ -153,14 +164,20 @@ class RenderingUtilities{
           return LandmarkAssetType.entrance;
         case 'emergency':
           return LandmarkAssetType.emergency;
-        default:
-          return null;
+        case 'water':
+        case 'waterfountain':
+          return LandmarkAssetType.waterFountain;
+        case 'cafe':
+        case 'cafeteria':
+          return LandmarkAssetType.cafeteria;
       }
 
+      return null;
     } catch (e) {
-      print('Error extracting asset name: $e');
+      debugPrint('Error extracting asset name: $e');
       return null;
     }
   }
+
 
 }

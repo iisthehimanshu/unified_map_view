@@ -42,7 +42,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.cafeteria:
         return 'packages/unified_map_view/assets/markers/cafeteria.png';
       case LandmarkAssetType.room:
-        return 'packages/unified_map_view/assets/markers/room.png';
+        return 'packages/unified_map_view/assets/markers/generic_marker.png';
       case LandmarkAssetType.entrance:
         return 'packages/unified_map_view/assets/markers/building_entry.png';
       case LandmarkAssetType.genericMarker:
@@ -109,6 +109,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.user:
         return const Offset(0.51, 0.785);
 
+      case LandmarkAssetType.room:
       case LandmarkAssetType.genericMarker:
       case LandmarkAssetType.washroom:
       case LandmarkAssetType.femaleWashroom:
@@ -118,7 +119,6 @@ enum LandmarkAssetType {
         return const Offset(0.5, 1.0);
 
       case LandmarkAssetType.cafeteria:
-      case LandmarkAssetType.room:
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:

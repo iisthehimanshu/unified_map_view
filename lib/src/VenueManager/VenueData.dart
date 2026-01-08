@@ -6,6 +6,7 @@ import '../../unified_map_view.dart';
 
 class VenueData{
   VenueData._internal(this.venueName, this.json, this.buildingData) {
+    venueLatLng = MapLocation(latitude: buildingData.buildings!.first.coordinates.first, longitude: buildingData.buildings!.first.coordinates.last);
     extractBuildingWiseData(json);
     findBuildingCenters();
   }
