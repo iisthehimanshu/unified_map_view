@@ -95,81 +95,67 @@ class RenderingUtilities{
 
       final isGlobal = landmarkProperties['global'] == true;
 
-      String? type;
-      String? subType;
+      String? rawType;
 
       if (isGlobal) {
-        // 🔹 Global landmarks: type is directly available
-        type = landmarkProperties['type'] as String?;
-        subType = landmarkProperties['subType'] as String?;
+        // 🔹 Global landmarks: type is directly present
+        rawType = landmarkProperties['type'] as String?;
       } else {
-        // 🔹 Non-global landmarks: type inside element
         final element = landmarkProperties['element'] as Map<String, dynamic>?;
         if (element == null) return null;
-
-        type = element['type'] as String?;
-        subType = element['subType'] as String?;
+        rawType = element['subType'] ?? element['type'];
       }
 
-      type = type?.toLowerCase();
-      subType = subType?.toLowerCase();
+      if (rawType == null) return null;
+
+      final type = rawType.toLowerCase().trim();
+
+      // ================= Washrooms =================
+      if (type.contains('washroom') || type.contains('restroom')) {
+        var washroomType = landmarkProperties['washroomType']??type;
+        washroomType = washroomType.toLowerCase();
+        if (washroomType.contains('female')) {
+          return LandmarkAssetType.femaleWashroom;
+        }
+        if (washroomType.contains('male')) {
+          return LandmarkAssetType.maleWashroom;
+        }
+        if (washroomType.contains('unisex') || type.contains('accessible')) {
+          return LandmarkAssetType.accessibleWashroom;
+        }
+        return LandmarkAssetType.washroom;
+      }
 
       // ================= Floor Connections =================
-      if (type == 'floorconnection' || type == 'stairs' || type == 'lift') {
-        switch (subType ?? type) {
-          case 'lift':
-          case 'elevator':
-            return LandmarkAssetType.lift;
-          case 'stairs':
-          case 'staircase':
-            return LandmarkAssetType.stairs;
-          case 'escalator':
-            return LandmarkAssetType.escalator;
-        }
+      if (type.contains('lift') || type.contains('elevator')) {
+        return LandmarkAssetType.lift;
       }
-
-      // ================= Services =================
-      if (type == 'services' ||
-          type == 'washroom' ||
-          type == 'restroom') {
-        final washroomType =
-        (landmarkProperties['washroomType'] ??
-            landmarkProperties['type'])
-            ?.toString()
-            .toLowerCase();
-
-        switch (washroomType) {
-          case 'male':
-          case 'male washroom':
-            return LandmarkAssetType.maleWashroom;
-          case 'female':
-          case 'female washroom':
-            return LandmarkAssetType.femaleWashroom;
-          case 'unisex':
-          case 'accessible':
-          case 'accessible washroom':
-            return LandmarkAssetType.accessibleWashroom;
-          default:
-            return LandmarkAssetType.washroom;
-        }
+      if (type.contains('stairs') || type.contains('stair')) {
+        return LandmarkAssetType.stairs;
+      }
+      if (type.contains('escalator')) {
+        return LandmarkAssetType.escalator;
       }
 
       // ================= Other Types =================
-      switch (type) {
-        case 'room':
-        case 'office':
-          return LandmarkAssetType.room;
-        case 'entrance':
-        case 'exit':
-          return LandmarkAssetType.entrance;
-        case 'emergency':
-          return LandmarkAssetType.emergency;
-        case 'water':
-        case 'waterfountain':
-          return LandmarkAssetType.waterFountain;
-        case 'cafe':
-        case 'cafeteria':
-          return LandmarkAssetType.cafeteria;
+      if (type.contains('entrance') || type.contains('exit')) {
+        return LandmarkAssetType.mainEntry;
+      }
+      if (type.contains('room') || type.contains('office')) {
+        return null;
+        return LandmarkAssetType.room;
+      }
+      if (type.contains('cafeteria') || type.contains('cafe')) {
+        return LandmarkAssetType.cafeteria;
+      }
+      if (type.contains('water')) {
+        return LandmarkAssetType.waterFountain;
+      }
+      if (type.contains('emergency')) {
+        return LandmarkAssetType.emergency;
+      }
+      if (type.contains('door only')) {
+        return LandmarkAssetType.doorOnly;
       }
 
       return null;
@@ -178,6 +164,7 @@ class RenderingUtilities{
       return null;
     }
   }
+
 
 
 }

@@ -207,9 +207,12 @@ class GeoJsonMarker {
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
-    if (feature.properties?["type"] == "Centroid") return null;
+    if (feature.properties?["global"] == true && feature.properties?["type"] == "Centroid") return null;
 
-    final coords = feature.geometry.coordinates[0];
+    var coords = feature.geometry.coordinates[0];
+    if(feature.properties?["global"] == true && feature.properties?["centroid"] != null){
+      coords = feature.properties?["centroid"];
+    }
 
     final asset = RenderingUtilities.getAssetForLandmark(feature.properties);
     String? assetPath;
@@ -223,8 +226,19 @@ class GeoJsonMarker {
       anchor = asset.anchor;
     }
 
+    if(feature.id == "68c182af29a9f28e4785f595"){
+      print("RenderingUtilities.getAssetForLandmark(feature.properties); ${asset}");
+    }
+
+    String? polyId = feature.properties?["polyId"];
+    final associatedPolygons = feature.properties?['associatedPolygons'];
+    if (associatedPolygons is List && associatedPolygons.isNotEmpty) {
+      polyId = associatedPolygons.first;
+    }
+
+
     return GeoJsonMarker(
-      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:feature.properties?["polyId"]),
+      id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
       title: feature.properties?["name"],
       snippet: "",

@@ -419,7 +419,26 @@ class UnifiedMarkerCreator {
           return words[0];
         }
       case TextFormat.smartWrap:
-        final words = text.trim().split(RegExp(r'\s+'));
+        final rawWords = text.trim().split(RegExp(r'\s+'));
+        List<String> words = [];
+
+        for (int i = 0; i < rawWords.length; i++) {
+          // Case 1: already hyphenated like A-1 or Block-C
+          if (rawWords[i].contains('-')) {
+            words.add(rawWords[i]);
+            continue;
+          }
+
+          // Case 2: spaced hyphen like A - B or Cabin - 1
+          if (i + 2 < rawWords.length && rawWords[i + 1] == '-') {
+            words.add('${rawWords[i]} - ${rawWords[i + 2]}');
+            i += 2;
+            continue;
+          }
+
+          words.add(rawWords[i]);
+        }
+
         List<String> lines = [];
         int index = 0;
         bool isFirstWordNumber = words.isNotEmpty && RegExp(r'^\d+(/\d+)?$').hasMatch(words[0]);
