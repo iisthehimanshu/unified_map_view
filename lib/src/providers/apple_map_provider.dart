@@ -52,7 +52,7 @@ class AppleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom) async {
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt}) async {
     if (controller is AppleMapController) {
       await controller.animateCamera(
         CameraUpdate.newLatLngZoom(

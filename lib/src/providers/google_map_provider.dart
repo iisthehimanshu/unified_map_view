@@ -94,7 +94,7 @@ class GoogleMapProvider extends BaseMapProvider {
 
 
   @override
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom) async {
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt}) async {
     if (controller is GoogleMapController) {
       await controller.animateCamera(
         CameraUpdate.newLatLngZoom(

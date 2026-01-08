@@ -207,7 +207,12 @@ class GeoJsonMarker {
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
-    if (feature.properties?["global"] == true && feature.properties?["type"] == "Centroid") return null;
+    if (feature.properties?["global"] == true &&
+        feature.properties?["type"] == "Centroid" &&
+        feature.properties?["type"] == "BP" &&
+        feature.properties?["type"] == "Wall" &&
+        feature.properties?["polygonType"] == "Wall"
+    ) {return null;}
 
     var coords = feature.geometry.coordinates[0];
     if(feature.properties?["global"] == true && feature.properties?["centroid"] != null){

@@ -44,7 +44,7 @@ abstract class BaseMapProvider {
   Future<MapLocation?> getCurrentLocation(dynamic controller);
 
   /// Animate camera to location
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom);
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt});
 
   /// Set map style (if supported)
   Future<void> setMapStyle(dynamic controller, String? styleJson);

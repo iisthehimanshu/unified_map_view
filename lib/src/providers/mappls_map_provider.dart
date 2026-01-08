@@ -158,14 +158,27 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom) async {
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt}) async {
     if (controller is MapplsMapController) {
-      await controller.animateCamera(
-        CameraUpdate.newLatLngZoom(
-          LatLng(location.latitude, location.longitude),
-          zoom,
-        ),
-      );
+      if(bearing != null && tilt != null){
+        await controller.animateCamera(
+          CameraUpdate.newCameraPosition(
+            CameraPosition(target: LatLng(location.latitude, location.longitude), zoom: zoom, bearing: bearing, tilt: tilt)
+          ),
+        );
+      }else{
+        await controller.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(location.latitude, location.longitude),
+            zoom,
+          ),
+        );
+        if (bearing != null && tilt == null){
+          await controller.animateCamera(CameraUpdate.bearingTo(bearing));
+        }else if (tilt != null && bearing == null){
+          await controller.animateCamera(CameraUpdate.tiltTo(tilt));
+        }
+      }
     }
   }
 
