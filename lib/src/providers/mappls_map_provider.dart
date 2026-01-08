@@ -47,6 +47,10 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _pathLayerId = 'path-polyline-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
 
+  bool _isClusteringEnabled = false;
+  bool _isPolygonLayersEnabled = false;
+  bool _isPolylineLayersEnabled = false;
+
   @override
   Widget buildMap({required MapConfig config}) {
     return MapplsMap(
@@ -61,18 +65,15 @@ class MapplsMapProvider extends BaseMapProvider {
         _config = config;
         _controller = controller;
         config.onMapCreated(controller);
-        enableClustering(controller);
-        enablePolygonLayers(controller);
-        enablePolylineLayers(controller);
 
         // Handle polygon taps
         controller.onFeatureTapped.add((id, point, coordinates) async {
-          print("onFeatureTapped id $id $point $coordinates");
+          print("Mappls onFeatureTapped id $id $point $coordinates");
 
           try {
             // Query rendered features at the tap point for marker layers
             final markerFeatures = await controller.queryRenderedFeatures(
-              point, [_normalMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
+                point, [_normalMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
             );
 
             if (markerFeatures.isNotEmpty) {
@@ -102,6 +103,14 @@ class MapplsMapProvider extends BaseMapProvider {
           }
         });
       },
+        onStyleLoadedCallback: () async {
+          if (_controller != null) {
+            // Now initialize layers after style is loaded
+            await enableMarkerLayers(_controller!);
+            await enablePolygonLayers(_controller!);
+            await enablePolylineLayers(_controller!);
+          }
+        },
       onCameraIdle: () async {
         if (_controller != null) {
           try {
@@ -270,6 +279,12 @@ class MapplsMapProvider extends BaseMapProvider {
 
   Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, String sourceID) async {
     if (controller is MapplsMapController) {
+
+      if (!_isClusteringEnabled) {
+        print("Clustering not enabled yet");
+        return;
+      }
+
       final features = symbols.map((marker) {
         // Get anchor and size
         final anchor = marker.anchor ?? const Offset(0.5, 1.0);
@@ -345,8 +360,13 @@ class MapplsMapProvider extends BaseMapProvider {
       try {
         // Remove marker from the list
         _symbols.removeWhere((marker) => marker.id.toLowerCase().contains(markerId));
+        _rotatingSymbols.forEach((symbol){
+          print("_rotatingSymbols ${symbol.id}");
+        });
+        _rotatingSymbols.removeWhere((marker) => marker.id.toLowerCase().contains(markerId));
 
         setGeoJsonSource(controller, _symbols, _clusterSourceId);
+        setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
       } catch (e) {
         print('Error removing marker: $e');
       }
@@ -394,6 +414,10 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   Future<void> _updatePolygonSource(MapplsMapController controller) async {
+    if (!_isPolygonLayersEnabled) {
+      print("Polygon layers not enabled yet");
+      return;
+    }
     final features = _polygons.map((polygon) {
       final String? rawType = polygon.properties?["type"] ?? polygon.properties?["polygonType"];
       final String? type = rawType?.toLowerCase();
@@ -521,6 +545,10 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   Future<void> _updatePolylineSource(MapplsMapController controller) async {
+    if (!_isPolylineLayersEnabled) {
+      print("Polyline layers not enabled yet");
+      return;
+    }
     final features = _lines.map((line) {
       return {
         'type': 'Feature',
@@ -586,14 +614,14 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     try {
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
-        imageSize: marker.imageSize??const Size(25, 25),
-        fontSize: 8.5,
-        text: marker.assetPath != null ? "" : marker.title ?? "",
-        imageSource: marker.assetPath,
-        layout: MarkerLayout.horizontal,
-        textFormat: TextFormat.smartWrap,
-        textColor: const Color(0xff000000),
-        customAnchor: marker.anchor??Offset(0.5, 0.5),
+          imageSize: marker.imageSize??const Size(25, 25),
+          fontSize: 8.5,
+          text: marker.assetPath != null ? "" : marker.title ?? "",
+          imageSource: marker.assetPath,
+          layout: MarkerLayout.horizontal,
+          textFormat: TextFormat.smartWrap,
+          textColor: const Color(0xff000000),
+          customAnchor: marker.anchor??Offset(0.5, 0.5),
           expandCanvasForRotation: true
       );
       final Uint8List iconBytes = markerIconWithAnchor.icon;
@@ -606,7 +634,7 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> enableClustering(dynamic controller) async {
+  Future<void> enableMarkerLayers(dynamic controller) async {
     if (controller is! MapplsMapController) return;
 
     try {
@@ -650,30 +678,30 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Layer 2: Priority markers (rendered last, always visible)
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        _priorityMarkerLayerId,
-        SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 1.5,
-          iconOffset: ["get", "iconOffset"],
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: ["case", ["has", "icon"], "left", "center"],
-          textOffset: [
-            "case",
-            ["has", "icon"],
-            ["literal", [3.5, 0]],
-            ["literal", [0, 0]]
-          ],
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-        ),
-        filter: ["==", ["get", "isPriority"], true],
-        enableInteraction: true,
-        belowLayerId: _rotationMarkerLayerId
+          _clusterSourceId,
+          _priorityMarkerLayerId,
+          SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            iconOffset: ["get", "iconOffset"],
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: ["case", ["has", "icon"], "left", "center"],
+            textOffset: [
+              "case",
+              ["has", "icon"],
+              ["literal", [3.5, 0]],
+              ["literal", [0, 0]]
+            ],
+            iconAllowOverlap: true,
+            textAllowOverlap: true,
+          ),
+          filter: ["==", ["get", "isPriority"], true],
+          enableInteraction: true,
+          belowLayerId: _rotationMarkerLayerId
       );
 
       await controller.addSymbolLayer(
@@ -690,6 +718,8 @@ class MapplsMapProvider extends BaseMapProvider {
         enableInteraction: true,
         belowLayerId: _normalMarkerLayerId,
       );
+
+      _isClusteringEnabled = true;
 
       if(_symbols.isNotEmpty){
         List<GeoJsonMarker> symbols = [..._symbols];
@@ -750,6 +780,8 @@ class MapplsMapProvider extends BaseMapProvider {
         belowLayerId: _polylineLayerId,
       );
 
+      _isPolygonLayersEnabled = true;
+
       if (_polygons.isNotEmpty) {
         await _updatePolygonSource(controller);
       }
@@ -793,6 +825,8 @@ class MapplsMapProvider extends BaseMapProvider {
         belowLayerId: _rotationMarkerLayerId,
       );
 
+      _isPolylineLayersEnabled = true;
+
       if (_lines.isNotEmpty) {
         await _updatePolylineSource(controller);
       }
@@ -812,7 +846,6 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> selectLocation(controller, String polyID) async {
     if(selectedLocation?.polyID == polyID) return;
-    print("selectLocation $polyID ${selectedLocation?.polyID} ${StackTrace.current}");
     if (controller is! MapplsMapController) {
       print('Error: Invalid controller type');
       return;
@@ -857,9 +890,6 @@ class MapplsMapProvider extends BaseMapProvider {
       // Try to find marker
       try {
         if (_symbols.isNotEmpty) {
-          _symbols.forEach((symbol){
-            print("_symbols ${symbol.id}");
-          });
           marker = _symbols.firstWhere(
                 (m) => m.id.contains(polyID),
             orElse: () => throw Exception('Marker not found'),
@@ -956,8 +986,6 @@ class MapplsMapProvider extends BaseMapProvider {
           print('Warning: Failed to animate camera: $e');
         }
       }
-
-      print("selectedLocation ${selectedLocation.toString()}");
 
       // Trigger callback if polygon exists
       if (polygon != null) {
