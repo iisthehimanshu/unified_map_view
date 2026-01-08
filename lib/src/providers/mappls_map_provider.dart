@@ -258,38 +258,65 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> moveUser(controller, String id, MapLocation location) async {
     if(controller is MapplsMapController){
-      // Find and update the marker position in the list
       for (var marker in _rotatingSymbols) {
         if (marker.id.toLowerCase().contains(id)) {
-          // Update the position directly
-          marker.position = location;
+          await _animateMarkerToPosition(controller, marker, location);
           break;
         }
       }
-
-      // The compass listener will use the updated position automatically
-      // Force an immediate update of the source
-      final features = _rotatingSymbols.map((marker) => {
-        'type': 'Feature',
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [marker.position.longitude, marker.position.latitude],
-        },
-        'properties': {
-          'title': '',
-          'id': marker.id,
-          if(marker.iconName != null || true) 'icon': marker.id,
-          'isPriority': marker.priority ?? false,
-          'intractable': marker.properties?["polyId"] != null,
-          if(_currentHeading != null) "bearing": _currentHeading!
-        }
-      }).toList();
-
-      await controller.setGeoJsonSource(_rotationSourceId, {
-        "type": "FeatureCollection",
-        "features": features
-      });
     }
+  }
+
+
+  Future<void> _updateUserLocation(MapplsMapController controller) async {
+    final features = _rotatingSymbols.map((marker) => {
+      'type': 'Feature',
+      'geometry': {
+        'type': 'Point',
+        'coordinates': [marker.position.longitude, marker.position.latitude],
+      },
+      'properties': {
+        'title': '',
+        'id': marker.id,
+        if(marker.iconName != null || true) 'icon': marker.id,
+        'isPriority': marker.priority ?? false,
+        'intractable': marker.properties?["polyId"] != null,
+        if(_currentHeading != null) "bearing": _currentHeading!
+      }
+    }).toList();
+
+    await controller.setGeoJsonSource(_rotationSourceId, {
+      "type": "FeatureCollection",
+      "features": features
+    });
+  }
+
+  Future<void> _animateMarkerToPosition(
+      MapplsMapController controller,
+      GeoJsonMarker marker,
+      MapLocation targetLocation,
+      ) async {
+    const duration = Duration(milliseconds: 100);
+    const fps = 60;
+    final steps = (duration.inMilliseconds / (1000 / fps)).round();
+
+    final startLat = marker.position.latitude;
+    final startLng = marker.position.longitude;
+    final endLat = targetLocation.latitude;
+    final endLng = targetLocation.longitude;
+
+    for (int i = 1; i <= steps; i++) {
+      final progress = i / steps;
+      final currentLat = startLat + (endLat - startLat) * progress;
+      final currentLng = startLng + (endLng - startLng) * progress;
+
+      marker.position = MapLocation(latitude: currentLat, longitude: currentLng);
+      await _updateUserLocation(controller);
+      await Future.delayed(Duration(milliseconds: 1000 ~/ fps));
+    }
+
+    marker.position = targetLocation;
+    await _updateUserLocation(controller);
   }
 
   Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, String sourceID) async {
