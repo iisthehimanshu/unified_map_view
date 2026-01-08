@@ -119,8 +119,8 @@ class MapplsMapProvider extends BaseMapProvider {
 
             final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
             final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
-
             final cameraPos = _controller!.cameraPosition;
+            print("cameraPos ${cameraPos?.tilt} ${cameraPos?.bearing}");
             config.onCameraMove(UnifiedCameraPosition(
               mapLocation: MapLocation(
                 latitude: centerLat,
@@ -281,6 +281,7 @@ class MapplsMapProvider extends BaseMapProvider {
           if(marker.iconName != null || true) 'icon': marker.id,
           'isPriority': marker.priority ?? false,
           'intractable': marker.properties?["polyId"] != null,
+          if(_currentHeading != null) "bearing": _currentHeading!
         }
       }).toList();
 
@@ -335,11 +336,12 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   StreamSubscription<CompassEvent>? _compassSub;
+  double? _currentHeading;
   void _startCompassListening(MapplsMapController controller, String sourceID) {
     if(_compassSub != null) return;
     _compassSub = FlutterCompass.events?.listen((event) async {
       if (event.heading == null) return;
-
+      _currentHeading = event.heading;
       final cameraPos = controller.cameraPosition;
       if (cameraPos == null) return;
 

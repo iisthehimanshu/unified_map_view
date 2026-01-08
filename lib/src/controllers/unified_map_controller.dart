@@ -31,7 +31,7 @@ class UnifiedMapController extends ChangeNotifier {
     bool zoomControlsEnabled = true,
     bool rotateGesturesEnabled = true,
     bool scrollGesturesEnabled = true,
-    bool tiltGesturesEnabled = false,
+    bool tiltGesturesEnabled = true,
 
     Function ({required String markerId, required MapLocation coordinates})? onMarker,
     Function ({required String polygonId, required List<MapLocation> coordinates})? onPolygon,
@@ -159,6 +159,8 @@ class UnifiedMapController extends ChangeNotifier {
       _currentMapController,
       location,
       zoom ?? _config.initialLocation.zoom,
+      bearing: bearing,
+      tilt: tilt
     );
   }
 

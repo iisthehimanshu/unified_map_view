@@ -1,6 +1,7 @@
 // lib/src/models/geojson_models.dart
 
 import 'dart:ui';
+import 'dart:developer' as developer;
 import 'dart:convert';
 import '../../unified_map_view.dart';
 import '../utils/renderingUtilities.dart';
@@ -208,11 +209,15 @@ class GeoJsonMarker {
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
     if (feature.properties?["global"] == true &&
-        feature.properties?["type"] == "Centroid" &&
-        feature.properties?["type"] == "BP" &&
-        feature.properties?["type"] == "Wall" &&
-        feature.properties?["polygonType"] == "Wall"
-    ) {return null;}
+        (
+                feature.properties?["type"] == "Centroid" ||
+                feature.properties?["type"] == "BP" ||
+                feature.properties?["type"] == "Wall" ||
+                feature.properties?["polygonType"] == "Wall"
+        )
+    ) {
+      return null;
+    }
 
     var coords = feature.geometry.coordinates[0];
     if(feature.properties?["global"] == true && feature.properties?["centroid"] != null){

@@ -57,6 +57,10 @@ class AnnotationController{
     _unifiedMapController.removeMarker(buildingID);
     var floorData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
     await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
+    print(_user);
+    if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
+      localizeUser(_user!);
+    }
   }
 
   Future<void> switchToLocationFloor(String polyId) async {
