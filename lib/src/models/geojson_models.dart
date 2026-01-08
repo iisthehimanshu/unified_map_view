@@ -207,6 +207,7 @@ class GeoJsonMarker {
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
+    if (feature.properties?["type"] == "Centroid") return null;
 
     final coords = feature.geometry.coordinates[0];
 

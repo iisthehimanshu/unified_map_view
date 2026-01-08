@@ -106,9 +106,10 @@ class MapplsMapProvider extends BaseMapProvider {
         onStyleLoadedCallback: () async {
           if (_controller != null) {
             // Now initialize layers after style is loaded
-            await enableMarkerLayers(_controller!);
             await enablePolygonLayers(_controller!);
             await enablePolylineLayers(_controller!);
+            await enableMarkerLayers(_controller!);
+
           }
         },
       onCameraIdle: () async {
@@ -673,7 +674,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["!=", ["get", "isPriority"], true],
           enableInteraction: true,
-          belowLayerId: _priorityMarkerLayerId
+          belowLayerId: null
       );
 
       // Layer 2: Priority markers (rendered last, always visible)
@@ -701,7 +702,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["==", ["get", "isPriority"], true],
           enableInteraction: true,
-          belowLayerId: _rotationMarkerLayerId
+          belowLayerId: _normalMarkerLayerId
       );
 
       await controller.addSymbolLayer(
@@ -716,7 +717,7 @@ class MapplsMapProvider extends BaseMapProvider {
           iconAllowOverlap: true,
         ),
         enableInteraction: true,
-        belowLayerId: _normalMarkerLayerId,
+        belowLayerId: _priorityMarkerLayerId,
       );
 
       _isClusteringEnabled = true;
@@ -809,7 +810,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["!=", ["get", "path"], true],
         enableInteraction: true,
-        belowLayerId: _rotationMarkerLayerId, // ⬅️ BELOW MARKERS
+        belowLayerId: _normalMarkerLayerId, // ⬅️ BELOW MARKERS
       );
 
       await controller.addLineLayer(
@@ -822,7 +823,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["==", ["get", "path"], true],
         enableInteraction: true,
-        belowLayerId: _rotationMarkerLayerId,
+        belowLayerId: _normalMarkerLayerId,
       );
 
       _isPolylineLayersEnabled = true;
