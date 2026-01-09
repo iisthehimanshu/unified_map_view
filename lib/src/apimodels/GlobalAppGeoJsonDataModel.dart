@@ -1,5 +1,7 @@
 
 
+import 'dart:convert';
+
 class GlobalAppGeoJsonDataModel {
   String? message;
   List<GlobalAppGeoData>? data;
@@ -41,7 +43,7 @@ class GlobalAppGeoData {
 
   GlobalAppGeoData.fromJson(Map<dynamic, dynamic> json) {
     if(json['properties'] != null){
-      properties = json['properties'] as Map<String, dynamic>?;
+      properties = Map<String, dynamic>.from(jsonDecode(jsonEncode(json['properties'])));
     }else{
       print("json['properties'] is null");
     }

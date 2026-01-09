@@ -1211,4 +1211,10 @@ class MapboxMapProvider extends BaseMapProvider {
     );
   }
 
+  @override
+  Future<void> addCircle(controller, GeoJsonCircle circle) {
+    // TODO: implement addCircle
+    throw UnimplementedError();
+  }
+
 }

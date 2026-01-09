@@ -16,6 +16,7 @@ class UnifiedMapController extends ChangeNotifier {
   final Map<MapProvider, BaseMapProvider> _providers = {};
   dynamic _currentMapController;
   final Set<GeoJsonMarker> _markers = {};
+  final Set<GeoJsonCircle> _circles = {};
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _polylines = [];
   late UnifiedCameraPosition _cameraPosition;
@@ -169,6 +170,14 @@ class UnifiedMapController extends ChangeNotifier {
       _currentMapController,
       bound
     );
+  }
+
+  Future<void> addCircle(GeoJsonCircle circle) async {
+    _circles.add(circle);
+    if (_currentMapController != null) {
+      await currentProviderImplementation.addCircle(_currentMapController, circle);
+    }
+    notifyListeners();
   }
 
   /// Add a marker to the map

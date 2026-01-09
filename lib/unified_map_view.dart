@@ -2,6 +2,10 @@
 
 library unified_map_view;
 
+import 'package:hive/hive.dart';
+import 'package:hive_flutter/adapters.dart';
+import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
+
 // Enums
 export 'src/enums/map_provider.dart';
 
@@ -27,3 +31,23 @@ export 'src/providers/base_map_provider.dart';
 // Utilities
 export 'src/utils/geoJson/geojson_loader.dart';
 export 'src/utils/geoJson/geoJsonUtils.dart';
+
+class UnifiedMapViewPackage {
+  static bool _initialized = false;
+
+  static Future<void> initialize() async {
+    if (_initialized) return;
+
+    // Initialize Hive
+    await Hive.initFlutter();
+
+    // Register adapters
+    if (!Hive.isAdapterRegistered(0)) {
+      Hive.registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
+      await Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile');
+    }
+    _initialized = true;
+  }
+
+  static bool get isInitialized => _initialized;
+}

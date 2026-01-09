@@ -816,4 +816,10 @@ class GoogleMapProvider extends BaseMapProvider {
     _compassSub?.cancel();
   }
 
+  @override
+  Future<void> addCircle(controller, GeoJsonCircle circle) {
+    // TODO: implement addCircle
+    throw UnimplementedError();
+  }
+
 }
