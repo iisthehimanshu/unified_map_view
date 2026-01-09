@@ -496,6 +496,7 @@ class MapboxMapProvider extends BaseMapProvider {
 
     await _updateMarkerSource(controller);
     await _updateRotationMarkerSource(controller);
+    _animationTimer?.cancel();
 
     _stopCompassListening();
   }
@@ -1100,22 +1101,74 @@ class MapboxMapProvider extends BaseMapProvider {
     _compassSub = null;
   }
 
+  Timer? _animationTimer;
+
   @override
   Future<void> moveUser(dynamic controller, String id, MapLocation location) async {
     if (controller is! MapboxMap) return;
 
-    // Find and update the marker position in the rotation symbols map
-    final markerEntry = _rotatingSymbols.entries.firstWhere(
-          (entry) => entry.key.toLowerCase().contains(id.toLowerCase()),
-      orElse: () => throw Exception('Rotation marker not found'),
-    );
+    try {
+      // Find the marker in rotation symbols map
+      final markerEntry = _rotatingSymbols.entries.firstWhere(
+            (entry) => entry.key.toLowerCase().contains(id.toLowerCase()),
+        orElse: () => throw Exception('Rotation marker not found'),
+      );
 
-    final marker = markerEntry.value;
-    marker.position = location;
-    _rotatingSymbols[markerEntry.key] = marker;
+      final marker = markerEntry.value;
+      final startLocation = marker.position;
+      final endLocation = location;
 
-    // Update the source with new position
-    await _updateRotationMarkerSource(controller);
+      // Calculate animation parameters
+      const animationDuration = Duration(milliseconds: 500); // 1 second animation
+      const frameRate = 120; // 60 FPS
+      final totalFrames = (animationDuration.inMilliseconds / (1000 / frameRate)).round();
+
+      int currentFrame = 0;
+
+      // Cancel any existing animation
+      _animationTimer?.cancel();
+
+      // Start animation
+      _animationTimer = Timer.periodic(Duration(milliseconds: (1000 / frameRate).round()), (timer) async {
+        if (currentFrame >= totalFrames) {
+          timer.cancel();
+          // Set final position
+          marker.position = endLocation;
+          _rotatingSymbols[markerEntry.key] = marker;
+          await _updateRotationMarkerSource(controller);
+          return;
+        }
+
+        // Calculate interpolated position using easing function
+        final progress = currentFrame / totalFrames;
+        final easedProgress = _easeInOutCubic(progress);
+
+        final lat = _lerp(startLocation.latitude, endLocation.latitude, easedProgress);
+        final lng = _lerp(startLocation.longitude, endLocation.longitude, easedProgress);
+
+        // Update marker position
+        marker.position = MapLocation(latitude: lat, longitude: lng);
+        _rotatingSymbols[markerEntry.key] = marker;
+
+        await _updateRotationMarkerSource(controller);
+
+        currentFrame++;
+      });
+    } catch (e) {
+      print('Error animating user marker: $e');
+    }
+  }
+
+  /// Linear interpolation helper
+  double _lerp(double start, double end, double t) {
+    return start + (end - start) * t;
+  }
+
+  /// Ease-in-out cubic easing function for smooth animation
+  double _easeInOutCubic(double t) {
+    return t < 0.5
+        ? 4 * t * t * t
+        : 1 - pow(-2 * t + 2, 3) / 2;
   }
 
   @override
