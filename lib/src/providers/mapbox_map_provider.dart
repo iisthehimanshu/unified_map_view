@@ -1217,4 +1217,10 @@ class MapboxMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> removeCircle(controller, String id) {
+    // TODO: implement removeCircle
+    throw UnimplementedError();
+  }
+
 }

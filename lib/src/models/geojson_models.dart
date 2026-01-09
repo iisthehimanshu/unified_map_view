@@ -293,11 +293,13 @@ class GeoJsonMarker {
 class GeoJsonCircle {
   final String id;
   MapLocation position;
+  bool animated;
   final Map<String, dynamic>? properties;
 
   GeoJsonCircle({
     required this.id,
     required this.position,
+    this.animated = false,
     this.properties,
   });
 

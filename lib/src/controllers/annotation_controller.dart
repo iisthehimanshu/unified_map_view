@@ -1,4 +1,5 @@
 import 'package:turn_highlighter/turn_highlighter.dart';
+import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
 
 import '../../unified_map_view.dart';
@@ -57,6 +58,7 @@ class AnnotationController{
     _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
     _unifiedMapController.removePolyline(buildingID);
     _unifiedMapController.removeMarker(buildingID);
+    _unifiedMapController.removeCircle(buildingID);
     var floorData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
     await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
     print(_user);
@@ -145,7 +147,7 @@ class AnnotationController{
           var turnFeatures = turnFeaturesMap.map((element)=>GeoJsonPolyline.fromJson(element)).toList();
           await _unifiedMapController.fitCameraToLine(polyline);
           await _unifiedMapController.addPolyline(polyline);
-          await _unifiedMapController.addPolylines(turnFeatures);
+          // await _unifiedMapController.addPolylines(turnFeatures);
           _annotatePathMarkers(path);
         }
       });
@@ -210,15 +212,25 @@ class AnnotationController{
   }
 
   Future<void> localizeUser(User user) async {
+    await clearUser();
     _user = user;
     String id = GeoJsonUtils.buildKey(buildingID: user.bid, floor: user.floor.toString(), id: "user");
     GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
+    GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
     await changeBuildingFloor(user.bid, user.floor);
     await _unifiedMapController.removeMarker("user");
+    await _unifiedMapController.removeCircle("user");
     await _unifiedMapController.addUserMarker(userMarker);
+    await _unifiedMapController.addCircle(userCircle);
+  }
+
+  Future<void> clearUser() async {
+    _user = null;
+    await _unifiedMapController.removeMarker("user");
   }
 
   Future<void> moveUser(MapLocation location)async {
+    if(_user == null) return;
     _user?.location = location;
     await _unifiedMapController.moveMarker("user", location);
   }

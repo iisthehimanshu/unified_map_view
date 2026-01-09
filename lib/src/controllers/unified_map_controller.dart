@@ -182,6 +182,14 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> removeCircle(String id) async {
+    _circles.removeWhere((circle)=>circle.id.toLowerCase().contains(id));
+    if (_currentMapController != null) {
+      await currentProviderImplementation.removeCircle(_currentMapController, id);
+    }
+    notifyListeners();
+  }
+
   /// Add a marker to the map
   Future<void> addMarker(GeoJsonMarker marker) async {
     _markers.add(marker);
@@ -496,6 +504,11 @@ class UnifiedMapController extends ChangeNotifier {
 
   void localizeUser(User user) async {
     await _annotationController.localizeUser(user);
+    notifyListeners();
+  }
+
+  void clearUser() async {
+    await _annotationController.clearUser();
     notifyListeners();
   }
 

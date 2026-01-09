@@ -23,6 +23,7 @@ import 'package:flutter_compass/flutter_compass.dart';
 class MapplsMapProvider extends BaseMapProvider {
   MapplsMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
+  final List<GeoJsonCircle> _circles = [];
   final List<GeoJsonMarker> _rotatingSymbols = [];
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _lines = [];
@@ -38,6 +39,9 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _rotationSourceId = 'rotation-markers-source';
   final String _rotationMarkerLayerId = 'rotation-marker-layer';
 
+  final String _circleSourceId = 'circle-source';
+  final String _normalCircleLayerId = 'normal-circle-layer';
+
   final String _polygonSourceId = 'polygons-source';
   final String _normalPolygonLayerId = 'normal-polygons-layer';
   final String _selectedPolygonLayerId = 'selected-polygon-layer';
@@ -50,6 +54,7 @@ class MapplsMapProvider extends BaseMapProvider {
   bool _isClusteringEnabled = false;
   bool _isPolygonLayersEnabled = false;
   bool _isPolylineLayersEnabled = false;
+  bool _isCircleLayersEnabled = false;
 
   @override
   Widget buildMap({required MapConfig config}) {
@@ -108,6 +113,7 @@ class MapplsMapProvider extends BaseMapProvider {
             // Now initialize layers after style is loaded
             await enablePolygonLayers(_controller!);
             await enablePolylineLayers(_controller!);
+            await enableCircleLayers(_controller!);
             await enableMarkerLayers(_controller!);
 
           }
@@ -209,6 +215,104 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
+  Future<void> addCircle(controller, GeoJsonCircle circle) async {
+    if (controller is MapplsMapController) {
+      _circles.removeWhere((circles)=>circles.id == circle.id);
+      _circles.add(circle);
+      try{
+        await _setGeoJsonCircle(controller);
+        if(circle.animated){
+          _startCircleAnimation(controller, circle);
+        }
+      }catch(e){
+        print("error adding marker $e");
+      }
+    }
+  }
+
+  @override
+  Future<void> removeCircle(controller, String id) async {
+    if (controller is MapplsMapController) {
+      _circles.removeWhere((circles)=>circles.id.toLowerCase().contains(id));
+      try{
+        await _setGeoJsonCircle(controller);
+      }catch(e){
+        print("error adding marker $e");
+      }
+    }
+  }
+
+  Future<void> _setGeoJsonCircle(MapplsMapController controller) async {
+    try {
+      final features = _circles.map((circle){
+        return {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [circle.position.longitude, circle.position.latitude],
+          },
+          'properties': {
+            if(circle.properties?['radius'] != null)'radius': circle.properties?['radius'],
+          }
+        };
+      }).toList();
+
+      await controller.setGeoJsonSource(_circleSourceId, {
+        "type": "FeatureCollection",
+        "features": features
+      });
+    } catch (e) {
+      print('Error adding animated circle: $e');
+    }
+  }
+
+  Timer? _circleAnimationTimer;
+  bool _circleExpanding = true;
+  void _startCircleAnimation(MapplsMapController controller, GeoJsonCircle circle) {
+    _circleAnimationTimer?.cancel();
+    var circleRadius = circle.properties?['radius']??5.0;
+    _circleAnimationTimer = Timer.periodic(Duration(milliseconds: 50), (timer) async {
+      // Animate radius between 5 and 20
+      if (_circleExpanding) {
+        circleRadius += 0.5;
+        if (circleRadius >= 20.0) {
+          _circleExpanding = false;
+        }
+      } else {
+        circleRadius -= 0.5;
+        if (circleRadius <= 5.0) {
+          _circleExpanding = true;
+        }
+      }
+
+      // Calculate opacity based on radius (fade out as it expands)
+      double opacity = 1.0 - ((circleRadius - 5.0) / 15.0) * 0.7;
+
+      try {
+        // Update circle with new radius
+        await controller.setLayerProperties(
+          _normalCircleLayerId,
+          CircleLayerProperties(
+            circleRadius: circleRadius,
+            circleColor: '#4CAF50',
+            circleOpacity: opacity * 0.3,
+            circleStrokeWidth: 2.0,
+            circleStrokeColor: '#4CAF50',
+            circleStrokeOpacity: opacity * 0.8,
+          ),
+        );
+      } catch (e) {
+        // Ignore errors during animation
+      }
+    });
+  }
+
+  void stopCircleAnimation() {
+    _circleAnimationTimer?.cancel();
+    _circleAnimationTimer = null;
+  }
+
+  @override
   Future<void> localizeUser(controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
 
@@ -257,12 +361,7 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> moveUser(controller, String id, MapLocation location) async {
     if(controller is MapplsMapController){
-      for (var marker in _rotatingSymbols) {
-        if (marker.id.toLowerCase().contains(id)) {
-          await _animateMarkerToPosition(controller, marker, location);
-          break;
-        }
-      }
+      await _animateMarkerToPosition(controller, id, location);
     }
   }
 
@@ -292,12 +391,23 @@ class MapplsMapProvider extends BaseMapProvider {
 
   Future<void> _animateMarkerToPosition(
       MapplsMapController controller,
-      GeoJsonMarker marker,
+      String id,
       MapLocation targetLocation,
       ) async {
-    const duration = Duration(milliseconds: 100);
+    const duration = Duration(milliseconds: 300);
     const fps = 60;
     final steps = (duration.inMilliseconds / (1000 / fps)).round();
+
+    var markers = _rotatingSymbols.where((symbol)=>symbol.id.toLowerCase().contains(id));
+    var circles = _circles.where((circle)=>circle.id.toLowerCase().contains(id));
+
+    if(markers.isEmpty) return;
+
+    var marker = markers.first;
+    GeoJsonCircle? circle;
+    if(circles.isNotEmpty){
+      circle = circles.first;
+    }
 
     final startLat = marker.position.latitude;
     final startLng = marker.position.longitude;
@@ -310,12 +420,20 @@ class MapplsMapProvider extends BaseMapProvider {
       final currentLng = startLng + (endLng - startLng) * progress;
 
       marker.position = MapLocation(latitude: currentLat, longitude: currentLng);
+      if(circle != null){
+        circle.position = MapLocation(latitude: currentLat, longitude: currentLng);
+      }
       await _updateUserLocation(controller);
+      await _setGeoJsonCircle(controller);
       await Future.delayed(Duration(milliseconds: 1000 ~/ fps));
     }
 
     marker.position = targetLocation;
+    if(circle != null){
+      circle.position = targetLocation;
+    }
     await _updateUserLocation(controller);
+    await _setGeoJsonCircle(controller);
   }
 
   Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, String sourceID) async {
@@ -405,6 +523,10 @@ class MapplsMapProvider extends BaseMapProvider {
         _rotatingSymbols.forEach((symbol){
           print("_rotatingSymbols ${symbol.id}");
         });
+        if(_rotatingSymbols.where((marker)=>marker.id.toLowerCase().contains(markerId)).isNotEmpty){
+          _compassSub?.cancel();
+          _compassSub = null;
+        }
         _rotatingSymbols.removeWhere((marker) => marker.id.toLowerCase().contains(markerId));
 
         setGeoJsonSource(controller, _symbols, _clusterSourceId);
@@ -673,6 +795,35 @@ class MapplsMapProvider extends BaseMapProvider {
     } catch (e) {
       print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
       return false;
+    }
+  }
+
+  Future<void> enableCircleLayers(MapplsMapController controller) async {
+    try {
+      await controller.addGeoJsonSource(_circleSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      await controller.addCircleLayer(
+        _circleSourceId,
+        _normalCircleLayerId,
+        CircleLayerProperties(
+          circleRadius: 10.0,
+          circleColor: '#448AFF',
+          circleOpacity: 0.3,
+          circleStrokeWidth: 2.0,
+          circleStrokeColor: '#4CAF50',
+          circleStrokeOpacity: 0.8,
+        ),
+        enableInteraction: false,
+        belowLayerId: _rotationMarkerLayerId, // Below the rotating marker
+      );
+
+      _isCircleLayersEnabled = true;
+
+    } catch (e) {
+      print('Error enabling circle layers: $e');
     }
   }
 
