@@ -174,6 +174,31 @@ class GeoJsonPolyline {
       properties: feature.properties,
     );
   }
+
+  factory GeoJsonPolyline.fromJson(Map<String, dynamic> json) {
+    return GeoJsonPolyline(
+      id: json['id'] as String,
+      points: (json['points'] as List)
+          .map(
+            (e) => MapLocation.fromJson(
+          Map<String, dynamic>.from(e),
+        ),
+      )
+          .toList(),
+      properties: json['properties'] != null
+          ? Map<String, dynamic>.from(json['properties'])
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'points': points.map((p) => p.toJson()).toList(),
+      if (properties != null) 'properties': properties,
+    };
+  }
+
 }
 
 class GeoJsonMarker {

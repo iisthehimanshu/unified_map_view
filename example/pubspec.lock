@@ -437,6 +437,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.0.2"
+  turn_highlighter:
+    dependency: transitive
+    description:
+      path: "."
+      ref: main
+      resolved-ref: "74d9fb19cc7d9f0be53015806da44833dbe67b93"
+      url: "https://github.com/iisthehimanshu/turn_highlighter.git"
+    source: git
+    version: "2.0.0"
   typed_data:
     dependency: transitive
     description:

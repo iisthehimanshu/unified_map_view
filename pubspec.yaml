@@ -19,6 +19,12 @@ dependencies:
   flutter_speed_dial: ^7.0.0
   flutter_compass: ^0.8.1
 
+  turn_highlighter:
+    git:
+      url: https://github.com/iisthehimanshu/turn_highlighter.git
+      ref: main
+#    path: ../StudioProjects/turn_highlighter
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

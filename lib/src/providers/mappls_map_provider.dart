@@ -120,7 +120,6 @@ class MapplsMapProvider extends BaseMapProvider {
             final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
             final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
             final cameraPos = _controller!.cameraPosition;
-            print("cameraPos ${cameraPos?.tilt} ${cameraPos?.bearing}");
             config.onCameraMove(UnifiedCameraPosition(
               mapLocation: MapLocation(
                 latitude: centerLat,
@@ -604,10 +603,10 @@ class MapplsMapProvider extends BaseMapProvider {
           'id': line.id,
           'type': 'default',
           'isSelected': false,
-          'strokeColor': '#000000',
-          'fillColor': '#000000',
-          'fillOpacity': 1.0,
-          'path': line.id.toLowerCase().contains("path")
+          if(line.properties?['fillColor'] != null)'lineColor': line.properties?['fillColor'],
+          if(line.properties?['fillOpacity'] != null)'lineOpacity': line.properties?['fillOpacity'],
+          if(line.properties?['width'] != null)'lineWidth': line.properties?['width'],
+          'path': line.properties?['path']??line.id.toLowerCase().contains("path")
         }
       };
     }).toList();
@@ -835,33 +834,57 @@ class MapplsMapProvider extends BaseMapProvider {
 
   Future<void> enablePolylineLayers(MapplsMapController controller) async {
     try {
-      // Create GeoJSON source for polylines
       await controller.addGeoJsonSource(_polylineSourceId, {
         'type': 'FeatureCollection',
         'features': [],
       });
 
-      // Add line layer for path polylines
+      /// 🔹 Normal polylines (NOT path)
       await controller.addLineLayer(
         _polylineSourceId,
         _polylineLayerId,
         LineLayerProperties(
-          lineColor: ["get", "strokeColor"],
-          lineWidth: ["get", "strokeWidth"],
-          lineOpacity: ["get", "strokeOpacity"],
+          lineColor: [
+            "coalesce",
+            ["get", "lineColor"],
+            "#000000",
+          ],
+          lineWidth: [
+            "coalesce",
+            ["get", "lineWidth"],
+            4.0,
+          ],
+          lineOpacity: [
+            "coalesce",
+            ["get", "lineOpacity"],
+            1.0,
+          ],
         ),
         filter: ["!=", ["get", "path"], true],
         enableInteraction: true,
-        belowLayerId: _normalMarkerLayerId, // ⬅️ BELOW MARKERS
+        belowLayerId: _normalMarkerLayerId,
       );
 
+      /// 🔹 Path polylines (highlighted route)
       await controller.addLineLayer(
         _polylineSourceId,
         _pathLayerId,
         LineLayerProperties(
-          lineColor: '#448AFF',
-          lineWidth: 4.0,
-          lineOpacity: 1.0,
+          lineColor: [
+            "coalesce",
+            ["get", "lineColor"],
+            "#448AFF",
+          ],
+          lineWidth: [
+            "coalesce",
+            ["get", "lineWidth"],
+            8.0,
+          ],
+          lineOpacity: [
+            "coalesce",
+            ["get", "lineOpacity"],
+            1.0,
+          ],
         ),
         filter: ["==", ["get", "path"], true],
         enableInteraction: true,

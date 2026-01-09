@@ -3,18 +3,34 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 class MapLocation {
   final double latitude;
   final double longitude;
-
   final String? id;
 
   const MapLocation({
     required this.latitude,
     required this.longitude,
-    this.id
+    this.id,
   });
 
+  MapLocation.fromLatLng(LatLng position)
+      : latitude = position.latitude,
+        longitude = position.longitude,
+        id = null;
 
-  MapLocation.fromLatLng(LatLng position):latitude = position.latitude, longitude = position.longitude, id = null;
+  factory MapLocation.fromJson(Map<String, dynamic> json) {
+    return MapLocation(
+      latitude: (json['latitude'] as num).toDouble(),
+      longitude: (json['longitude'] as num).toDouble(),
+      id: json['id'] as String?,
+    );
+  }
 
+  Map<String, dynamic> toJson() {
+    return {
+      'latitude': latitude,
+      'longitude': longitude,
+      if (id != null) 'id': id,
+    };
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -31,6 +47,5 @@ class MapLocation {
   String toString() {
     return 'MapLocation{latitude: $latitude, longitude: $longitude}'
         '${id != null ? ', id: $id' : ''}';
-
   }
 }

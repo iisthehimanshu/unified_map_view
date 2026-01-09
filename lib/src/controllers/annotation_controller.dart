@@ -1,3 +1,4 @@
+import 'package:turn_highlighter/turn_highlighter.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
 
 import '../../unified_map_view.dart';
@@ -24,6 +25,7 @@ class AnnotationController{
   User? _user;
 
   List<MapLocation>? _pinSelectionLocation;
+
 
   AnnotationController(this._unifiedMapController, {required String venueName}){
     _setVenue(venueName);
@@ -137,8 +139,13 @@ class AnnotationController{
               id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'true'),
               points: points
           );
+          var mappedPath = path.map((cell)=>MapLocation(latitude: cell.lat, longitude: cell.lng).toJson()).toList();
+          final highlighter = TurnHighlighter(path: mappedPath, highlightRadiusMeters: 1.5, polylineWidth: 8);
+          var turnFeaturesMap = highlighter.getTurnPolylines();
+          var turnFeatures = turnFeaturesMap.map((element)=>GeoJsonPolyline.fromJson(element)).toList();
           await _unifiedMapController.fitCameraToLine(polyline);
           await _unifiedMapController.addPolyline(polyline);
+          await _unifiedMapController.addPolylines(turnFeatures);
           _annotatePathMarkers(path);
         }
       });

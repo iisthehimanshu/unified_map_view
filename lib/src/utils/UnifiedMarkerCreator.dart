@@ -27,13 +27,183 @@ enum TextFormat {
   centered,
 }
 
+/// Cache key for marker identification
+class MarkerCacheKey {
+  final String text;
+  final String? imageSource;
+  final MarkerLayout layout;
+  final TextFormat textFormat;
+  final Size imageSize;
+  final double fontSize;
+  final Color textColor;
+  final Color strokeColor;
+  final double strokeWidth;
+  final double spacing;
+  final Offset? customAnchor;
+  final bool maintainAspectRatio;
+  final bool expandCanvasForRotation;
+
+  MarkerCacheKey({
+    required this.text,
+    this.imageSource,
+    required this.layout,
+    required this.textFormat,
+    required this.imageSize,
+    required this.fontSize,
+    required this.textColor,
+    required this.strokeColor,
+    required this.strokeWidth,
+    required this.spacing,
+    this.customAnchor,
+    required this.maintainAspectRatio,
+    required this.expandCanvasForRotation,
+  });
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is MarkerCacheKey &&
+        other.text == text &&
+        other.imageSource == imageSource &&
+        other.layout == layout &&
+        other.textFormat == textFormat &&
+        other.imageSize == imageSize &&
+        other.fontSize == fontSize &&
+        other.textColor == textColor &&
+        other.strokeColor == strokeColor &&
+        other.strokeWidth == strokeWidth &&
+        other.spacing == spacing &&
+        other.customAnchor == customAnchor &&
+        other.maintainAspectRatio == maintainAspectRatio &&
+        other.expandCanvasForRotation == expandCanvasForRotation;
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(
+      text,
+      imageSource,
+      layout,
+      textFormat,
+      imageSize,
+      fontSize,
+      textColor,
+      strokeColor,
+      strokeWidth,
+      spacing,
+      customAnchor,
+      maintainAspectRatio,
+      expandCanvasForRotation,
+    );
+  }
+}
+
 class UnifiedMarkerCreator {
+  // Static cache to persist across instances
+  static final Map<MarkerCacheKey, MarkerIconWithAnchor> _markerCache = {};
+
+  // Cache statistics (optional, for debugging/monitoring)
+  static int _cacheHits = 0;
+  static int _cacheMisses = 0;
+
+  /// Clear all cached markers
+  static void clearCache() {
+    _markerCache.clear();
+    _cacheHits = 0;
+    _cacheMisses = 0;
+  }
+
+  /// Remove a specific marker from cache
+  static void removeCachedMarker(MarkerCacheKey key) {
+    _markerCache.remove(key);
+  }
+
+  /// Get cache statistics
+  static Map<String, dynamic> getCacheStats() {
+    return {
+      'size': _markerCache.length,
+      'hits': _cacheHits,
+      'misses': _cacheMisses,
+      'hitRate': _cacheMisses > 0
+          ? (_cacheHits / (_cacheHits + _cacheMisses) * 100).toStringAsFixed(2) + '%'
+          : '0%',
+    };
+  }
+
   /// Creates a crisp marker that keeps the same *physical* size across devices.
+  /// Results are cached automatically for faster subsequent access.
   /// imageSize is in logical dp (same units you'd expect for Flutter widgets).
   ///
   /// When [expandCanvasForRotation] is true, creates a larger canvas to allow
   /// proper rotation around the anchor point without clipping.
   Future<MarkerIconWithAnchor> createUnifiedMarker({
+    required String text,
+    String? imageSource,
+    MarkerLayout layout = MarkerLayout.vertical,
+    TextFormat textFormat = TextFormat.smartWrap,
+    Size imageSize = const Size(35, 35), // logical dp
+    double fontSize = 12.0, // logical sp
+    Color textColor = Colors.black,
+    Color strokeColor = const Color(0xfff8f9fa),
+    double strokeWidth = 2.0, // logical
+    double spacing = 0.0, // logical
+    Offset? customAnchor, // normalized if provided
+    bool maintainAspectRatio = true,
+    bool expandCanvasForRotation = false,
+    bool useCache = true, // New parameter to optionally disable cache
+  }) async {
+    // Create cache key
+    final cacheKey = MarkerCacheKey(
+      text: text,
+      imageSource: imageSource,
+      layout: layout,
+      textFormat: textFormat,
+      imageSize: imageSize,
+      fontSize: fontSize,
+      textColor: textColor,
+      strokeColor: strokeColor,
+      strokeWidth: strokeWidth,
+      spacing: spacing,
+      customAnchor: customAnchor,
+      maintainAspectRatio: maintainAspectRatio,
+      expandCanvasForRotation: expandCanvasForRotation,
+    );
+
+    // Check cache first
+    if (useCache && _markerCache.containsKey(cacheKey)) {
+      _cacheHits++;
+      return _markerCache[cacheKey]!;
+    }
+
+    _cacheMisses++;
+
+    // Generate marker if not in cache
+    final marker = await _generateMarker(
+      text: text,
+      imageSource: imageSource,
+      layout: layout,
+      textFormat: textFormat,
+      imageSize: imageSize,
+      fontSize: fontSize,
+      textColor: textColor,
+      strokeColor: strokeColor,
+      strokeWidth: strokeWidth,
+      spacing: spacing,
+      customAnchor: customAnchor,
+      maintainAspectRatio: maintainAspectRatio,
+      expandCanvasForRotation: expandCanvasForRotation,
+    );
+
+    // Store in cache
+    if (useCache) {
+      _markerCache[cacheKey] = marker;
+    }
+
+    return marker;
+  }
+
+  /// Internal method that does the actual marker generation
+  Future<MarkerIconWithAnchor> _generateMarker({
     required String text,
     String? imageSource,
     MarkerLayout layout = MarkerLayout.vertical,
