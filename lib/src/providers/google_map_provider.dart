@@ -1,7 +1,9 @@
 // lib/src/providers/google_map_provider.dart
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/utils/UnifiedMarkerCreator.dart';
@@ -21,6 +23,7 @@ class GoogleMapProvider extends BaseMapProvider {
   final Set<Marker> _markers = {};
   final Set<Polygon> _polygons = {};
   final Set<Polyline> _polylines = {};
+
   GoogleMapController? _controller;
 
   SelectedLocation? selectedLocation;
@@ -151,17 +154,17 @@ class GoogleMapProvider extends BaseMapProvider {
     );
     final Uint8List iconBytes = markerIconWithAnchor.icon;
     return Marker(
-      icon: BitmapDescriptor.fromBytes(iconBytes),
-      markerId: MarkerId(marker.id),
-      position: LatLng(marker.position.latitude, marker.position.longitude),
-      infoWindow: InfoWindow(
-        title: marker.title,
-        snippet: marker.snippet,
-      ),
-      onTap: (){
-        print("marker tap");
-      },
-      anchor: markerIconWithAnchor.anchor
+        icon: BitmapDescriptor.fromBytes(iconBytes),
+        markerId: MarkerId(marker.id),
+        position: LatLng(marker.position.latitude, marker.position.longitude),
+        infoWindow: InfoWindow(
+          title: marker.title,
+          snippet: marker.snippet,
+        ),
+        onTap: (){
+          print("marker tap");
+        },
+        anchor: markerIconWithAnchor.anchor
     );
   }
 
@@ -169,7 +172,7 @@ class GoogleMapProvider extends BaseMapProvider {
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
     final String? rawType = polygon.properties?["type"]?? polygon.properties?["polygonType"];
     final String? type = rawType?.toLowerCase();
-    print("type $type ${polygon.id}");
+    // print("type $type ${polygon.id}");
 
     final String? fillColorHex = polygon.properties?["fillColor"];
     final String? strokeColorHex = polygon.properties?["strokeColor"];
@@ -188,20 +191,20 @@ class GoogleMapProvider extends BaseMapProvider {
 
     _polygons.add(
       Polygon(
-        polygonId: PolygonId(polygon.id),
-        points: polygon.points
-            .map((p) => LatLng(p.latitude, p.longitude))
-            .toList(),
-        strokeWidth: 2,
-        strokeColor: stroke,
-        fillColor: fill,
-        consumeTapEvents: true,
-        onTap: (){
-          final polygonId = _extractPolygonIdFromTap(polygon.id);
-          if(polygonId != null){
-            selectLocation(controller,polygonId);
+          polygonId: PolygonId(polygon.id),
+          points: polygon.points
+              .map((p) => LatLng(p.latitude, p.longitude))
+              .toList(),
+          strokeWidth: 2,
+          strokeColor: stroke,
+          fillColor: fill,
+          consumeTapEvents: true,
+          onTap: (){
+            final polygonId = _extractPolygonIdFromTap(polygon.id);
+            if(polygonId != null){
+              selectLocation(controller,polygonId);
+            }
           }
-        }
       ),
     );
   }
@@ -244,19 +247,19 @@ class GoogleMapProvider extends BaseMapProvider {
 
     _polylines.add(
         Polyline(
-      polylineId: PolylineId(polyline.id),
-      points: polyline.points
-          .map((p) => LatLng(p.latitude, p.longitude))
-          .toList(),
-      color: Colors.blueAccent,
-      width: 8,
-        patterns: [
-          if(isWaypoint)PatternItem.dash(
-              Platform.isIOS ? 2 : 10), // length of each dash
-          if(isWaypoint)PatternItem.gap(
-              Platform.isIOS ? 1 : 6), // gap between dashes
-        ]
-    ));
+            polylineId: PolylineId(polyline.id),
+            points: polyline.points
+                .map((p) => LatLng(p.latitude, p.longitude))
+                .toList(),
+            color: Colors.blueAccent,
+            width: 8,
+            patterns: [
+              if(isWaypoint)PatternItem.dash(
+                  Platform.isIOS ? 2 : 10), // length of each dash
+              if(isWaypoint)PatternItem.gap(
+                  Platform.isIOS ? 1 : 6), // gap between dashes
+            ]
+        ));
   }
 
   @override
@@ -302,136 +305,136 @@ class GoogleMapProvider extends BaseMapProvider {
     }
 
     // try {
-      if (_polygons.isEmpty) {
-        print('Error: No polygons available to select');
-        return;
+    if (_polygons.isEmpty) {
+      print('Error: No polygons available to select');
+      return;
+    }
+
+    // Find the polygon
+    final polygon = _polygons.firstWhere(
+          (p) => p.polygonId.value.contains(polyID),
+      orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+    );
+
+    // Validate coordinates
+    if (polygon.points.isEmpty) {
+      print('Error: No coordinates found for polygon: ${polygon.polygonId}');
+      return;
+    }
+
+    if (polygon.points.length < 3) {
+      print('Error: Polygon must have at least 3 points: ${polygon.polygonId}');
+      return;
+    }
+
+    final List<MapLocation> mapLocations = polygon.points.map((latLng) {
+      return MapLocation(
+        latitude: latLng.latitude,
+        longitude: latLng.longitude,
+      );
+    }).toList();
+
+    print("mapLocations${mapLocations}");
+    // Trigger callback
+    _config.onPolygonTap?.call(
+      coordinates: mapLocations,
+      polygonId: polyID,
+    );
+
+    // Calculate bounds
+    double minLat = polygon.points.first.latitude;
+    double maxLat = polygon.points.first.latitude;
+    double minLng = polygon.points.first.longitude;
+    double maxLng = polygon.points.first.longitude;
+
+    for (final point in polygon.points) {
+      if (point.latitude < -90 || point.latitude > 90) {
+        print('Warning: Invalid latitude ${point.latitude}');
+        continue;
+      }
+      if (point.longitude < -180 || point.longitude > 180) {
+        print('Warning: Invalid longitude ${point.longitude}');
+        continue;
       }
 
-      // Find the polygon
-      final polygon = _polygons.firstWhere(
-            (p) => p.polygonId.value.contains(polyID),
-        orElse: () => throw Exception('Polygon with ID containing "$polyID" not found'),
+      minLat = min(minLat, point.latitude);
+      maxLat = max(maxLat, point.latitude);
+      minLng = min(minLng, point.longitude);
+      maxLng = max(maxLng, point.longitude);
+    }
+
+    // Calculate center
+    final centerLat = (minLat + maxLat) / 2;
+    final centerLng = (minLng + maxLng) / 2;
+
+    if (centerLat.isNaN || centerLng.isNaN || centerLat.isInfinite || centerLng.isInfinite) {
+      print('Error: Invalid center coordinates calculated');
+      return;
+    }
+
+    // Store selected location BEFORE updating polygon state (to preserve original)
+    selectedLocation = SelectedLocation(
+      polyID: polyID,
+      polygon: polygon,
+      marker: null,
+    );
+
+    // Update polygon selection state (this will highlight it)
+    await _updatePolygonSelectionState(controller, polygon.polygonId, true);
+
+    // Handle existing marker
+    Marker? existingMarker;
+    try {
+      existingMarker = _markers.firstWhere(
+            (m) => m.markerId.value.contains(polyID),
       );
 
-      // Validate coordinates
-      if (polygon.points.isEmpty) {
-        print('Error: No coordinates found for polygon: ${polygon.polygonId}');
-        return;
+      // Store the existing marker's info
+      if (existingMarker != null) {
+        // Remove the existing marker
+        _markers.removeWhere((m) => m.markerId.value.contains(polyID));
       }
+    } catch (e) {
+      print('No existing marker found for polyID: $polyID');
+    }
 
-      if (polygon.points.length < 3) {
-        print('Error: Polygon must have at least 3 points: ${polygon.polygonId}');
-        return;
-      }
-
-      final List<MapLocation> mapLocations = polygon.points.map((latLng) {
-        return MapLocation(
-          latitude: latLng.latitude,
-          longitude: latLng.longitude,
-        );
-      }).toList();
-
-      print("mapLocations${mapLocations}");
-      // Trigger callback
-      _config.onPolygonTap?.call(
-        coordinates: mapLocations,
-        polygonId: polyID,
+    // Add a selection marker at the center of the polygon
+    try {
+      final centerMarker = GeoJsonMarker(
+        id: 'selected_$polyID',
+        position: MapLocation(
+          latitude: centerLat,
+          longitude: centerLng,
+        ),
+        title: 'Selected',
+        priority: true,
       );
 
-      // Calculate bounds
-      double minLat = polygon.points.first.latitude;
-      double maxLat = polygon.points.first.latitude;
-      double minLng = polygon.points.first.longitude;
-      double maxLng = polygon.points.first.longitude;
+      await addMarker(controller, PredefinedMarkers.getGenericMarker(centerMarker));
+    } catch (e) {
+      print('Error adding center marker: $e');
+    }
 
-      for (final point in polygon.points) {
-        if (point.latitude < -90 || point.latitude > 90) {
-          print('Warning: Invalid latitude ${point.latitude}');
-          continue;
-        }
-        if (point.longitude < -180 || point.longitude > 180) {
-          print('Warning: Invalid longitude ${point.longitude}');
-          continue;
-        }
+    // Animate camera
+    try {
+      final latSpan = maxLat - minLat;
+      final lngSpan = maxLng - minLng;
+      final maxSpan = max(latSpan, lngSpan);
 
-        minLat = min(minLat, point.latitude);
-        maxLat = max(maxLat, point.latitude);
-        minLng = min(minLng, point.longitude);
-        maxLng = max(maxLng, point.longitude);
-      }
+      double targetZoom = 20.0;
+      if (maxSpan > 0.01) targetZoom = 15.0;
+      if (maxSpan > 0.1) targetZoom = 12.0;
+      if (maxSpan > 1.0) targetZoom = 8.0;
 
-      // Calculate center
-      final centerLat = (minLat + maxLat) / 2;
-      final centerLng = (minLng + maxLng) / 2;
-
-      if (centerLat.isNaN || centerLng.isNaN || centerLat.isInfinite || centerLng.isInfinite) {
-        print('Error: Invalid center coordinates calculated');
-        return;
-      }
-
-      // Store selected location BEFORE updating polygon state (to preserve original)
-      selectedLocation = SelectedLocation(
-        polyID: polyID,
-        polygon: polygon,
-        marker: null,
+      await controller.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(centerLat, centerLng),
+          targetZoom,
+        ),
       );
-
-      // Update polygon selection state (this will highlight it)
-      await _updatePolygonSelectionState(controller, polygon.polygonId, true);
-
-      // Handle existing marker
-      Marker? existingMarker;
-      try {
-        existingMarker = _markers.firstWhere(
-              (m) => m.markerId.value.contains(polyID),
-        );
-
-        // Store the existing marker's info
-        if (existingMarker != null) {
-          // Remove the existing marker
-          _markers.removeWhere((m) => m.markerId.value.contains(polyID));
-        }
-      } catch (e) {
-        print('No existing marker found for polyID: $polyID');
-      }
-
-      // Add a selection marker at the center of the polygon
-      try {
-        final centerMarker = GeoJsonMarker(
-          id: 'selected_$polyID',
-          position: MapLocation(
-            latitude: centerLat,
-            longitude: centerLng,
-          ),
-          title: 'Selected',
-          priority: true,
-        );
-        
-        await addMarker(controller, PredefinedMarkers.getGenericMarker(centerMarker));
-      } catch (e) {
-        print('Error adding center marker: $e');
-      }
-
-      // Animate camera
-      try {
-        final latSpan = maxLat - minLat;
-        final lngSpan = maxLng - minLng;
-        final maxSpan = max(latSpan, lngSpan);
-
-        double targetZoom = 20.0;
-        if (maxSpan > 0.01) targetZoom = 15.0;
-        if (maxSpan > 0.1) targetZoom = 12.0;
-        if (maxSpan > 1.0) targetZoom = 8.0;
-
-        await controller.animateCamera(
-          CameraUpdate.newLatLngZoom(
-            LatLng(centerLat, centerLng),
-            targetZoom,
-          ),
-        );
-      } catch (e) {
-        print('Warning: Failed to animate camera: $e');
-      }
+    } catch (e) {
+      print('Warning: Failed to animate camera: $e');
+    }
     // } catch (e, stackTrace) {
     //   print('Error selecting location: $e');
     //   print('Stack trace: $stackTrace');
@@ -596,25 +599,226 @@ class GoogleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> fitCameraToLine(controller, GeoJsonPolyline polyline) async {
+  Future<void> fitCameraToLine(dynamic controller, GeoJsonPolyline polyline,) async {
+    if (controller is! GoogleMapController) {
+      print('Error: Invalid controller type in fitCameraToLine');
+      return;
+    }
 
+    if (polyline.points.isEmpty) {
+      print('Error: Polyline has no points');
+      return;
+    }
+
+    if (polyline.points.length < 2) {
+      print('Error: Polyline must have at least 2 points');
+      return;
+    }
+
+    try {
+      double minLat = polyline.points.first.latitude;
+      double maxLat = polyline.points.first.latitude;
+      double minLng = polyline.points.first.longitude;
+      double maxLng = polyline.points.first.longitude;
+
+      for (final point in polyline.points) {
+        minLat = min(minLat, point.latitude);
+        maxLat = max(maxLat, point.latitude);
+        minLng = min(minLng, point.longitude);
+        maxLng = max(maxLng, point.longitude);
+      }
+
+      // Prevent invalid bounds
+      if (minLat == maxLat && minLng == maxLng) {
+        await controller.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng(minLat, minLng),
+            18,
+          ),
+        );
+        return;
+      }
+
+      final bounds = LatLngBounds(
+        southwest: LatLng(minLat, minLng),
+        northeast: LatLng(maxLat, maxLng),
+      );
+
+      await controller.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          bounds,
+          80, // padding (important)
+        ),
+      );
+    } catch (e, stackTrace) {
+      print('Error fitting camera to polyline: $e');
+      print(stackTrace);
+    }
+  }
+
+  Future<Marker> _convertUserMarker(GeoJsonMarker marker) async {
+    MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
+      text: marker.assetPath != null ? "" : marker.title ?? "",
+      imageSource: marker.assetPath,
+      layout: MarkerLayout.horizontal,
+      textFormat: TextFormat.smartWrap,
+      textColor: const Color(0xff000000),
+      expandCanvasForRotation: true,
+    );
+    final Uint8List iconBytes = markerIconWithAnchor.icon;
+
+    return Marker(
+      icon: BitmapDescriptor.fromBytes(iconBytes),
+      markerId: MarkerId(marker.id),
+      position: LatLng(marker.position.latitude, marker.position.longitude),
+      rotation: 0.0, // Will be updated by compass
+      anchor: markerIconWithAnchor.anchor ?? const Offset(0.5, 0.5),
+      flat: true, // Important for rotation
+      onTap: () {
+        print("user marker tap");
+      },
+    );
+  }
+
+
+  @override
+  Future<void> localizeUser(controller, GeoJsonMarker marker) async {
+    if (controller is GoogleMapController) {
+      try {
+        // Create and add the user marker to the separate _userMarkers set
+        final userMarker = await _convertUserMarker(marker);
+        _markers.add(userMarker);
+        print("userMarker ${userMarker}");
+
+        // Start compass-based rotation updates
+        _startCompassListening(marker.id);
+
+        print("User marker added with ID: ${marker.id}");
+      } catch (e) {
+        print("Error adding user marker: $e");
+      }
+    }
+  }
+
+  StreamSubscription<CompassEvent>? _compassSub;
+
+  void _startCompassListening(String markerId) {
+    // Cancel existing subscription if any
+    _compassSub?.cancel();
+
+    _compassSub = FlutterCompass.events?.listen((event) async {
+      if (event.heading == null) return;
+
+      try {
+        // Find the existing user marker
+        final existingMarker = _markers.firstWhere(
+              (m) => m.markerId.value == markerId,
+          orElse: () => throw Exception('User marker not found'),
+        );
+
+        // Remove old marker
+        _markers.removeWhere((m) => m.markerId.value == markerId);
+
+        // Create updated marker with new rotation
+        final updatedMarker = Marker(
+          markerId: MarkerId(markerId),
+          position: existingMarker.position,
+          rotation: event.heading!,
+          anchor: existingMarker.anchor,
+          flat: true,
+          icon: existingMarker.icon,
+          onTap: existingMarker.onTap,
+        );
+
+        _markers.add(updatedMarker);
+
+      } catch (e) {
+        print("Error updating marker rotation: $e");
+      }
+    });
   }
 
   @override
-  Future<void> localizeUser(controller, GeoJsonMarker marker) {
-    // TODO: implement localizeUser
-    throw UnimplementedError();
+  Future<void> moveUser(dynamic controller, String id, MapLocation location) async {
+    if (controller is GoogleMapController) {
+      try {
+        // Find and update the user marker position in the list
+        for (var singleMarker in _markers) {
+          if (singleMarker.markerId.toString().toLowerCase().contains(id.toLowerCase())) {
+
+            // Find the existing marker in _markers
+            final existingMarker = _markers.firstWhere(
+                  (m) => m.markerId.value.contains(id),
+              orElse: () => throw Exception('Marker not found'),
+            );
+
+            // Remove old marker
+            _markers.removeWhere((m) => m.markerId.value.contains(id));
+
+            // Add updated marker with new position
+            _markers.add(
+              Marker(
+                markerId: existingMarker.markerId,
+                position: LatLng(location.latitude, location.longitude),
+                rotation: existingMarker.rotation,
+                anchor: existingMarker.anchor,
+                flat: existingMarker.flat,
+                icon: existingMarker.icon,
+                onTap: existingMarker.onTap,
+              ),
+            );
+
+            print("User marker moved to: ${location.latitude}, ${location.longitude}");
+            break;
+          }
+        }
+      } catch (e) {
+        print("Error moving user marker: $e");
+      }
+    }
   }
 
   @override
-  Future<void> moveUser(controller, String id, MapLocation location) {
-    // TODO: implement moveMarker
-    throw UnimplementedError();
+  Future<void> fitCameraToBounds(dynamic controller, CameraBound bound) async {
+    if (controller is! GoogleMapController) {
+      print('Error: Invalid controller type in fitCameraToBounds');
+      return;
+    }
+
+    try {
+      final bounds = LatLngBounds(
+        southwest: LatLng(
+          bound.southwest.latitude,
+          bound.southwest.longitude,
+        ),
+        northeast: LatLng(
+          bound.northeast.latitude,
+          bound.northeast.longitude,
+        ),
+      );
+
+      await controller.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          bounds,
+          80, // padding in pixels
+        ),
+      );
+
+      print("Camera fitted to bounds: SW(${bound.southwest.latitude}, ${bound.southwest.longitude}) - NE(${bound.northeast.latitude}, ${bound.northeast.longitude})");
+    } catch (e, stackTrace) {
+      print('Error fitting camera to bounds: $e');
+      print('Stack trace: $stackTrace');
+    }
+  }
+
+// Don't forget to dispose the compass subscription when needed
+  void dispose() {
+    _compassSub?.cancel();
   }
 
   @override
-  Future<void> fitCameraToBounds(controller, CameraBound bound) {
-    // TODO: implement fitCameraToBounds
+  Future<void> addCircle(controller, GeoJsonCircle circle) {
+    // TODO: implement addCircle
     throw UnimplementedError();
   }
 

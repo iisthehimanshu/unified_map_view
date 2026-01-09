@@ -6,11 +6,21 @@ import 'package:flutter/cupertino.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
+import '../database/model/GlobalGeoJSONVenueAPIModel.dart';
+import '../services/GlobalGeoJSONStorageService.dart';
 
 
 class GlobalGeoJSONVenueAPI{
 
-  Future<Map<String, dynamic>?> getGeoJSONData(String venueName) async {
+  Future<Map<String, dynamic>?> getGeoJSONData(String venueName,{bool fromDB = true}) async {
+    final _globalGeoJSONService = await GlobalGeoJSONVenueStorageService.create();
+
+    if(fromDB && _globalGeoJSONService.contiansID(venueName) != null && _globalGeoJSONService.contiansID(venueName)==true){
+      print("GlobalGeoJSONVenueAPI from DataBase");
+      getGeoJSONData(venueName,fromDB: false);
+      GlobalGeoJSONVenueAPIModel? globalGeoJSONVenueAPIModel = _globalGeoJSONService.getGeoData(venueName);
+      return globalGeoJSONVenueAPIModel?.responseBody;
+    }
 
     String baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/${venueName}?expand=-1&api_key=${AppConfig.apiKey}";
 
@@ -21,8 +31,8 @@ class GlobalGeoJSONVenueAPI{
       },
     );
     if (response.statusCode == 200) {
-
-      GlobalAppGeoJsonDataModel globalAppGeoJsonDataModel = GlobalAppGeoJsonDataModel.fromJson(json.decode(response.body));
+      _globalGeoJSONService.saveGeoData(GlobalGeoJSONVenueAPIModel(responseBody: json.decode(response.body)), venueName);
+      print("GlobalGeoJSONVenueAPI from API");
       return json.decode(response.body);
     } else if (response.statusCode == 403) {
       return await getGeoJSONData(venueName);

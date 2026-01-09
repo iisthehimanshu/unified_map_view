@@ -1,10 +1,12 @@
 // lib/src/providers/mapbox_map_provider.dart
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_compass/flutter_compass.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import '../../unified_map_view.dart';
@@ -37,51 +39,59 @@ class MapboxMapProvider extends BaseMapProvider {
   static const String _normalPolylineLayerId = 'normal-polyline-layer';
   final Map<String, GeoJsonPolyline> _polylines = {};
 
+  static const String _rotationSourceId = 'rotation-marker-source';
+  static const String _rotationMarkerLayerId = 'rotation-marker-layer';
+  final Map<String, GeoJsonMarker> _rotatingSymbols = {};
+
+  StreamSubscription<CompassEvent>? _compassSub;
+
+
+
   SelectedLocation? selectedLocation;
   late MapConfig _config;
 
   @override
   Widget buildMap({
     required MapConfig config}) {
-    return MapWidget(       
+    return MapWidget(
       onMapCreated: (mapboxMap) async {
         config.onMapCreated(mapboxMap);
         _config = config;
         _mapboxMap = mapboxMap;
-         await _initMarkerLayer(mapboxMap);
-         await _initPolylineLayers(mapboxMap);
-         mapboxMap.setOnMapTapListener((value) async {
-           print("🟢 Map tapped at: ${value.point.coordinates.lat}, ${value.point.coordinates.lng}");
-           final screenCoordinate = await mapboxMap.pixelForCoordinate(value.point);
+        await _initMarkerLayer(mapboxMap);
+        await _initPolylineLayers(mapboxMap);
+        mapboxMap.setOnMapTapListener((value) async {
+          print("🟢 Map tapped at: ${value.point.coordinates.lat}, ${value.point.coordinates.lng}");
+          final screenCoordinate = await mapboxMap.pixelForCoordinate(value.point);
 
-           final features = await mapboxMap.queryRenderedFeatures(
-             RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
-             RenderedQueryOptions(
-               layerIds: [
-                 'marker-symbol-layer',
-                 'polygon-extrusion-layer',
-               ],
-             ),
-           );
+          final features = await mapboxMap.queryRenderedFeatures(
+            RenderedQueryGeometry.fromScreenCoordinate(screenCoordinate),
+            RenderedQueryOptions(
+              layerIds: [
+                'marker-symbol-layer',
+                'polygon-extrusion-layer',
+              ],
+            ),
+          );
 
-           features.forEach((value){
-             if(value?.layers[0] == _polygonLayerId && value?.layers[0] != null && !value!.queriedFeature.feature['id'].toString().contains('boundary')){
-               dynamic geometry = value.queriedFeature.feature['geometry']!;
-               final coordinates = geometry['coordinates'] as List<dynamic>;
-               final List<MapLocation> polygonPoints = (coordinates.first as List<dynamic>).map((point) {
-                 final lng = point[0] as double;
-                 final lat = point[1] as double;
-                 return MapLocation(latitude: lat, longitude: lng,);
-               }).toList();
-               if(coordinates.length == 1){
-                 config.onPolygonTap!(coordinates: polygonPoints, polygonId: value.queriedFeature.feature['id']!.toString());
-                 var keyMap = GeoJsonUtils.extractKeyValueMap(value.queriedFeature.feature['id'].toString());
-                 if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
-                 selectLocation(mapboxMap,keyMap["id"]!);
-               }
-             }
-           });
-         });
+          features.forEach((value){
+            if(value?.layers[0] == _polygonLayerId && value?.layers[0] != null && !value!.queriedFeature.feature['id'].toString().contains('boundary')){
+              dynamic geometry = value.queriedFeature.feature['geometry']!;
+              final coordinates = geometry['coordinates'] as List<dynamic>;
+              final List<MapLocation> polygonPoints = (coordinates.first as List<dynamic>).map((point) {
+                final lng = point[0] as double;
+                final lat = point[1] as double;
+                return MapLocation(latitude: lat, longitude: lng,);
+              }).toList();
+              if(coordinates.length == 1){
+                config.onPolygonTap!(coordinates: polygonPoints, polygonId: value.queriedFeature.feature['id']!.toString());
+                var keyMap = GeoJsonUtils.extractKeyValueMap(value.queriedFeature.feature['id'].toString());
+                if(keyMap["id"] == null || keyMap["id"]!.toLowerCase().contains("boundary")) return;
+                selectLocation(mapboxMap,keyMap["id"]!);
+              }
+            }
+          });
+        });
       },
       styleUri: MapboxStyles.MAPBOX_STREETS,
       cameraOptions: CameraOptions(
@@ -199,16 +209,16 @@ class MapboxMapProvider extends BaseMapProvider {
 
       // Add priority landmark marker (will render on top layer)
       final landmarkMarker = GeoJsonMarker(
-        id: 'landmark_$polygonId',
-        position: MapLocation(latitude: centerLat, longitude: centerLng),
-        title: 'generic',  // Change based on your needs
-        priority: true,  // KEY: This makes it render on the priority layer
-        properties: {
-          'polyId': polygonId,
-          'type': 'Wall',
+          id: 'landmark_$polygonId',
+          position: MapLocation(latitude: centerLat, longitude: centerLng),
+          title: 'generic',  // Change based on your needs
+          priority: true,  // KEY: This makes it render on the priority layer
+          properties: {
+            'polyId': polygonId,
+            'type': 'Wall',
 
-        },
-        textVisibility: false
+          },
+          textVisibility: false
       );
       final marker = PredefinedMarkers.getGenericMarker(_markers[polyID]??landmarkMarker);
       await removeMarker(controller, "landmark_");
@@ -232,8 +242,8 @@ class MapboxMapProvider extends BaseMapProvider {
       if (maxSpan > 1.0) targetZoom = 8.0;
 
       await _mapboxMap.flyTo(
-          CameraOptions(center:Point(coordinates: Position(centerLng, centerLat),),zoom: targetZoom),
-          MapAnimationOptions(duration: 500),
+        CameraOptions(center:Point(coordinates: Position(centerLng, centerLat),),zoom: targetZoom),
+        MapAnimationOptions(duration: 500),
       );
     } catch (e) {
       print('Error selecting polygon (Mapbox): $e');
@@ -272,11 +282,10 @@ class MapboxMapProvider extends BaseMapProvider {
 
 
   Future<void> _initMarkerLayer(MapboxMap mapboxMap) async {
-    print("_initMarkerLayer${StackTrace.current}");
     final style = mapboxMap.style;
 
     // ============================================
-    // Create single GeoJSON source
+    // Create single GeoJSON source for normal markers
     // ============================================
     final exists = await style.styleSourceExists(_markerSourceId);
     if (!exists) {
@@ -298,54 +307,66 @@ class MapboxMapProvider extends BaseMapProvider {
     if (!normalLayerExists) {
       await style.addLayer(
         SymbolLayer(
-          id: _normalMarkerLayerId,
+          id: _normalMarkerLayerId,  // ✅ Correct ID
           sourceId: _markerSourceId,
           iconImageExpression: ['get', 'icon'],
-          iconSizeExpression: ['get', 'iconSize'],
-          textFieldExpression: ['get', 'title'],
-          textFont: ["Roboto Medium", "Arial Unicode MS Regular"],
-          textSize: 12,
-          textColor: 0xFF000000,
-          textHaloColor: 0xFFFFFFFF,
-          textHaloWidth: 1,
-          textHaloBlur: 0.5,
+          iconSizeExpression: ['literal', 1.5],
           iconAllowOverlap: false,  // Can be hidden
           textAllowOverlap: false,  // Can be hidden
-          textMaxWidth: 5,
-          textAnchor: TextAnchor.CENTER,
-          symbolZOffset: 3.0,
-          textJustify: TextJustify.LEFT,
           filter: ['!=', ['get', 'isPriority'], true],
         ),
       );
     }
 
     // ============================================
-    // Layer 2: Priority markers (rendered last, always visible)
+    // Layer 2: Priority markers (rendered second, always visible)
     // ============================================
     final priorityLayerExists = await style.styleLayerExists(_priorityMarkerLayerId);
     if (!priorityLayerExists) {
       await style.addLayer(
         SymbolLayer(
-          id: _priorityMarkerLayerId,
+          id: _priorityMarkerLayerId,  // ✅ FIXED: Now using correct ID (was _normalMarkerLayerId)
           sourceId: _markerSourceId,
           iconImageExpression: ['get', 'icon'],
-          iconSizeExpression: ['get', 'iconSize'],
-          iconOffset: [0, -6],
-          textFont: ["Roboto Medium", "Arial Unicode MS Regular"],
-          textSize: 12,
-          textColor: 0xFF000000,
-          textHaloColor: 0xFFFFFFFF,
-          textHaloWidth: 1,
-          textHaloBlur: 0.5,
+          iconSizeExpression: ['literal', 1.5],
           iconAllowOverlap: true,   // Always visible
           textAllowOverlap: true,   // Always visible
-          textMaxWidth: 5,
-          textAnchor: TextAnchor.CENTER,
-          symbolZOffset: 3.0,  // Higher z-order
-          textJustify: TextJustify.LEFT,
-          // FILTER: Only show priority markers
           filter: ['==', ['get', 'isPriority'], true],
+        ),
+      );
+    }
+
+    // ============================================
+    // Create rotation marker source
+    // ============================================
+    final rotationSourceExists = await style.styleSourceExists(_rotationSourceId);
+    if (!rotationSourceExists) {
+      await style.addSource(
+        GeoJsonSource(
+          id: _rotationSourceId,
+          data: jsonEncode({
+            'type': 'FeatureCollection',
+            'features': [],
+          }),
+        ),
+      );
+    }
+
+    // ============================================
+    // Layer 3: Rotation markers (rendered last, highest priority with rotation)
+    // ============================================
+    final rotationLayerExists = await style.styleLayerExists(_rotationMarkerLayerId);
+    if (!rotationLayerExists) {
+      await style.addLayer(
+        SymbolLayer(
+          id: _rotationMarkerLayerId,  // ✅ Correct ID
+          sourceId: _rotationSourceId,
+          iconImageExpression: ['get', 'icon'],
+          iconSizeExpression: ['literal', 1.5],
+          iconRotateExpression: ['get', 'bearing'],
+          iconRotationAlignment: IconRotationAlignment.MAP,
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
         ),
       );
     }
@@ -356,10 +377,10 @@ class MapboxMapProvider extends BaseMapProvider {
     if (controller is! MapboxMap) return;
 
     _markers[marker.id] = marker;
-    if(marker.assetPath != null && marker.iconName != null) await _loadMarkerIcon(controller, marker);
+    await _loadMarkerIcon(controller, marker);
 
     // try {
-      await _updateMarkerSource(controller);
+    await _updateMarkerSource(controller);
     // } catch (e) {
     //   print("Error adding marker: $e");
     // }
@@ -373,13 +394,15 @@ class MapboxMapProvider extends BaseMapProvider {
       size = ui.Size(size.width * 0.4, size.height * 0.4);
 
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
-        imageSize: size,
-        fontSize: 8.5,
-        text: marker.assetPath != null ? "" : marker.title ?? "",
-        imageSource: marker.assetPath,
-        layout: MarkerLayout.horizontal,
-        textFormat: TextFormat.smartWrap,
-        textColor: const Color(0xff000000),
+          imageSize: size,
+          fontSize: 4,
+          text: marker.assetPath != null ? "" : marker.title ?? "",
+          imageSource: marker.assetPath,
+          layout: MarkerLayout.horizontal,
+          textFormat: TextFormat.smartWrap,
+          textColor: const Color(0xff000000),
+          customAnchor: marker.anchor??Offset(0.5, 0.5),
+          expandCanvasForRotation: true
       );
 
       final Uint8List iconBytes = markerIconWithAnchor.icon;
@@ -409,7 +432,6 @@ class MapboxMapProvider extends BaseMapProvider {
 
   /// Update marker source - single source feeds both layers
   Future<void> _updateMarkerSource(MapboxMap mapboxMap) async {
-    print("_updateMarkerSource${StackTrace.current}");
     print("_markers ${_markers.length}");
     final features = _markers.values.map((marker) {
 
@@ -424,9 +446,11 @@ class MapboxMapProvider extends BaseMapProvider {
           ],
         },
         'properties': {
-          'title': marker.textVisibility == true ? marker.title : "",
+          'title': "",
           'icon': marker.id,
           'isPriority': marker.priority ?? false,  // This determines which layer renders it
+          'intractable': marker.properties?["polyId"] != null,
+          if (marker.compassBasedRotation) "bearing": 0.0,
         },
       };
     }).toList();
@@ -443,7 +467,6 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId, {String? exclude}) async {
-    print("removeMarker ${StackTrace.current}");
     if (controller is! MapboxMap) return;
 
     final markersToRemove = _markers.entries.where((entry) {
@@ -469,7 +492,13 @@ class MapboxMapProvider extends BaseMapProvider {
     if (controller is! MapboxMap) return;
 
     _markers.clear();
+    _rotatingSymbols.clear();
+
     await _updateMarkerSource(controller);
+    await _updateRotationMarkerSource(controller);
+    _animationTimer?.cancel();
+
+    _stopCompassListening();
   }
 
   @override
@@ -589,13 +618,13 @@ class MapboxMapProvider extends BaseMapProvider {
     if (!await style.styleLayerExists(_polygonLayerId)) {
 
       await style.addLayerAt(
-        FillExtrusionLayer(
-          id: _polygonLayerId,
-          sourceId: _polygonSourceId,
-          fillExtrusionColorExpression: ['get', 'fillColor'],
-          fillExtrusionHeightExpression: ['get', 'height'],
-        ),
-        LayerPosition(below: _normalMarkerLayerId)
+          FillExtrusionLayer(
+            id: _polygonLayerId,
+            sourceId: _polygonSourceId,
+            fillExtrusionColorExpression: ['get', 'fillColor'],
+            fillExtrusionHeightExpression: ['get', 'height'],
+          ),
+          LayerPosition(below: _normalMarkerLayerId)
       );
     }
   }
@@ -652,7 +681,6 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
-    print("addPolyline${StackTrace.current}");
     if (controller is! MapboxMap) return;
     print("addPolyline1");
 
@@ -681,21 +709,21 @@ class MapboxMapProvider extends BaseMapProvider {
     if (selectedLocation == null) return;
 
     // try {
-      final polygonId = selectedLocation!.polyID;
-      final polygon = selectedLocation!.polygon;
-      final restoredProperties = Map<String, dynamic>.from(polygon.properties ?? {});
+    final polygonId = selectedLocation!.polyID;
+    final polygon = selectedLocation!.polygon;
+    final restoredProperties = Map<String, dynamic>.from(polygon.properties ?? {});
 
-      restoredProperties.remove('onTap');
-      final restoredPolygon = GeoJsonPolygon(
-        id: polygon.id,
-        points: polygon.points,
-        properties: restoredProperties,
-      );
+    restoredProperties.remove('onTap');
+    final restoredPolygon = GeoJsonPolygon(
+      id: polygon.id,
+      points: polygon.points,
+      properties: restoredProperties,
+    );
 
-      _polygons[polygonId] = restoredPolygon;
-      await _updatePolygonSource(controller);
+    _polygons[polygonId] = restoredPolygon;
+    await _updatePolygonSource(controller);
 
-      selectedLocation = null;
+    selectedLocation = null;
 
 
     // } catch (e) {
@@ -710,8 +738,8 @@ class MapboxMapProvider extends BaseMapProvider {
       final bounds = await controller.getBounds();
 
       controller.flyTo(
-        CameraOptions(zoom: zoom),
-        MapAnimationOptions(duration: 2000, startDelay: 0)
+          CameraOptions(zoom: zoom),
+          MapAnimationOptions(duration: 2000, startDelay: 0)
       );
     }
   }
@@ -748,7 +776,6 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   Future<void> _initPolylineLayers(MapboxMap mapboxMap) async {
-    print("_initPolylineLayers${StackTrace.current}");
     final style = mapboxMap.style;
 
     // Create GeoJSON source for polylines
@@ -878,17 +905,10 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> marker) async {
-    print("addMarkers${StackTrace.current}");
     if (controller is! MapboxMap) return;
     for(var ele in marker) {
-      if (ele.properties == null || ele.properties!["polyId"] == null){
-        print("ele.properties == null");
-        // return;
-      };
+      await _loadMarkerIcon(controller, ele);
       _markers[ele.id] = ele;
-      if(ele.iconName != null && ele.assetPath!= null){
-        await _loadMarkerIcon(controller, ele);
-      }
       // debugPrint("_loadMarkerIcon ${ele.iconName} ${ele.assetPath}");
     }
 
@@ -933,17 +953,17 @@ class MapboxMapProvider extends BaseMapProvider {
     );
 
     final cameraOptions = await controller.cameraForCoordinateBounds(
-      bounds,
-      MbxEdgeInsets(
-        top: 50,
-        left: 50,
-        bottom: 50,
-        right: 50,
-      ),
-      null, // bearing
-      null,
-      null,
-      null
+        bounds,
+        MbxEdgeInsets(
+          top: 50,
+          left: 50,
+          bottom: 50,
+          right: 50,
+        ),
+        null, // bearing
+        null,
+        null,
+        null
       // pitch
     );
     // Animate camera to fit bounds
@@ -953,21 +973,247 @@ class MapboxMapProvider extends BaseMapProvider {
     );
   }
 
+
   @override
-  Future<void> localizeUser(controller, GeoJsonMarker marker) {
-    // TODO: implement localizeUser
-    throw UnimplementedError();
+  Future<void> localizeUser(dynamic controller, GeoJsonMarker marker) async {
+    print("🧭 localizeUser called for marker: ${marker.id}");
+    if (controller is! MapboxMap) {
+      print("❌ Controller is not MapboxMap");
+      return;
+    }
+
+    print("   Adding marker to _rotatingSymbols");
+    _rotatingSymbols[marker.id] = marker;
+
+    print("   Loading marker icon...");
+    final iconLoaded = await _loadMarkerIcon(controller, marker);
+    print("   Icon loaded: $iconLoaded");
+
+    try {
+      print("Updating rotation marker source...");
+      await _updateRotationMarkerSource(controller);
+      print("✅ Rotation marker source updated");
+
+      print("Starting compass listening...");
+      _startCompassListening(controller);
+      print("✅ Compass listening started");
+    } catch (e, stackTrace) {
+      print("❌ Error adding rotation marker: $e");
+      print("   Stack trace: $stackTrace");
+    }
+  }
+
+  Future<void> _updateRotationMarkerSource(MapboxMap mapboxMap) async {
+    final style = mapboxMap.style;
+
+    final features = _rotatingSymbols.values.map((marker) {
+      return {
+        'type': 'Feature',
+        'id': marker.id,
+        'geometry': {
+          'type': 'Point',
+          'coordinates': [
+            marker.position.longitude,
+            marker.position.latitude,
+          ],
+        },
+        'properties': {
+          'icon': marker.id,
+          'bearing': 0.0,
+          'isPriority': true,
+        },
+      };
+    }).toList();
+
+    final geoJsonData = {
+      'type': 'FeatureCollection',
+      'features': features,
+    };
+
+    // ✅ Create source if it doesn't exist, otherwise update it
+    if (!await style.styleSourceExists(_rotationSourceId)) {
+      print("Creating rotation marker source");
+      await style.addSource(
+        GeoJsonSource(
+          id: _rotationSourceId,
+          data: jsonEncode(geoJsonData),
+        ),
+      );
+    } else {
+      print("Updating rotation marker source");
+      await style.setStyleSourceProperty(
+        _rotationSourceId,
+        'data',
+        geoJsonData,
+      );
+    }
+  }
+
+  void _startCompassListening(MapboxMap mapboxMap) {
+    if (_compassSub != null) return;
+
+    _compassSub = FlutterCompass.events?.listen((event) async {
+      if (event.heading == null) return;
+
+      try {
+        final style = mapboxMap.style;
+
+        final features = _rotatingSymbols.values.map((marker) {
+          return {
+            'type': 'Feature',
+            'id': marker.id,
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [
+                marker.position.longitude,
+                marker.position.latitude,
+              ],
+            },
+            'properties': {
+              'icon': marker.id,
+              'bearing': event.heading!,
+              'isPriority': true,
+            },
+          };
+        }).toList();
+
+        final geoJsonData = {
+          'type': 'FeatureCollection',
+          'features': features,
+        };
+
+        // ✅ Check if source exists before updating
+        if (await style.styleSourceExists(_rotationSourceId)) {
+          await style.setStyleSourceProperty(
+            _rotationSourceId,
+            'data',
+            geoJsonData,
+          );
+        }
+      } catch (e) {
+        print('Error updating compass rotation: $e');
+      }
+    });
+  }
+
+  void _stopCompassListening() {
+    _compassSub?.cancel();
+    _compassSub = null;
+  }
+
+  Timer? _animationTimer;
+
+  @override
+  Future<void> moveUser(dynamic controller, String id, MapLocation location) async {
+    if (controller is! MapboxMap) return;
+
+    try {
+      // Find the marker in rotation symbols map
+      final markerEntry = _rotatingSymbols.entries.firstWhere(
+            (entry) => entry.key.toLowerCase().contains(id.toLowerCase()),
+        orElse: () => throw Exception('Rotation marker not found'),
+      );
+
+      final marker = markerEntry.value;
+      final startLocation = marker.position;
+      final endLocation = location;
+
+      // Calculate animation parameters
+      const animationDuration = Duration(milliseconds: 500); // 1 second animation
+      const frameRate = 120; // 60 FPS
+      final totalFrames = (animationDuration.inMilliseconds / (1000 / frameRate)).round();
+
+      int currentFrame = 0;
+
+      // Cancel any existing animation
+      _animationTimer?.cancel();
+
+      // Start animation
+      _animationTimer = Timer.periodic(Duration(milliseconds: (1000 / frameRate).round()), (timer) async {
+        if (currentFrame >= totalFrames) {
+          timer.cancel();
+          // Set final position
+          marker.position = endLocation;
+          _rotatingSymbols[markerEntry.key] = marker;
+          await _updateRotationMarkerSource(controller);
+          return;
+        }
+
+        // Calculate interpolated position using easing function
+        final progress = currentFrame / totalFrames;
+        final easedProgress = _easeInOutCubic(progress);
+
+        final lat = _lerp(startLocation.latitude, endLocation.latitude, easedProgress);
+        final lng = _lerp(startLocation.longitude, endLocation.longitude, easedProgress);
+
+        // Update marker position
+        marker.position = MapLocation(latitude: lat, longitude: lng);
+        _rotatingSymbols[markerEntry.key] = marker;
+
+        await _updateRotationMarkerSource(controller);
+
+        currentFrame++;
+      });
+    } catch (e) {
+      print('Error animating user marker: $e');
+    }
+  }
+
+  /// Linear interpolation helper
+  double _lerp(double start, double end, double t) {
+    return start + (end - start) * t;
+  }
+
+  /// Ease-in-out cubic easing function for smooth animation
+  double _easeInOutCubic(double t) {
+    return t < 0.5
+        ? 4 * t * t * t
+        : 1 - pow(-2 * t + 2, 3) / 2;
   }
 
   @override
-  Future<void> moveUser(controller, String id, MapLocation location) {
-    // TODO: implement moveMarker
-    throw UnimplementedError();
+  Future<void> fitCameraToBounds(dynamic controller, CameraBound bound) async {
+    if (controller is! MapboxMap) return;
+
+    final bounds = CoordinateBounds(
+      southwest: Point(
+        coordinates: Position(
+          bound.southwest.longitude,
+          bound.southwest.latitude,
+        ),
+      ),
+      northeast: Point(
+        coordinates: Position(
+          bound.northeast.longitude,
+          bound.northeast.latitude,
+        ),
+      ),
+      infiniteBounds: false,
+    );
+
+    final cameraOptions = await controller.cameraForCoordinateBounds(
+      bounds,
+      MbxEdgeInsets(
+        top: 50,
+        left: 50,
+        bottom: 50,
+        right: 50,
+      ),
+      null, // bearing
+      null, // pitch
+      null,
+      null,
+    );
+
+    await controller.flyTo(
+      cameraOptions,
+      MapAnimationOptions(duration: 1000),
+    );
   }
 
   @override
-  Future<void> fitCameraToBounds(controller, CameraBound bound) {
-    // TODO: implement fitCameraToBounds
+  Future<void> addCircle(controller, GeoJsonCircle circle) {
+    // TODO: implement addCircle
     throw UnimplementedError();
   }
 

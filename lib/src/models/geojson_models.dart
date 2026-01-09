@@ -11,6 +11,7 @@ export 'dart:typed_data';
 /// Types of GeoJSON geometries
 enum GeoJsonGeometryType {
   point,
+  circle,
   multiPoint,
   lineString,
   multiLineString,
@@ -65,6 +66,8 @@ class GeoJsonGeometry {
 
   static GeoJsonGeometryType _parseGeometryType(String type) {
     switch (type) {
+      case 'Circle':
+        return GeoJsonGeometryType.circle;
       case 'Point':
         return GeoJsonGeometryType.point;
       case 'MultiPoint':
@@ -283,6 +286,31 @@ class GeoJsonMarker {
       textVisibility: getTextVisibility,
       priority: false,
       anchor: anchor
+    );
+  }
+}
+
+class GeoJsonCircle {
+  final String id;
+  MapLocation position;
+  final Map<String, dynamic>? properties;
+
+  GeoJsonCircle({
+    required this.id,
+    required this.position,
+    this.properties,
+  });
+
+  /// Create from GeoJSON Feature
+  static GeoJsonCircle? fromFeature(GeoJsonFeature feature) {
+    if (feature.geometry.type != GeoJsonGeometryType.circle) return null;
+
+    var coords = feature.geometry.coordinates[0];
+
+    return GeoJsonCircle(
+        id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, floor: feature.properties?['floor']),
+        position: MapLocation(latitude: coords.last, longitude: coords.first),
+        properties: feature.properties,
     );
   }
 }

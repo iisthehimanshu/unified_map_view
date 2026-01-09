@@ -25,6 +25,8 @@ abstract class BaseMapProvider {
 
   Future<void> fitCameraToBounds(dynamic controller, CameraBound bound);
 
+  Future<void> addCircle(dynamic controller, GeoJsonCircle circle);
+
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
 

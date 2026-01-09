@@ -219,4 +219,10 @@ class AppleMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> addCircle(controller, GeoJsonCircle circle) {
+    // TODO: implement addCircle
+    throw UnimplementedError();
+  }
+
 }
