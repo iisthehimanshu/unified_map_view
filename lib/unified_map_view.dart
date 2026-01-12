@@ -31,6 +31,7 @@ export 'src/providers/base_map_provider.dart';
 // Utilities
 export 'src/utils/geoJson/geojson_loader.dart';
 export 'src/utils/geoJson/geoJsonUtils.dart';
+export 'src/utils/geoJson/predefined_markers.dart';
 
 class UnifiedMapViewPackage {
   static bool _initialized = false;
