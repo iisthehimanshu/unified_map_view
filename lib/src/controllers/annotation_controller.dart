@@ -40,16 +40,25 @@ class AnnotationController{
     if (apiData == null || apiData.isEmpty) {
       throw Exception('No GeoJSON data received from API');
     }
-
     _venueData = VenueData(venueName, apiData,buildingData);
-    List<GeoJsonFeature> venueRenderData = [];
-    _venueData.availableFloors.forEach((buildingId,floors){
-      var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
-      venueRenderData.addAll(floorData);
-    });
-    await _unifiedMapController.moveCamera(_venueData.venueLatLng, zoom: 18);
+    await renderVenue();
+  }
 
-    await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+  Future<void> renderVenue() async {
+    if(!_unifiedMapController.controllerIsInitialized) return;
+    try{
+      List<GeoJsonFeature> venueRenderData = [];
+      _venueData.availableFloors.forEach((buildingId,floors){
+        var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
+        venueRenderData.addAll(floorData);
+      });
+
+      await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 18);
+      await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+      await _unifiedMapController.fitBoundsToGeoJson();
+    }catch(e){
+      print("e $e");
+    }
   }
 
   Future<void> changeBuildingFloor(String buildingID, int floor) async {

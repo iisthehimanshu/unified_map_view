@@ -62,6 +62,9 @@ class UnifiedMapController extends ChangeNotifier {
     _initializeProviders();
   }
 
+
+  bool get controllerIsInitialized => (_currentMapController != null);
+
   /// Initialize all map providers
   void _initializeProviders() {
     _providers[MapProvider.google] = GoogleMapProvider();
@@ -108,6 +111,8 @@ class UnifiedMapController extends ChangeNotifier {
   /// Called when map is created
   void onMapCreated(dynamic controller) {
     _currentMapController = controller;
+    _annotationController.renderVenue();
+    // fitBoundsToGeoJson();
   }
 
   void onCameraMove(UnifiedCameraPosition position) async {
@@ -130,7 +135,10 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Move camera to a specific location
   Future<void> moveCamera(MapLocation location, {double? zoom}) async {
-    if (_currentMapController == null) return;
+    if (_currentMapController == null){
+      print("_currentMapController is null when trying moveCamera");
+      return;
+    }
     await currentProviderImplementation.moveCamera(
       _currentMapController,
       location,
@@ -260,37 +268,17 @@ class UnifiedMapController extends ChangeNotifier {
   /// Add GeoJSON feature collection to map
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
     print("addGeoJsonFeatures ${StackTrace.current}");
-    if (_currentMapController == null) return;
-
     // Add polygons
     final polygons = GeoJsonLoader.extractPolygons(collection);
     final boundaryPolygons = polygons.where((p) => p.properties?["polygonType"] == "Boundary").toList();
     final otherPolygons = polygons.where((p) => p.properties?["polygonType"] != "Boundary").toList();
-
-    // for (var polygon in boundaryPolygons) {
-    //   await addPolygon(polygon);
-    // }
-    //
-    // for (var polygon in otherPolygons) {
-    //   await addPolygon(polygon);
-    // }
-
     await addPolygons(boundaryPolygons);
-
     await addPolygons(otherPolygons);
 
-    // Add polylines
     final polylines = GeoJsonLoader.extractPolylines(collection);
-    // for (var polyline in polylines) {
-    //   await addPolyline(polyline);
-    // }
     await addPolylines(polylines);
 
-    // Add markers from Point features
     final markers = GeoJsonLoader.extractMarkers(collection);
-    // for (var marker in markers) {
-    //   await addMarker(marker);
-    // }
     addMarkers(markers);
 
     notifyListeners();
@@ -406,17 +394,24 @@ class UnifiedMapController extends ChangeNotifier {
     final allPoints = <MapLocation>[];
 
     // Collect all points from markers
-    allPoints.addAll(_markers.map((m) => m.position));
+    allPoints.addAll(_markers.map((m){
+      return m.position;
+    }));
+    print("allPoints $allPoints");
 
     // Collect points from polygons
     for (var polygon in _polygons) {
       allPoints.addAll(polygon.points);
     }
+    print("allPoints $allPoints");
 
     // Collect points from polylines
     for (var polyline in _polylines) {
       allPoints.addAll(polyline.points);
     }
+    print("allPoints $allPoints");
+
+    print("allPoints $allPoints ${StackTrace.current}");
 
     if (allPoints.isEmpty) return;
 

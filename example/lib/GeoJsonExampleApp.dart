@@ -62,7 +62,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mappls,
-        venueName: 'IITDelhi',
+        venueName: 'Mapmyindia',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 28.6139, longitude: 77.2090), // Delhi
           zoom: 12.0,
@@ -71,27 +71,27 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     );
     
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
-    Future.delayed(const Duration(seconds: 2), () {
-      _addUserMarker();
-    });
+    // Future.delayed(const Duration(seconds: 2), () {
+    //   _addUserMarker();
+    // });
   }
 
-  Future<void> _addUserMarker() async {
-    final userMarker = GeoJsonMarker(
-        id: "user",
-        position: MapLocation(latitude: 77.18750616904389, longitude: 28.54368402795895),
-        title: "",
-        snippet: "",
-        assetPath: 'packages/unified_map_view/assets/markers/user.png',
-        iconName: "User",
-        priority: true,
-        imageSize: Size(35, 35),
-        anchor: Offset(0.51, 0.785),
-        compassBasedRotation: true
-    );
-
-    await _unifiedMapController.addUserMarker(userMarker);
-  }
+  // Future<void> _addUserMarker() async {
+  //   final userMarker = GeoJsonMarker(
+  //       id: "user",
+  //       position: MapLocation(latitude: 77.18750616904389, longitude: 28.54368402795895),
+  //       title: "",
+  //       snippet: "",
+  //       assetPath: 'packages/unified_map_view/assets/markers/user.png',
+  //       iconName: "User",
+  //       priority: true,
+  //       imageSize: Size(35, 35),
+  //       anchor: Offset(0.51, 0.785),
+  //       compassBasedRotation: true
+  //   );
+  //
+  //   await _unifiedMapController.addUserMarker(userMarker);
+  // }
 
   void _startMovingUser() {
     _moveUserTimer?.cancel();
@@ -224,10 +224,10 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                     );
 
                     // Re-add marker at new location
-                    Future.delayed(const Duration(milliseconds: 500), () async {
-                      await _addUserMarker();
-                      await _unifiedMapController.moveMarker(_userMarkerId, newLocation);
-                    });
+                    // Future.delayed(const Duration(milliseconds: 500), () async {
+                    //   await _addUserMarker();
+                    //   await _unifiedMapController.moveMarker(_userMarkerId, newLocation);
+                    // });
 
                     if (mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(

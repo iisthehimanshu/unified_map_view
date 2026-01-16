@@ -233,6 +233,12 @@ class GeoJsonMarker {
     this.anchor
   });
 
+
+  @override
+  String toString() {
+    return 'GeoJsonMarker{id: $id, position: $position}';
+  }
+
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
