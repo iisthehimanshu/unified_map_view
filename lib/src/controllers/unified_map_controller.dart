@@ -279,7 +279,7 @@ class UnifiedMapController extends ChangeNotifier {
     await addPolylines(polylines);
 
     final markers = GeoJsonLoader.extractMarkers(collection);
-    addMarkers(markers);
+    await addMarkers(markers);
 
     notifyListeners();
   }
