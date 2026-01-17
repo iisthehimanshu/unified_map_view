@@ -88,8 +88,7 @@ class RenderingUtilities{
     return "#bdbdbd";
   }
 
-  static LandmarkAssetType? getAssetForLandmark(
-      Map<String, dynamic>? landmarkProperties) {
+  static LandmarkAssetType? getAssetForLandmark(Map<String, dynamic>? landmarkProperties) {
     try {
       if (landmarkProperties == null) return null;
 
@@ -104,6 +103,10 @@ class RenderingUtilities{
         final element = landmarkProperties['element'] as Map<String, dynamic>?;
         if (element == null) return null;
         rawType = element['subType'] ?? element['type'];
+      }
+
+      if(landmarkProperties["landmarkId"] == "696b20b8e28b9a8bb0a68270"){
+        print("type $rawType");
       }
 
       if (rawType == null) return null;
@@ -156,6 +159,9 @@ class RenderingUtilities{
       }
       if (type.contains('door only')) {
         return LandmarkAssetType.doorOnly;
+      }
+      if (type.contains('trash')) {
+        return LandmarkAssetType.sofa;
       }
 
       return null;

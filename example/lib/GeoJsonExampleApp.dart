@@ -62,7 +62,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mappls,
-        venueName: 'Mapmyindia',
+        venueName: 'IITDelhi',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 28.6139, longitude: 77.2090), // Delhi
           zoom: 12.0,
@@ -254,6 +254,9 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
             child: Stack(
               children: [
                 UnifiedMapWidget(controller: _unifiedMapController),
+                Positioned(bottom: 150,
+                right: 16,
+                child: FloorSpeedDial(controller: _unifiedMapController),)
               ],
             ),
           ),

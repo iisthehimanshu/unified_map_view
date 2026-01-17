@@ -20,7 +20,8 @@ enum LandmarkAssetType {
   floorConnection,
   emergency,
   optionPinSelection,
-  selectedPinSelection;
+  selectedPinSelection,
+  sofa;
 
   String get assetPath {
     switch (this) {
@@ -64,6 +65,8 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/option_pin_selection.png';
       case LandmarkAssetType.selectedPinSelection:
         return 'packages/unified_map_view/assets/markers/selected_pin_selection.png';
+      case LandmarkAssetType.sofa:
+        return 'packages/unified_map_view/assets/isometric_elements/sofa.png';
     }
   }
 
@@ -97,6 +100,7 @@ enum LandmarkAssetType {
 
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:
+      case LandmarkAssetType.sofa:
         return false;
     }
   }
@@ -127,6 +131,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:
+      case LandmarkAssetType.sofa:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.optionPinSelection:
@@ -135,4 +140,10 @@ enum LandmarkAssetType {
     }
   }
 
+  double? get bearing{
+    switch (this){
+      default: null;
+    }
+    return null;
+  }
 }

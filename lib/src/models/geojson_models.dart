@@ -3,6 +3,8 @@
 import 'dart:ui';
 import 'dart:developer' as developer;
 import 'dart:convert';
+import 'package:unified_map_view/src/utils/LandmarkAssetType.dart';
+
 import '../../unified_map_view.dart';
 import '../utils/renderingUtilities.dart';
 
@@ -216,6 +218,7 @@ class GeoJsonMarker {
   final Size? imageSize;
   final bool? textVisibility;
   final bool compassBasedRotation;
+  final double? bearing;
   Offset? anchor;
 
   GeoJsonMarker({
@@ -230,6 +233,7 @@ class GeoJsonMarker {
     this.imageSize,
     this.textVisibility = false,
     this.compassBasedRotation = false,
+    this.bearing,
     this.anchor
   });
 
@@ -263,15 +267,13 @@ class GeoJsonMarker {
     String? iconName;
     bool? getTextVisibility;
     Offset? anchor;
+    double? bearing;
     if(asset != null){
       assetPath = asset.assetPath;
       iconName = assetPath.split('/').last.split('.').first;
       getTextVisibility = asset.textVisibility;
       anchor = asset.anchor;
-    }
-
-    if(feature.id == "68c182af29a9f28e4785f595"){
-      print("RenderingUtilities.getAssetForLandmark(feature.properties); ${asset}");
+      bearing = asset.bearing;
     }
 
     String? polyId = feature.properties?["polyId"];
@@ -279,6 +281,8 @@ class GeoJsonMarker {
     if (associatedPolygons is List && associatedPolygons.isNotEmpty) {
       polyId = associatedPolygons.first;
     }
+
+    feature.properties?["bearing"] = bearing;
 
 
     return GeoJsonMarker(
@@ -291,7 +295,8 @@ class GeoJsonMarker {
       properties: feature.properties,
       textVisibility: getTextVisibility,
       priority: false,
-      anchor: anchor
+      anchor: anchor,
+      bearing: bearing
     );
   }
 }
