@@ -22,6 +22,8 @@ class UnifiedMapController extends ChangeNotifier {
   late UnifiedCameraPosition _cameraPosition;
   late AnnotationController _annotationController;
 
+  String? onReadyLandmarkSelectionID;
+
   UnifiedMapController({
     required MapProvider initialProvider,
     required String venueName,
@@ -36,7 +38,9 @@ class UnifiedMapController extends ChangeNotifier {
 
     Function ({required String markerId, required MapLocation coordinates})? onMarker,
     Function ({required String polygonId, required List<MapLocation> coordinates})? onPolygon,
-    Function ({required String polylineId, required List<MapLocation> coordinates})? onPolyline
+    Function ({required String polylineId, required List<MapLocation> coordinates})? onPolyline,
+
+    this.onReadyLandmarkSelectionID
 
   }) {
     _currentProvider = initialProvider;

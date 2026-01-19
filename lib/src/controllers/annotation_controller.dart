@@ -40,13 +40,14 @@ class AnnotationController{
     if (apiData == null || apiData.isEmpty) {
       throw Exception('No GeoJSON data received from API');
     }
+    print("apiD Data recieved at ${DateTime.now()}");
     _venueData = VenueData(venueName, apiData,buildingData);
     await renderVenue();
   }
 
   Future<void> renderVenue() async {
     if(!_unifiedMapController.controllerIsInitialized) return;
-    try{
+    // try{
       List<GeoJsonFeature> venueRenderData = [];
       _venueData.availableFloors.forEach((buildingId,floors){
         var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
@@ -56,9 +57,13 @@ class AnnotationController{
       await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 18);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
       await _unifiedMapController.fitBoundsToGeoJson();
-    }catch(e){
-      print("e $e");
-    }
+      print("onReadyLandmarkSelectionID ${_unifiedMapController.onReadyLandmarkSelectionID}");
+      if(_unifiedMapController.onReadyLandmarkSelectionID != null && _unifiedMapController.onReadyLandmarkSelectionID!.isNotEmpty){
+        await _unifiedMapController.selectLocation(polyID: _unifiedMapController.onReadyLandmarkSelectionID!);
+      }
+    // }catch(e){
+    //   print("e $e");
+    // }
   }
 
   Future<void> changeBuildingFloor(String buildingID, int floor) async {

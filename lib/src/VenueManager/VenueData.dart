@@ -119,7 +119,7 @@ class VenueData{
   GeoJsonFeature? findLocation(String polyId){
     GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
     if (model.data == null) return null;
-
+    print("model.data $polyId ${model.data}");
     final feature = model.data!.firstWhere((feature)=>(feature.id == polyId || feature.properties?["polyId"] == polyId));
 
     return GeoJsonFeature.fromJson(feature.toJson());

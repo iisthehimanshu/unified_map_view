@@ -1,6 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'GlobalGeoJSONVenueAPIModel.dart';
+part of 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
 
 // **************************************************************************
 // TypeAdapterGenerator
@@ -9,7 +9,7 @@ part of 'GlobalGeoJSONVenueAPIModel.dart';
 class GlobalGeoJSONVenueAPIModelAdapter
     extends TypeAdapter<GlobalGeoJSONVenueAPIModel> {
   @override
-  final int typeId = 1;
+  final int typeId = 10;
 
   @override
   GlobalGeoJSONVenueAPIModel read(BinaryReader reader) {

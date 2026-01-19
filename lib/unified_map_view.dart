@@ -43,10 +43,8 @@ class UnifiedMapViewPackage {
     await Hive.initFlutter();
 
     // Register adapters
-    if (!Hive.isAdapterRegistered(0)) {
       Hive.registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
       await Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile');
-    }
     _initialized = true;
   }
 

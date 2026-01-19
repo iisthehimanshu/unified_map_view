@@ -26,8 +26,8 @@ class GlobalGeoJSONVenueStorageService{
   }
 
   Future<void> saveGeoData(GlobalGeoJSONVenueAPIModel user,String uniqueId) async {
-    await _globalGeoJsonBox?.put(uniqueId, user);
     print("saveGeoData ${getGeoData(uniqueId)}");
+    await _globalGeoJsonBox?.put(uniqueId, user);
 
   }
 

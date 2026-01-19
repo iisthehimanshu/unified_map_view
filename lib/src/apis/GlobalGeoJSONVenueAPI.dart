@@ -3,10 +3,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/cupertino.dart';
+import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
-import '../database/model/GlobalGeoJSONVenueAPIModel.dart';
+import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
 import '../services/GlobalGeoJSONStorageService.dart';
 
 
@@ -14,7 +15,8 @@ class GlobalGeoJSONVenueAPI{
 
   Future<Map<String, dynamic>?> getGeoJSONData(String venueName,{bool fromDB = true}) async {
     final _globalGeoJSONService = await GlobalGeoJSONVenueStorageService.create();
-
+    print("_globalGeoJSONService.contiansID(venueName) ${_globalGeoJSONService.contiansID(venueName)}");
+    print('Adapter registered: ${Hive.isAdapterRegistered(1)}');
     if(fromDB && _globalGeoJSONService.contiansID(venueName) != null && _globalGeoJSONService.contiansID(venueName)==true){
       print("GlobalGeoJSONVenueAPI from DataBase");
       getGeoJSONData(venueName,fromDB: false);
@@ -35,7 +37,7 @@ class GlobalGeoJSONVenueAPI{
       print("GlobalGeoJSONVenueAPI from API");
       return json.decode(response.body);
     } else if (response.statusCode == 403) {
-      return await getGeoJSONData(venueName);
+      return await getGeoJSONData(venueName, fromDB: false);
     } else {
       print("getGeoJSONData response.statusCode ${response.statusCode} ${response.body}");
       return null;
