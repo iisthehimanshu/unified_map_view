@@ -55,6 +55,8 @@ abstract class BaseMapProvider {
   /// Add a polygon to the map
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon);
 
+  Future<void> addSection(dynamic controller, GeoJsonPolygon polygon);
+
   Future<void> addPolygons(dynamic controller, List<GeoJsonPolygon> polygons);
 
   /// Remove a polygon from the map

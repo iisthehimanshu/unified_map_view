@@ -5,7 +5,6 @@ import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
 
 import '../../unified_map_view.dart';
 import '../models/Cell.dart';
-import '../providers/apple_map_provider.dart';
 import '../providers/google_map_provider.dart';
 import '../providers/mapbox_map_provider.dart';
 
@@ -73,7 +72,6 @@ class UnifiedMapController extends ChangeNotifier {
   void _initializeProviders() {
     _providers[MapProvider.google] = GoogleMapProvider();
     _providers[MapProvider.mapbox] = MapboxMapProvider();
-    _providers[MapProvider.apple] = AppleMapProvider();
     _providers[MapProvider.mappls] = MapplsMapProvider();
   }
 
@@ -274,10 +272,12 @@ class UnifiedMapController extends ChangeNotifier {
     print("addGeoJsonFeatures ${StackTrace.current}");
     // Add polygons
     final polygons = GeoJsonLoader.extractPolygons(collection);
-    final boundaryPolygons = polygons.where((p) => p.properties?["polygonType"] == "Boundary").toList();
-    final otherPolygons = polygons.where((p) => p.properties?["polygonType"] != "Boundary").toList();
+    final sectionPolygons = polygons.where((p) => p.properties?["type"] == "Section").toList();
+    final boundaryPolygons = polygons.where((p) => p.properties?["type"] == "Boundary").toList();
+    final otherPolygons = polygons.where((p) => !sectionPolygons.contains(p) && !boundaryPolygons.contains(p)).toList();
     await addPolygons(boundaryPolygons);
     await addPolygons(otherPolygons);
+    await addPolygons(sectionPolygons);
 
     final polylines = GeoJsonLoader.extractPolylines(collection);
     await addPolylines(polylines);
@@ -401,21 +401,16 @@ class UnifiedMapController extends ChangeNotifier {
     allPoints.addAll(_markers.map((m){
       return m.position;
     }));
-    print("allPoints $allPoints");
 
     // Collect points from polygons
     for (var polygon in _polygons) {
       allPoints.addAll(polygon.points);
     }
-    print("allPoints $allPoints");
 
     // Collect points from polylines
     for (var polyline in _polylines) {
       allPoints.addAll(polyline.points);
     }
-    print("allPoints $allPoints");
-
-    print("allPoints $allPoints ${StackTrace.current}");
 
     if (allPoints.isEmpty) return;
 

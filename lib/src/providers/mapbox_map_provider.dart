@@ -1223,4 +1223,10 @@ class MapboxMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> addSection(controller, GeoJsonPolygon polygon) {
+    // TODO: implement addSection
+    throw UnimplementedError();
+  }
+
 }
