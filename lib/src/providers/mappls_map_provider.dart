@@ -152,7 +152,6 @@ class MapplsMapProvider extends BaseMapProvider {
           zoomGesturesEnabled: config.zoomControlsEnabled,
           minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
           logoViewMargins:Point(50, 5),
-
         ),
         Positioned(bottom:-11,right: 58,child: Row(
           children: [
@@ -160,7 +159,7 @@ class MapplsMapProvider extends BaseMapProvider {
               padding: const EdgeInsets.only(bottom: 3.0),
               child: Text("| ",style: TextStyle(fontSize: 21,fontWeight: FontWeight.w700,color: Colors.grey[800]),),
             ),
-            Image.asset("packages/unified_map_view/assets/markers/logo.png",height: 50,width: 50,),
+            Image.asset("packages/unified_map_view/assets/markers/logo.png",height: 52,width: 52,),
           ],
         )),
       ]
