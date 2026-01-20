@@ -8,10 +8,12 @@ import '../../unified_map_view.dart';
 class FloorSpeedDial extends StatelessWidget {
 
   final UnifiedMapController controller;
+  final Color color;
 
   const FloorSpeedDial({
     super.key,
-    required this.controller
+    required this.controller,
+    this.color= Colors.blue
   });
 
   @override
@@ -24,7 +26,7 @@ class FloorSpeedDial extends StatelessWidget {
     return SafeArea(
       child: SpeedDial(
         activeIcon: Icons.close,
-        backgroundColor: Colors.blue,
+        backgroundColor: color,
         foregroundColor: Colors.white,
         overlayOpacity: 0.2,
         children: floors
