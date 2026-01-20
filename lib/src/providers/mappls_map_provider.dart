@@ -58,98 +58,95 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Widget buildMap({required MapConfig config}) {
-    return Stack(
-      children: [MapplsMap(
-        initialCameraPosition: CameraPosition(
-          target: LatLng(
-            config.initialLocation.mapLocation.latitude,
-            config.initialLocation.mapLocation.longitude,
-          ),
-          zoom: config.initialLocation.zoom,
+    return MapplsMap(
+      initialCameraPosition: CameraPosition(
+        target: LatLng(
+          config.initialLocation.mapLocation.latitude,
+          config.initialLocation.mapLocation.longitude,
         ),
-        onMapCreated: (MapplsMapController controller) async {
-          _config = config;
-          _controller = controller;
-          config.onMapCreated(controller);
-      
-          // Handle polygon taps
-          controller.onFeatureTapped.add((id, point, coordinates) async {
-            print("Mappls onFeatureTapped id $id $point $coordinates");
-      
-            try {
-              // Query rendered features at the tap point for marker layers
-              final markerFeatures = await controller.queryRenderedFeatures(
-                  point, [_normalMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
-              );
-      
-              if (markerFeatures.isNotEmpty) {
-                // Marker was tapped
-                final feature = markerFeatures.first;
-                print("feature $feature ${feature['properties']?['id']}");
-                final id = _extractPolygonIdFromTap(feature['properties']?['id']);
-                print("Marker tapped with ID: $id");
-      
-                // Handle marker tap
-                if (id != null) {
-                  selectLocation(controller, id);
-                  return; // Exit early, don't process as polygon
-                }
-              }
-      
-              // If no marker was found, check for polygon tap
-              if (id.isNotEmpty) {
-                final polygonId = _extractPolygonIdFromTap(id);
-                if (polygonId != null && !polygonId.toLowerCase().contains("boundary")) {
-                  selectLocation(controller, polygonId);
-                }
-              }
-      
-            } catch (e) {
-              print("Error handling feature tap: $e");
-            }
-          });
-        },
-          onStyleLoadedCallback: () async {
-            if (_controller != null) {
-              // Now initialize layers after style is loaded
-              await enablePolygonLayers(_controller!);
-              await enablePolylineLayers(_controller!);
-              await enableCircleLayers(_controller!);
-              await enableMarkerLayers(_controller!);
-      
-            }
-          },
-        onCameraIdle: () async {
-          if (_controller != null) {
-            try {
-              final bounds = await _controller!.getVisibleRegion();
-      
-              final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
-              final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
-              final cameraPos = _controller!.cameraPosition;
-              config.onCameraMove(UnifiedCameraPosition(
-                mapLocation: MapLocation(
-                  latitude: centerLat,
-                  longitude: centerLng,
-                ),
-                zoom: cameraPos?.zoom ?? 0.0,
-                bearing: cameraPos?.bearing ?? 0.0,
-              ));
-            } catch (e) {
-              print("Error getting camera position: $e");
-            }
-          }
-        },
-        myLocationEnabled: config.showUserLocation,
-        myLocationTrackingMode: MyLocationTrackingMode.none,
-        compassEnabled: true,
-        rotateGesturesEnabled: config.rotateGesturesEnabled,
-        scrollGesturesEnabled: config.scrollGesturesEnabled,
-        tiltGesturesEnabled: config.tiltGesturesEnabled,
-        zoomGesturesEnabled: config.zoomControlsEnabled,
-        minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
+        zoom: config.initialLocation.zoom,
       ),
-      Positioned(right: 16, bottom: 150, child: Text(_rotatingSymbols.length.toString()),)],
+      onMapCreated: (MapplsMapController controller) async {
+        _config = config;
+        _controller = controller;
+        config.onMapCreated(controller);
+
+        // Handle polygon taps
+        controller.onFeatureTapped.add((id, point, coordinates) async {
+          print("Mappls onFeatureTapped id $id $point $coordinates");
+
+          try {
+            // Query rendered features at the tap point for marker layers
+            final markerFeatures = await controller.queryRenderedFeatures(
+                point, [_normalMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
+            );
+
+            if (markerFeatures.isNotEmpty) {
+              // Marker was tapped
+              final feature = markerFeatures.first;
+              print("feature $feature ${feature['properties']?['id']}");
+              final id = _extractPolygonIdFromTap(feature['properties']?['id']);
+              print("Marker tapped with ID: $id");
+
+              // Handle marker tap
+              if (id != null) {
+                selectLocation(controller, id);
+                return; // Exit early, don't process as polygon
+              }
+            }
+
+            // If no marker was found, check for polygon tap
+            if (id.isNotEmpty) {
+              final polygonId = _extractPolygonIdFromTap(id);
+              if (polygonId != null && !polygonId.toLowerCase().contains("boundary")) {
+                selectLocation(controller, polygonId);
+              }
+            }
+
+          } catch (e) {
+            print("Error handling feature tap: $e");
+          }
+        });
+      },
+      onStyleLoadedCallback: () async {
+        if (_controller != null) {
+          // Now initialize layers after style is loaded
+          await enablePolygonLayers(_controller!);
+          await enablePolylineLayers(_controller!);
+          await enableCircleLayers(_controller!);
+          await enableMarkerLayers(_controller!);
+
+        }
+      },
+      onCameraIdle: () async {
+        if (_controller != null) {
+          try {
+            final bounds = await _controller!.getVisibleRegion();
+
+            final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
+            final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
+            final cameraPos = _controller!.cameraPosition;
+            config.onCameraMove(UnifiedCameraPosition(
+              mapLocation: MapLocation(
+                latitude: centerLat,
+                longitude: centerLng,
+              ),
+              zoom: cameraPos?.zoom ?? 0.0,
+              bearing: cameraPos?.bearing ?? 0.0,
+            ));
+          } catch (e) {
+            print("Error getting camera position: $e");
+          }
+        }
+      },
+      myLocationEnabled: config.showUserLocation,
+      myLocationTrackingMode: MyLocationTrackingMode.none,
+      compassEnabled: true,
+      rotateGesturesEnabled: config.rotateGesturesEnabled,
+      scrollGesturesEnabled: config.scrollGesturesEnabled,
+      tiltGesturesEnabled: config.tiltGesturesEnabled,
+      zoomGesturesEnabled: config.zoomControlsEnabled,
+      minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
     );
   }
 
@@ -1214,7 +1211,7 @@ class MapplsMapProvider extends BaseMapProvider {
       } else if (marker != null) {
         // Use marker position if polygon not available
         center = marker.position;
-        targetZoom = 22.0; // Default zoom for marker-only view
+        targetZoom = 19; // Default zoom for marker-only view
       }
 
       // Update polygon selection state if polygon exists
