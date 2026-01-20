@@ -46,6 +46,7 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _normalPolygonLayerId = 'normal-polygons-layer';
   final String _selectedPolygonLayerId = 'selected-polygon-layer';
   final String _patchPolygonLayerId = 'patch-polygon-layer';
+  final String _sectionPolygonLayerId = 'section-polygon-layer';
 
   final String _polylineSourceId = 'polylines-source';
   final String _pathLayerId = 'path-polyline-layer';
@@ -566,6 +567,18 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
+  Future<void> addSection(controller, GeoJsonPolygon polygon) async {
+    if (controller is MapplsMapController) {
+      try {
+        _polygons.add(polygon);
+        await _updatePolygonSource(controller);
+      } catch (e) {
+        print('Error adding polygon: $e');
+      }
+    }
+  }
+
+  @override
   Future<void> addPolygons(dynamic controller, List<GeoJsonPolygon> polygons) async {
     if (controller is MapplsMapController) {
       try {
@@ -615,7 +628,8 @@ class MapplsMapProvider extends BaseMapProvider {
           'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
           'fillOpacity': fillColor.a,
           'isSelected': false,
-          'boundary' : polygon.id.toLowerCase().contains("boundary")
+          'boundary' : polygon.properties?['type'] == "Boundary",
+          'section' : polygon.properties?['type'] == "Section",
         }
       };
     }).toList();
@@ -955,9 +969,28 @@ class MapplsMapProvider extends BaseMapProvider {
           fillOpacity: ["get", "fillOpacity"],
           fillOutlineColor: ["get", "strokeColor"],
         ),
-        filter: ["!=", ["get", "isSelected"], true],
+        filter: [
+          "all",
+          ["!=", ["get", "isSelected"], true],
+          ["!=", ["get", "section"], true],
+          ["!=", ["get", "boundary"], true],
+        ],
         enableInteraction: true,
         belowLayerId: _polylineLayerId,
+      );
+
+      await controller.addFillLayer(
+          _polygonSourceId,
+          _sectionPolygonLayerId,
+          FillLayerProperties(
+            fillColor: ["get", "fillColor"],
+            fillOpacity: ["get", "fillOpacity"],
+            fillOutlineColor: ["get", "strokeColor"],
+          ),
+          filter: ["==", ["get", "section"], true],
+          enableInteraction: true,
+          belowLayerId: _polylineLayerId,
+          maxzoom: 17.0
       );
 
       await controller.addFillLayer(
