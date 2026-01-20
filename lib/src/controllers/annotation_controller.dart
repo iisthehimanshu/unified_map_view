@@ -56,7 +56,9 @@ class AnnotationController{
 
       await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 18);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
-      await _unifiedMapController.fitBoundsToGeoJson();
+      if(_user != null){
+        await _unifiedMapController.fitBoundsToGeoJson();
+      }
       print("onReadyLandmarkSelectionID ${_unifiedMapController.onReadyLandmarkSelectionID}");
       if(_unifiedMapController.onReadyLandmarkSelectionID != null && _unifiedMapController.onReadyLandmarkSelectionID!.isNotEmpty){
         await _unifiedMapController.selectLocation(polyID: _unifiedMapController.onReadyLandmarkSelectionID!);
@@ -77,6 +79,8 @@ class AnnotationController{
     await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
       localizeUser(_user!);
+    }else{
+
     }
   }
 
