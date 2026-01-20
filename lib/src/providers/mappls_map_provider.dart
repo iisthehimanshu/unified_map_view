@@ -1063,6 +1063,40 @@ class MapplsMapProvider extends BaseMapProvider {
     return null;
   }
 
+  CameraBound? calculateBounds(controller, List<MapLocation> allPoints){
+    // Calculate bounds
+    double minLat = allPoints.first.latitude;
+    double maxLat = allPoints.first.latitude;
+    double minLng = allPoints.first.longitude;
+    double maxLng = allPoints.first.longitude;
+
+    for (var point in allPoints) {
+      if (point.latitude < minLat) minLat = point.latitude;
+      if (point.latitude > maxLat) maxLat = point.latitude;
+      if (point.longitude < minLng) minLng = point.longitude;
+      if (point.longitude > maxLng) maxLng = point.longitude;
+    }
+
+    // Move to center
+    try {
+      // Add padding to the bounds (adjust these values as needed)
+      final latPadding = (maxLat - minLat) * 0.1; // 10% padding
+      final lngPadding = (maxLng - minLng) * 0.1;
+
+      // Create bounds with padding
+      final bounds = CameraBound(
+        southwest: MapLocation(
+            latitude: minLat - latPadding, longitude: minLng - lngPadding),
+        northeast: MapLocation(
+            latitude: maxLat + latPadding, longitude: maxLng + lngPadding),
+      );
+      return bounds;
+    }catch(e){
+      print("calculateBounds error $e");
+    }
+    return null;
+  }
+
   @override
   Future<void> selectLocation(controller, String polyID) async {
     if(selectedLocation?.polyID == polyID) return;
@@ -1206,10 +1240,19 @@ class MapplsMapProvider extends BaseMapProvider {
         marker: marker,
       );
 
+      CameraBound? bounds;
+      if(polygon != null && polygon.points.isNotEmpty){
+        bounds = calculateBounds(controller, polygon.points);
+      }
+
       // Animate camera if we have a valid center
-      if (center != null && targetZoom != null) {
+      if (bounds != null || (center != null && targetZoom != null)) {
         try {
-          animateCamera(controller, center, targetZoom);
+          if(bounds != null){
+            fitCameraToBounds(controller, bounds);
+          }else if(center != null && targetZoom != null){
+            animateCamera(controller, center, targetZoom);
+          }
         } catch (e) {
           print('Warning: Failed to animate camera: $e');
         }
