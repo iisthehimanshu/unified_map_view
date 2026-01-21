@@ -3,7 +3,6 @@
 import 'dart:ui';
 import 'dart:developer' as developer;
 import 'dart:convert';
-import 'package:unified_map_view/src/utils/LandmarkAssetType.dart';
 
 import '../../unified_map_view.dart';
 import '../utils/renderingUtilities.dart';

@@ -105,6 +105,8 @@ class RenderingUtilities{
         rawType = element['subType'] ?? element['type'];
       }
 
+
+
       if(landmarkProperties["landmarkId"] == "696b20b8e28b9a8bb0a68270"){
         print("type $rawType");
       }
@@ -112,7 +114,7 @@ class RenderingUtilities{
       if (rawType == null) return null;
 
       final type = rawType.toLowerCase().trim();
-
+      print("type-- ${type}");
       // ================= Washrooms =================
       if (type.contains('washroom') || type.contains('restroom')) {
         var washroomType = landmarkProperties['washroomType']??type;
@@ -124,10 +126,18 @@ class RenderingUtilities{
           return LandmarkAssetType.maleWashroom;
         }
         if (washroomType.contains('unisex') || type.contains('accessible')) {
-          return LandmarkAssetType.accessibleWashroom;
+          return LandmarkAssetType.unisexWashroom;
         }
         return LandmarkAssetType.washroom;
       }
+      if(type.toLowerCase().contains('smoking zone')){
+        return LandmarkAssetType.smokingArea;
+      }
+      if(type.contains("fire extinguisher")){
+        print("fire Extinguisher");
+        return LandmarkAssetType.fireExtinguisher;
+      }
+
 
       // ================= Floor Connections =================
       if (type.contains('lift') || type.contains('elevator')) {
@@ -144,7 +154,20 @@ class RenderingUtilities{
       if (type.contains('entrance') || type.contains('exit')) {
         return LandmarkAssetType.mainEntry;
       }
+      if(type.contains('assembly area')){
+        return LandmarkAssetType.assemblyRoom;
+      }
+      if(type.contains('hall')){
+        return LandmarkAssetType.conferenceRoom;
+      }
+      if(type.contains('registration area')){
+        return LandmarkAssetType.registrationDesk;
+      }
       if (type.contains('room') || type.contains('office')) {
+        String roomName = landmarkProperties['name'];
+        if(roomName.contains("Meeting")){
+          return LandmarkAssetType.meetingRoom;
+        }
         return null;
         return LandmarkAssetType.room;
       }

@@ -283,7 +283,10 @@ class UnifiedMapController extends ChangeNotifier {
     await addPolylines(polylines);
 
     final markers = GeoJsonLoader.extractMarkers(collection);
-    await addMarkers(markers);
+    final sectionMarkers = markers.where((marker) => marker.properties?["type"] == "Section").toList();
+    final normalMarker = markers.where((marker) => !sectionMarkers.contains(marker)).toList();
+    await addMarkers(normalMarker);
+    await addMarkers(sectionMarkers);
 
     notifyListeners();
   }
