@@ -13,6 +13,7 @@ enum LandmarkAssetType {
   room,
   doorOnly,
   mainEntry,
+  counter,
   genericMarker,
   user,
   source,
@@ -47,7 +48,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.maleWashroom:
         return 'packages/unified_map_view/assets/markers/male_washroom.png';
       case LandmarkAssetType.accessibleWashroom:
-        return 'packages/unified_map_view/assets/markers/male_washroom.png';
+        return 'packages/unified_map_view/assets/markers/unisex_washroom.png';
       case LandmarkAssetType.washroom:
         return 'packages/unified_map_view/assets/markers/washroom.png';
       case LandmarkAssetType.waterFountain:
@@ -62,6 +63,8 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/building_entry.png';
       case LandmarkAssetType.genericMarker:
         return 'packages/unified_map_view/assets/markers/generic_marker.png';
+      case LandmarkAssetType.counter:
+        return 'packages/unified_map_view/assets/markers/counter.png';
       case LandmarkAssetType.user:
         return 'packages/unified_map_view/assets/markers/user.png';
       case LandmarkAssetType.source:
@@ -125,6 +128,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.meetingRoom:
       case LandmarkAssetType.registrationDesk:
       case LandmarkAssetType.smokingArea:
+      case LandmarkAssetType.counter:
         return false;
 
       case LandmarkAssetType.waterFountain:
@@ -155,6 +159,8 @@ enum LandmarkAssetType {
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.source:
       case LandmarkAssetType.smokingArea:
+      case LandmarkAssetType.counter:
+      case LandmarkAssetType.accessibleWashroom:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.user:
@@ -165,7 +171,6 @@ enum LandmarkAssetType {
       case LandmarkAssetType.washroom:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
-      case LandmarkAssetType.accessibleWashroom:
       case LandmarkAssetType.destination:
         return const Offset(0.5, 1.0);
 
@@ -193,12 +198,5 @@ enum LandmarkAssetType {
 
 
     }
-  }
-
-  double? get bearing{
-    switch (this){
-      default: null;
-    }
-    return null;
   }
 }

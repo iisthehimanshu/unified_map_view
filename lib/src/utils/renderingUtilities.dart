@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-
+import 'package:unified_map_view/src/models/map_location.dart';
+import 'dart:math';
 import 'LandmarkAssetType.dart';
 
 class RenderingUtilities{
@@ -28,6 +29,8 @@ class RenderingUtilities{
     'lift': {'strokeColor': Color(0xffB5CCE3), 'fillColor': Color(0xffDAE6F1)},
     'male washroom': {'strokeColor': Color(0xff6EBCF7), 'fillColor': Color(0xFFE7F4FE)},
     'female washroom': {'strokeColor': Color(0xff6EBCF7), 'fillColor': Color(0xFFE7F4FE)},
+    'unisex washroom': {'strokeColor': Color(0xff6EBCF7), 'fillColor': Color(0xFFE7F4FE)},
+    'accessible washroom': {'strokeColor': Color(0xff6EBCF7), 'fillColor': Color(0xFFE7F4FE)},
     'fire': {'strokeColor': Color(0xff000000), 'fillColor': Color(0xffF21D0D)},
     'water': {'strokeColor': Color(0xff6EBCF7), 'fillColor': Color(0xffE7F4FE)},
 
@@ -45,6 +48,7 @@ class RenderingUtilities{
     'reception': {'strokeColor': Color(0xffA38F9F), 'fillColor': Color(0xffE8E3E7)},
     'atm': {'strokeColor': Color(0xffE99696), 'fillColor': Color(0xffFBEAEA)},
     'health': {'strokeColor': Color(0xffE99696), 'fillColor': Color(0xffFBEAEA)},
+    'Cafeteria': {'strokeColor': Color(0xffE99696), 'fillColor': Color(0xffFBEAEA)},
 
     'boundary': {'strokeColor': Color(0xffC0C0C0), 'fillColor': Color(0xffffffff)},
 
@@ -105,16 +109,10 @@ class RenderingUtilities{
         rawType = element['subType'] ?? element['type'];
       }
 
-
-
-      if(landmarkProperties["landmarkId"] == "696b20b8e28b9a8bb0a68270"){
-        print("type $rawType");
-      }
-
       if (rawType == null) return null;
 
       final type = rawType.toLowerCase().trim();
-      print("type-- ${type}");
+
       // ================= Washrooms =================
       if (type.contains('washroom') || type.contains('restroom')) {
         var washroomType = landmarkProperties['washroomType']??type;
@@ -151,7 +149,7 @@ class RenderingUtilities{
       }
 
       // ================= Other Types =================
-      if (type.contains('entrance') || type.contains('exit')) {
+      if (type.contains('entry') || type.contains('entrance') || type.contains('exit')) {
         return LandmarkAssetType.mainEntry;
       }
       if(type.contains('assembly area')){
@@ -160,7 +158,7 @@ class RenderingUtilities{
       if(type.contains('hall')){
         return LandmarkAssetType.conferenceRoom;
       }
-      if(type.contains('registration area')){
+      if(type.contains('registration')){
         return LandmarkAssetType.registrationDesk;
       }
       if (type.contains('room') || type.contains('office')) {
@@ -186,6 +184,9 @@ class RenderingUtilities{
       if (type.contains('trash')) {
         return LandmarkAssetType.sofa;
       }
+      if (type.contains('counter')) {
+        return LandmarkAssetType.counter;
+      }
 
       return null;
     } catch (e) {
@@ -194,6 +195,199 @@ class RenderingUtilities{
     }
   }
 
+  RectangleResult findBestFitRectangleBearing(List<MapLocation> polygon) {
+    if (polygon.length < 3) {
+      throw ArgumentError('Polygon must have at least 3 points');
+    }
 
+    // Convert to local Cartesian coordinates (meters)
+    final centroid = _getCentroid(polygon);
+    final localPoints = polygon.map((p) => _latLngToLocal(p, centroid)).toList();
 
+    // Find convex hull (for minimum bounding rectangle)
+    final hull = _convexHull(localPoints);
+
+    // Find minimum area bounding rectangle using rotating calipers
+    final rectData = _minAreaRectangle(hull);
+
+    // Determine longest axis
+    final isWidthLonger = rectData.width >= rectData.height;
+    final longestAxisAngle = isWidthLonger
+        ? rectData.angle
+        : (rectData.angle + 90) % 360;
+
+    // Get the corners of the rectangle in local coordinates
+    final rectCorners = rectData.corners;
+
+    // Determine which side is the longest
+    List<Point> longestSideLocal;
+    if (isWidthLonger) {
+      // Use the first edge (bottom side)
+      longestSideLocal = [rectCorners[0], rectCorners[1]];
+    } else {
+      // Use the second edge (left side)
+      longestSideLocal = [rectCorners[1], rectCorners[2]];
+    }
+
+    // Convert back to LatLng
+    final longestSide = longestSideLocal
+        .map((p) => _localToLatLng(p, centroid))
+        .toList();
+
+    // Convert to global bearing (0° = North, clockwise)
+    var bearing = _normalizeBearing(longestAxisAngle + 90);
+
+    // if(bearing > 180){
+    //   bearing -= 180;
+    // }
+
+    return RectangleResult(bearing, longestSide);
+  }
+
+  MapLocation _getCentroid(List<MapLocation> polygon) {
+    final lat = polygon.map((p) => p.latitude).reduce((a, b) => a + b) / polygon.length;
+    final lon = polygon.map((p) => p.longitude).reduce((a, b) => a + b) / polygon.length;
+    return MapLocation(latitude: lat, longitude: lon);
+  }
+
+  Point _latLngToLocal(MapLocation point, MapLocation origin) {
+    final latRad = origin.latitude * pi / 180;
+    final dLat = point.latitude - origin.latitude;
+    final dLon = point.longitude - origin.longitude;
+
+    final x = dLon * 111320.0 * cos(latRad);
+    final y = dLat * 110540.0;
+
+    return Point(x, y);
+  }
+
+  List<Point> _convexHull(List<Point> points) {
+    if (points.length < 3) return points;
+
+    final sorted = List<Point>.from(points)
+      ..sort((a, b) {
+        final cmp = a.x.compareTo(b.x);
+        return cmp != 0 ? cmp : a.y.compareTo(b.y);
+      });
+
+    double cross(Point o, Point a, Point b) {
+      return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x).toDouble();
+    }
+
+    final lower = <Point>[];
+    for (final p in sorted) {
+      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+        lower.removeLast();
+      }
+      lower.add(p);
+    }
+
+    final upper = <Point>[];
+    for (final p in sorted.reversed) {
+      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+        upper.removeLast();
+      }
+      upper.add(p);
+    }
+
+    lower.removeLast();
+    upper.removeLast();
+
+    return [...lower, ...upper];
+  }
+
+  Rectangle _minAreaRectangle(List<Point> hull) {
+    double minArea = double.infinity;
+    Rectangle? bestRect;
+
+    for (int i = 0; i < hull.length; i++) {
+      final p1 = hull[i];
+      final p2 = hull[(i + 1) % hull.length];
+
+      // Edge vector
+      final dx = p2.x - p1.x;
+      final dy = p2.y - p1.y;
+      final edgeAngle = atan2(dy, dx);
+
+      // Rotate all points to align edge with x-axis
+      final rotated = hull.map((p) {
+        final rx = (p.x - p1.x) * cos(-edgeAngle) - (p.y - p1.y) * sin(-edgeAngle);
+        final ry = (p.x - p1.x) * sin(-edgeAngle) + (p.y - p1.y) * cos(-edgeAngle);
+        return Point(rx, ry);
+      }).toList();
+
+      // Find bounding box in rotated space
+      final minX = rotated.map((p) => p.x).reduce(min);
+      final maxX = rotated.map((p) => p.x).reduce(max);
+      final minY = rotated.map((p) => p.y).reduce(min);
+      final maxY = rotated.map((p) => p.y).reduce(max);
+
+      final width = maxX - minX;
+      final height = maxY - minY;
+      final area = width * height;
+
+      if (area < minArea) {
+        minArea = area;
+        // Angle in degrees from positive x-axis (East)
+        final angleDeg = edgeAngle * 180 / pi;
+
+        // Calculate the four corners in rotated space
+        final corners = [
+          Point(minX, minY),
+          Point(maxX, minY),
+          Point(maxX, maxY),
+          Point(minX, maxY),
+        ];
+
+        // Rotate corners back to original orientation
+        final originalCorners = corners.map((c) {
+          final ox = c.x * cos(edgeAngle) - c.y * sin(edgeAngle) + p1.x;
+          final oy = c.x * sin(edgeAngle) + c.y * cos(edgeAngle) + p1.y;
+          return Point(ox, oy);
+        }).toList();
+
+        bestRect = Rectangle(originalCorners, width, height, angleDeg);
+      }
+    }
+
+    return bestRect!;
+  }
+
+  MapLocation _localToLatLng(Point point, MapLocation origin) {
+    final latRad = origin.latitude * pi / 180;
+
+    final dLon = point.x / (111320.0 * cos(latRad));
+    final dLat = point.y / 110540.0;
+
+    return MapLocation(latitude:origin.latitude + dLat, longitude:origin.longitude + dLon);
+  }
+
+  double _normalizeBearing(double angle) {
+    // Convert from mathematical angle (0° = East, counter-clockwise)
+    // to bearing (0° = North, clockwise)
+    double bearing = 90 - angle;
+
+    // Normalize to [0, 360)
+    bearing = bearing % 360;
+    if (bearing < 0) bearing += 360;
+
+    return bearing;
+  }
+
+}
+
+class RectangleResult {
+  final double bearing;
+  final List<MapLocation> longestSide;
+
+  RectangleResult(this.bearing, this.longestSide);
+}
+
+class Rectangle {
+  final List<Point> corners;
+  final double width;
+  final double height;
+  final double angle;
+
+  Rectangle(this.corners, this.width, this.height, this.angle);
 }
