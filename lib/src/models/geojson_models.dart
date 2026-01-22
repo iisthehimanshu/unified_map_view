@@ -5,6 +5,7 @@ import 'dart:developer' as developer;
 import 'dart:convert';
 
 import '../../unified_map_view.dart';
+import '../config.dart';
 import '../utils/renderingUtilities.dart';
 
 export 'dart:typed_data';
@@ -279,6 +280,10 @@ class GeoJsonMarker {
     bool? textVisibility;
     Offset? anchor;
     String? parsedTitle;
+
+    if(feature.properties?["imageFile"] != null){
+      assetPath ??= "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
+    }
 
     assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
     if(assetPath != null){
