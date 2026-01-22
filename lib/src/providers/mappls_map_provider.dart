@@ -1355,9 +1355,6 @@ class MapplsMapProvider extends BaseMapProvider {
     try {
       GeoJsonPolygon? polygon;
       GeoJsonMarker? marker;
-
-      String? markerID;
-
       // Try to find marker
       try {
         if (_symbols.isNotEmpty) {
@@ -1365,22 +1362,21 @@ class MapplsMapProvider extends BaseMapProvider {
                 (m) => m.id.contains(polyID),
             orElse: () => throw Exception('Marker not found'),
           );
-          markerID = marker.id;
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
       }
 
       String polyIDInsideMarker = polyID;
-      if(markerID != null){
-        polyIDInsideMarker = _extractPolygonIdFromTap(markerID)??polyID;
+      if(marker?.id != null){
+        polyIDInsideMarker = _extractPolygonIdFromTap(marker!.id)??polyID;
       }
 
       // Try to find polygon
       try {
         if (_polygons.isNotEmpty) {
           polygon = _polygons.firstWhere(
-                (p) => (p.id.contains(polyID) || p.id.contains(polyIDInsideMarker!)),
+                (p) => (p.id.contains(polyID) || p.id.contains(polyIDInsideMarker)),
             orElse: () => throw Exception('Polygon not found'),
           );
 
@@ -1460,12 +1456,14 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Handle marker styling if marker exists
       if (marker != null) {
-        try {
-          final genericMarker = PredefinedMarkers.getGenericMarker(marker);
-          await removeMarker(controller, polyID);
-          await addMarker(controller, genericMarker);
-        } catch (e) {
-          print('Warning: Failed to update marker styling: $e');
+        if(marker.assetPath == null){
+          try {
+            final genericMarker = PredefinedMarkers.getGenericMarker(marker);
+            await removeMarker(controller, polyID);
+            await addMarker(controller, genericMarker);
+          } catch (e) {
+            print('Warning: Failed to update marker styling: $e');
+          }
         }
       }
 

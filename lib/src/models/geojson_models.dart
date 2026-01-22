@@ -281,14 +281,15 @@ class GeoJsonMarker {
     Offset? anchor;
     String? parsedTitle;
 
-    if(feature.properties?["imageFile"] != null){
-      assetPath ??= "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
-    }
+    // if(feature.properties?["imageFile"] != null){
+    //   assetPath ??= "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
+    //   textVisibility = false;
+    // }
 
-    assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
-    if(assetPath != null){
-      textVisibility = false;
-    }
+    // // assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
+    // if(assetPath != null){
+    //
+    // }
 
     if(asset != null){
       assetPath ??= asset.assetPath;
