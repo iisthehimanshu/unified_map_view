@@ -273,20 +273,24 @@ class UnifiedMapController extends ChangeNotifier {
     // Add polygons
     final polygons = GeoJsonLoader.extractPolygons(collection);
     final sectionPolygons = polygons.where((p) => p.properties?["type"] == "Section").toList();
+    final subSection = polygons.where((p) => p.properties?["type"] == "SubSection").toList();
     final boundaryPolygons = polygons.where((p) => p.properties?["type"] == "Boundary").toList();
     final otherPolygons = polygons.where((p) => !sectionPolygons.contains(p) && !boundaryPolygons.contains(p)).toList();
     await addPolygons(boundaryPolygons);
     await addPolygons(otherPolygons);
     await addPolygons(sectionPolygons);
+    await addPolygons(subSection);
 
     final polylines = GeoJsonLoader.extractPolylines(collection);
     await addPolylines(polylines);
 
     final markers = GeoJsonLoader.extractMarkers(collection);
     final sectionMarkers = markers.where((marker) => marker.properties?["type"] == "Section").toList();
-    final normalMarker = markers.where((marker) => !sectionMarkers.contains(marker)).toList();
+    final subSectionMarkers = markers.where((marker) => marker.properties?["type"] == "SubSection").toList();
+    final normalMarker = markers.where((marker) => !sectionMarkers.contains(marker) && !subSectionMarkers.contains(marker)).toList();
     await addMarkers(normalMarker);
     await addMarkers(sectionMarkers);
+    await addMarkers(subSectionMarkers);
 
     notifyListeners();
   }

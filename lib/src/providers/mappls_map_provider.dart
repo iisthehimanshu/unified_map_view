@@ -49,6 +49,7 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _selectedPolygonLayerId = 'selected-polygon-layer';
   final String _patchPolygonLayerId = 'patch-polygon-layer';
   final String _sectionPolygonLayerId = 'section-polygon-layer';
+  final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
 
   final String _polylineSourceId = 'polylines-source';
   final String _pathLayerId = 'path-polyline-layer';
@@ -653,6 +654,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'isSelected': false,
           'boundary' : polygon.properties?['type'] == "Boundary",
           'section' : polygon.properties?['type'] == "Section",
+          'subsection' : polygon.properties?['type'] == "SubSection"
         }
       };
     }).toList();
@@ -1059,6 +1061,7 @@ class MapplsMapProvider extends BaseMapProvider {
           "all",
           ["!=", ["get", "isSelected"], true],
           ["!=", ["get", "section"], true],
+          ["!=", ["get", "subsection"], true],
           ["!=", ["get", "boundary"], true],
         ],
         enableInteraction: true,
@@ -1073,10 +1076,34 @@ class MapplsMapProvider extends BaseMapProvider {
             fillOpacity: ["get", "fillOpacity"],
             fillOutlineColor: ["get", "strokeColor"],
           ),
-          filter: ["==", ["get", "section"], true],
-          enableInteraction: true,
+          filter: [
+            "all",
+            ["==", ["get", "section"], true],
+            ["!=", ["get", "subsection"], true],
+          ],
+          enableInteraction: false,
           belowLayerId: _polylineLayerId,
-          maxzoom: 17.0
+          maxzoom: 17.0,
+          minzoom: 15.0,
+
+      );
+
+      await controller.addFillLayer(_polygonSourceId,
+          _subSectionPolygonLayerId,
+          FillLayerProperties(
+            fillColor: ["get", "fillColor"],
+            fillOpacity: ["get", "fillOpacity"],
+            fillOutlineColor: ["get", "strokeColor"],
+          ),
+        filter: [
+          "all",
+          ["!=", ["get", "section"], true],
+          ["==", ["get", "subsection"], true],
+        ],
+          enableInteraction: false,
+          belowLayerId: _polylineLayerId,
+          maxzoom: 18.0,
+        minzoom: 17.0
       );
 
       await controller.addFillLayer(
@@ -1087,7 +1114,8 @@ class MapplsMapProvider extends BaseMapProvider {
           fillOpacity: 0.6,
           fillOutlineColor: "#2E7D32",
         ),
-        filter: ["==", ["get", "isSelected"], true],
+        filter: [
+          "==", ["get", "isSelected"], true],
         enableInteraction: true,
         belowLayerId: _polylineLayerId,
       );

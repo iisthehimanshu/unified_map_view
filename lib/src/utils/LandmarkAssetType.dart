@@ -190,11 +190,11 @@ enum LandmarkAssetType {
       case LandmarkAssetType.conferenceRoom:
       case LandmarkAssetType.emergencyExit:
       case LandmarkAssetType.fireExtinguisher:
-        return const Offset(0.5, 0.5);
+        return const Offset(0.5, 1.0);
       case LandmarkAssetType.firstAid:
       case LandmarkAssetType.meetingRoom:
       case LandmarkAssetType.registrationDesk:
-        return const Offset(0.5, 0.5);
+        return const Offset(0.5, 1.0);
 
 
     }
