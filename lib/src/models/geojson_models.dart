@@ -278,13 +278,17 @@ class GeoJsonMarker {
     String? iconName;
     bool? getTextVisibility;
     Offset? anchor;
+    String? parsedTitle;
+
     if(asset != null){
       assetPath = asset.assetPath;
-      iconName = assetPath.split('/').last.split('.').first;
+      iconName = assetPath?.split('/').last.split('.').first;
       getTextVisibility = asset.textVisibility;
       anchor = asset.anchor;
       feature.properties?['bearing'] = null;
     }
+    assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
+    // print("assetPath ${assetPath}");
 
     String? polyId = feature.properties?["polyId"];
     final associatedPolygons = feature.properties?['associatedPolygons'];
@@ -292,10 +296,14 @@ class GeoJsonMarker {
       polyId = associatedPolygons.first;
     }
 
+
+    parsedTitle = feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"] ?? feature.properties?["sponsorRef"]?["name"] ?? feature.properties?["name"] ?? "";
+    // print("parsedTitle ${parsedTitle}");
+
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
-      title: feature.properties?["name"],
+      title:  parsedTitle,
       snippet: "",
       assetPath: assetPath,
       iconName: iconName,
