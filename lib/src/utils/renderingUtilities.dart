@@ -146,7 +146,9 @@ class RenderingUtilities{
       if (type.contains('escalator')) {
         return LandmarkAssetType.escalator;
       }
-
+      if (type.contains('emergency')) {
+        return LandmarkAssetType.emergencyExit;
+      }
       // ================= Other Types =================
       if (type.contains('entry') || type.contains('entrance') || type.contains('exit')) {
         return LandmarkAssetType.mainEntry;
@@ -174,9 +176,7 @@ class RenderingUtilities{
       if (type.contains('water')) {
         return LandmarkAssetType.waterFountain;
       }
-      if (type.contains('emergency')) {
-        return LandmarkAssetType.emergency;
-      }
+
       if (type.contains('door only')) {
         return LandmarkAssetType.doorOnly;
       }

@@ -19,7 +19,6 @@ enum LandmarkAssetType {
   source,
   destination,
   floorConnection,
-  emergency,
   optionPinSelection,
   selectedPinSelection,
   sofa,
@@ -73,8 +72,6 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/destination.png';
       case LandmarkAssetType.floorConnection:
         return 'packages/unified_map_view/assets/markers/lift.png';
-      case LandmarkAssetType.emergency:
-        return 'packages/unified_map_view/assets/markers/entry.png';
       case LandmarkAssetType.optionPinSelection:
         return 'packages/unified_map_view/assets/markers/option_pin_selection.png';
       case LandmarkAssetType.selectedPinSelection:
@@ -116,7 +113,6 @@ enum LandmarkAssetType {
       case LandmarkAssetType.doorOnly:
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.floorConnection:
-      case LandmarkAssetType.emergency:
       case LandmarkAssetType.unisexWashroom:
       case LandmarkAssetType.assemblyRoom:
       case LandmarkAssetType.conferenceRoom:
@@ -168,7 +164,6 @@ enum LandmarkAssetType {
 
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.floorConnection:
-      case LandmarkAssetType.emergency:
       case LandmarkAssetType.sofa:
         return const Offset(0.5, 0.5);
 
@@ -179,6 +174,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.assemblyRoom:
       case LandmarkAssetType.conferenceRoom:
       case LandmarkAssetType.emergencyExit:
+        return const Offset(0.5, 1.0);
       case LandmarkAssetType.fireExtinguisher:
         return const Offset(0.5, 1.0);
       case LandmarkAssetType.firstAid:
