@@ -17,6 +17,7 @@ import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+import 'package:http/http.dart' as http;
 
 /// Mappls GL implementation of BaseMapProvider
 /// Supports Mappls (MapmyIndia) maps - India's own mapping platform
@@ -472,7 +473,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
       final features = symbols.map((marker) {
         // Get anchor and size
-        final anchor = marker.anchor ?? const Offset(0.5, 1.0);
+        final anchor = marker.anchor ?? const Offset(0.5, 0.5);
         // Calculate pixel offset from center
         // (0.5, 0.5) = [0, 0] (no offset, centered)
         // (0.5, 1.0) = [0, height/2] (bottom anchor)
@@ -821,21 +822,37 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     if(marker.assetPath == null) return false;
     try {
-      MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
-          imageSize: marker.imageSize??const Size(25, 25),
-          fontSize: 8.5,
-          text: marker.assetPath != null ? "" : marker.title ?? "",
-          imageSource: marker.assetPath,
-          layout: MarkerLayout.horizontal,
-          textFormat: TextFormat.smartWrap,
-          textColor: const Color(0xff000000),
-          customAnchor: marker.anchor??Offset(0.5, 0.5),
-          expandCanvasForRotation: true
-      );
-      final Uint8List iconBytes = markerIconWithAnchor.icon;
-      await controller.addImage(marker.id, iconBytes);
-      marker.anchor = markerIconWithAnchor.anchor;
-      return true;
+      if(marker.textVisibility){
+        MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
+            imageSize: marker.imageSize??const Size(25, 25),
+            fontSize: 8.5,
+            text: marker.textVisibility ? (marker.title??"") : "",
+            imageSource: marker.assetPath,
+            layout: MarkerLayout.horizontal,
+            textFormat: TextFormat.smartWrap,
+            textColor: const Color(0xff000000),
+            customAnchor: marker.anchor??Offset(0.5, 0.5),
+            expandCanvasForRotation: true
+        );
+        final Uint8List iconBytes = markerIconWithAnchor.icon;
+        await controller.addImage(marker.id, iconBytes);
+        marker.anchor = markerIconWithAnchor.anchor;
+        return true;
+      }else{
+        Uint8List? iconBytes;
+        if (marker.assetPath!.startsWith('http')) {
+          final response = await http.get(Uri.parse(marker.assetPath!));
+          if (response.statusCode == 200) iconBytes = response.bodyBytes;
+        } else {
+          final bd = await rootBundle.load(marker.assetPath!);
+          iconBytes = bd.buffer.asUint8List();
+        }
+        if(iconBytes != null){
+          await controller.addImage(marker.id, iconBytes);
+          return true;
+        }
+      }
+      return false;
     } catch (e) {
       print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
       return false;
@@ -918,7 +935,7 @@ class MapplsMapProvider extends BaseMapProvider {
           _normalIconMarkerLayerId,
           SymbolLayerProperties(
             iconImage: ["get", "icon"],
-            iconSize: 1.5,
+            iconSize: 0.8,
             iconOffset: ["get", "iconOffset"],
             textField: ["get", "title"],
             textSize: 14,
@@ -1161,8 +1178,6 @@ class MapplsMapProvider extends BaseMapProvider {
           enableInteraction: false,
           belowLayerId: _polylineLayerId,
           maxzoom: 17.0,
-          minzoom: 15.0,
-
       );
 
       await controller.addFillLayer(_polygonSourceId,
