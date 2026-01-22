@@ -113,10 +113,6 @@ class RenderingUtilities{
 
       final type = rawType.toLowerCase().trim();
 
-      if(landmarkProperties["landmarkId"] == "696b583ee28b9a8bb0aaf716"){
-        print("getAssetForLandmark type $type");
-      }
-
       // ================= Washrooms =================
       if (type.contains('washroom') || type.contains('restroom')) {
         var washroomType = landmarkProperties['washroomType']??type;
@@ -128,10 +124,18 @@ class RenderingUtilities{
           return LandmarkAssetType.maleWashroom;
         }
         if (washroomType.contains('unisex') || type.contains('accessible')) {
-          return LandmarkAssetType.accessibleWashroom;
+          return LandmarkAssetType.unisexWashroom;
         }
         return LandmarkAssetType.washroom;
       }
+      if(type.toLowerCase().contains('smoking zone')){
+        return LandmarkAssetType.smokingArea;
+      }
+      if(type.contains("fire extinguisher")){
+        print("fire Extinguisher");
+        return LandmarkAssetType.fireExtinguisher;
+      }
+
 
       // ================= Floor Connections =================
       if (type.contains('lift') || type.contains('elevator')) {
@@ -148,7 +152,20 @@ class RenderingUtilities{
       if (type.contains('entry') || type.contains('entrance') || type.contains('exit')) {
         return LandmarkAssetType.mainEntry;
       }
+      if(type.contains('assembly area')){
+        return LandmarkAssetType.assemblyRoom;
+      }
+      if(type.contains('hall')){
+        return LandmarkAssetType.conferenceRoom;
+      }
+      if(type.contains('registration')){
+        return LandmarkAssetType.registrationDesk;
+      }
       if (type.contains('room') || type.contains('office')) {
+        String roomName = landmarkProperties['name'];
+        if(roomName.contains("Meeting")){
+          return LandmarkAssetType.meetingRoom;
+        }
         return null;
         return LandmarkAssetType.room;
       }
@@ -167,7 +184,7 @@ class RenderingUtilities{
       if (type.contains('trash')) {
         return LandmarkAssetType.sofa;
       }
-      if (type.contains('registration')) {
+      if (type.contains('counter')) {
         return LandmarkAssetType.counter;
       }
 

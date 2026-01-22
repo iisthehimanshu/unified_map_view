@@ -3,7 +3,6 @@
 import 'dart:ui';
 import 'dart:developer' as developer;
 import 'dart:convert';
-import 'package:unified_map_view/src/utils/LandmarkAssetType.dart';
 
 import '../../unified_map_view.dart';
 import '../utils/renderingUtilities.dart';
@@ -272,6 +271,9 @@ class GeoJsonMarker {
 
 
     final asset = RenderingUtilities.getAssetForLandmark(feature.properties);
+    if(feature.id=="68aef48d96d312628c092985"){
+      print("assetPath:${asset!.assetPath}");
+    }
     String? assetPath;
     String? iconName;
     bool? getTextVisibility;

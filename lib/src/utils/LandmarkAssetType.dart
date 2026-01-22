@@ -22,7 +22,18 @@ enum LandmarkAssetType {
   emergency,
   optionPinSelection,
   selectedPinSelection,
-  sofa;
+  sofa,
+
+  assemblyRoom,
+  conferenceRoom,
+  emergencyExit,
+  fireExtinguisher,
+  firstAid,
+  meetingRoom,
+  registrationDesk,
+  unisexWashroom,
+  smokingArea
+  ;
 
   String get assetPath {
     switch (this) {
@@ -70,6 +81,25 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/selected_pin_selection.png';
       case LandmarkAssetType.sofa:
         return 'packages/unified_map_view/assets/isometric_elements/sofa.png';
+
+      case LandmarkAssetType.assemblyRoom:
+        return 'packages/unified_map_view/assets/markers/assembly_Room.png';
+      case LandmarkAssetType.conferenceRoom:
+        return 'packages/unified_map_view/assets/markers/conference_room.png';
+      case LandmarkAssetType.emergencyExit:
+        return 'packages/unified_map_view/assets/markers/emergency_exit.png';
+      case LandmarkAssetType.fireExtinguisher:
+        return 'packages/unified_map_view/assets/markers/fire_extinguisher.png';
+      case LandmarkAssetType.firstAid:
+        return 'packages/unified_map_view/assets/markers/first_aid.png';
+      case LandmarkAssetType.meetingRoom:
+        return 'packages/unified_map_view/assets/markers/meeting_room.png';
+      case LandmarkAssetType.registrationDesk:
+        return 'packages/unified_map_view/assets/markers/registration_Desk.png';
+      case LandmarkAssetType.unisexWashroom:
+        return 'packages/unified_map_view/assets/markers/unisex_washroom.png';
+      case LandmarkAssetType.smokingArea:
+        return 'packages/unified_map_view/assets/markers/smoking_area.png';
     }
   }
 
@@ -87,6 +117,17 @@ enum LandmarkAssetType {
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:
+
+      case LandmarkAssetType.unisexWashroom:
+      case LandmarkAssetType.assemblyRoom:
+      case LandmarkAssetType.conferenceRoom:
+      case LandmarkAssetType.emergencyExit:
+      case LandmarkAssetType.fireExtinguisher:
+        return false;
+      case LandmarkAssetType.firstAid:
+      case LandmarkAssetType.meetingRoom:
+      case LandmarkAssetType.registrationDesk:
+      case LandmarkAssetType.smokingArea:
       case LandmarkAssetType.counter:
         return false;
 
@@ -117,6 +158,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.doorOnly:
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.source:
+      case LandmarkAssetType.smokingArea:
       case LandmarkAssetType.counter:
       case LandmarkAssetType.accessibleWashroom:
         return const Offset(0.5, 0.5);
@@ -133,6 +175,7 @@ enum LandmarkAssetType {
         return const Offset(0.5, 1.0);
 
       case LandmarkAssetType.cafeteria:
+
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:
@@ -141,7 +184,19 @@ enum LandmarkAssetType {
 
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:
+
+      case LandmarkAssetType.unisexWashroom:
+      case LandmarkAssetType.assemblyRoom:
+      case LandmarkAssetType.conferenceRoom:
+      case LandmarkAssetType.emergencyExit:
+      case LandmarkAssetType.fireExtinguisher:
         return const Offset(0.5, 0.5);
+      case LandmarkAssetType.firstAid:
+      case LandmarkAssetType.meetingRoom:
+      case LandmarkAssetType.registrationDesk:
+        return const Offset(0.5, 0.5);
+
+
     }
   }
 }

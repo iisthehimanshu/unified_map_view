@@ -3,7 +3,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_compass/flutter_compass.dart';
@@ -12,7 +11,6 @@ import 'package:unified_map_view/src/models/CameraBound.dart';
 import '../../unified_map_view.dart';
 import '../models/camera_position.dart';
 import '../models/selectedLocation.dart';
-import '../utils/LandmarkAssetType.dart';
 import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/predefined_markers.dart';
 import '../utils/renderingUtilities.dart';
