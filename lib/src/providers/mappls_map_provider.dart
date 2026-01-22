@@ -64,6 +64,7 @@ class MapplsMapProvider extends BaseMapProvider {
     return Stack(
       children:[
         MapplsMap(
+          trackCameraPosition: true,
           initialCameraPosition: CameraPosition(
             target: LatLng(
               config.initialLocation.mapLocation.latitude,
@@ -480,9 +481,9 @@ class MapplsMapProvider extends BaseMapProvider {
             'coordinates': [marker.position.longitude, marker.position.latitude],
           },
           'properties': {
-            'title': '',
+            'title': marker.textVisibility?creator.formatText(marker.title??"", TextFormat.smartWrap):'',
             'id': marker.id,
-            if (marker.iconName != null || true) 'icon': marker.id,
+            if (marker.iconName != null) 'icon': marker.id,
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             if (marker.compassBasedRotation) "bearing": 0.0,
@@ -813,6 +814,7 @@ class MapplsMapProvider extends BaseMapProvider {
   final creator = UnifiedMarkerCreator();
 
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
+    if(marker.assetPath == null) return false;
     try {
       MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
           imageSize: marker.imageSize??const Size(25, 25),
@@ -887,10 +889,10 @@ class MapplsMapProvider extends BaseMapProvider {
             iconSize: 1.5,
             iconOffset: ["get", "iconOffset"],
             textField: ["get", "title"],
-            textSize: 12,
+            textSize: 14,
             textColor: "#000000",
             textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
+            textHaloWidth: 1.5,
             textAnchor: ["case", ["has", "icon"], "left", "center"],
             textOffset: [
               "case",

@@ -61,10 +61,10 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mappls,
-        venueName: 'IITDelhi',
+        venueName: 'PIECC',
         initialLocation: UnifiedCameraPosition(
-          mapLocation: MapLocation(latitude: 28.6139, longitude: 77.2090), // Delhi
-          zoom: 12.0,
+          mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
+          zoom: 3.0,
           bearing: 0.0,
         )
     );
