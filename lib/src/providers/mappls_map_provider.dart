@@ -34,7 +34,9 @@ class MapplsMapProvider extends BaseMapProvider {
 
   final String _clusterSourceId = 'markers-source';
   final String _normalMarkerLayerId = 'normal-markers-layer';
+  final String _normalFixedMarkerLayerId = 'normalFixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
+  final String _sectionMarkerLayerId = 'section-markers-layer';
 
   final String _rotationSourceId = 'rotation-markers-source';
   final String _rotationMarkerLayerId = 'rotation-marker-layer';
@@ -82,7 +84,7 @@ class MapplsMapProvider extends BaseMapProvider {
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
-                    point, [_normalMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
+                    point, [_normalMarkerLayerId, _normalFixedMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
                 );
 
                 if (markerFeatures.isNotEmpty) {
@@ -130,6 +132,10 @@ class MapplsMapProvider extends BaseMapProvider {
                 final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
                 final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
                 final cameraPos = _controller!.cameraPosition;
+                // print("cameraPos tilt ${cameraPos?.tilt}");
+                // print("cameraPos bearing ${cameraPos?.bearing}");
+                // print("cameraPos zoom ${cameraPos?.zoom}");
+                // print("cameraPos target ${cameraPos?.target}");
                 config.onCameraMove(UnifiedCameraPosition(
                   mapLocation: MapLocation(
                     latitude: centerLat,
@@ -159,7 +165,7 @@ class MapplsMapProvider extends BaseMapProvider {
               padding: const EdgeInsets.only(bottom: 3.0),
               child: Text("| ",style: TextStyle(fontSize: 21,fontWeight: FontWeight.w700,color: Colors.grey[800]),),
             ),
-            Image.asset("packages/unified_map_view/assets/markers/logo.png",height: 52,width: 52,),
+            Image.asset("packages/unified_map_view/assets/logos/iwayplus_logo.png",height: 52,width: 52,),
           ],
         )),
       ]
@@ -480,7 +486,9 @@ class MapplsMapProvider extends BaseMapProvider {
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             if (marker.compassBasedRotation) "bearing": 0.0,
-            'iconOffset': [anchor.dy, anchor.dx]
+            'iconOffset': [anchor.dy, anchor.dx],
+            'section' : marker.properties?['type'] == "Section",
+            if(marker.properties?["bearing"] != null) "bearing":marker.properties?["bearing"]
           }
         };
       }).toList();
@@ -893,9 +901,49 @@ class MapplsMapProvider extends BaseMapProvider {
             iconAllowOverlap: false,
             textAllowOverlap: false,
           ),
-          filter: ["!=", ["get", "isPriority"], true],
+          filter: [
+            "all",
+            ["!=", ["get", "isPriority"], true],
+            ["!=", ["get", "section"], true],
+            ["!=", ["has", "bearing"]],
+          ],
           enableInteraction: true,
           belowLayerId: null
+      );
+
+      await controller.addSymbolLayer(
+          _clusterSourceId,
+          _normalFixedMarkerLayerId,
+          SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            iconOffset: ["get", "iconOffset"],
+            iconRotate: ["get", "bearing"],
+            iconRotationAlignment: "map",
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: ["case", ["has", "icon"], "left", "center"],
+            textOffset: [
+              "case",
+              ["has", "icon"],
+              ["literal", [3.5, 0]],
+              ["literal", [0, 0]]
+            ],
+            iconAllowOverlap: false,
+            textAllowOverlap: false,
+          ),
+          filter: [
+            "all",
+            ["!=", ["get", "isPriority"], true],
+            ["!=", ["get", "section"], true],
+            ["has", "bearing"],
+          ],
+          enableInteraction: true,
+          belowLayerId: null,
+        minzoom: 17
       );
 
       // Layer 2: Priority markers (rendered last, always visible)
@@ -939,6 +987,29 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         enableInteraction: true,
         belowLayerId: _priorityMarkerLayerId,
+      );
+
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _sectionMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          iconOffset: ["get", "iconOffset"],
+          textField: ["get", "title"],
+          textSize: 12,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 2,
+          textAnchor: "center",
+          textOffset: [0, 2], // Position text below icon
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: ["==", ["get", "section"], true], // Optional: extra safety filter
+        enableInteraction: true,
+        belowLayerId: _priorityMarkerLayerId, // Position it appropriately
+        maxzoom: 17.0, // Show only at zoom level 17 and above (same as section layer)
       );
 
       _isClusteringEnabled = true;
@@ -1180,13 +1251,13 @@ class MapplsMapProvider extends BaseMapProvider {
         print('No marker found for polyID: $polyID - $e');
       }
 
-      String? polyIDInsideMarker;
+      String polyIDInsideMarker = polyID;
       if(markerID != null){
         polyIDInsideMarker = _extractPolygonIdFromTap(markerID)??polyID;
       }
 
       // Try to find polygon
-      try {
+      // try {
         if (_polygons.isNotEmpty) {
           polygon = _polygons.firstWhere(
                 (p) => (p.id.contains(polyID) || p.id.contains(polyIDInsideMarker!)),
@@ -1202,9 +1273,9 @@ class MapplsMapProvider extends BaseMapProvider {
             polygon = null;
           }
         }
-      } catch (e) {
-        print('No polygon found for polyID: $polyID - $e');
-      }
+      // } catch (e) {
+      //   print('No polygon found for polyID: $polyID - $e');
+      // }
 
       // Check if we found at least one
       if (polygon == null && marker == null) {

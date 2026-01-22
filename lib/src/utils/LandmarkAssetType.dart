@@ -13,6 +13,7 @@ enum LandmarkAssetType {
   room,
   doorOnly,
   mainEntry,
+  counter,
   genericMarker,
   user,
   source,
@@ -21,7 +22,18 @@ enum LandmarkAssetType {
   emergency,
   optionPinSelection,
   selectedPinSelection,
-  sofa;
+  sofa,
+
+  assemblyRoom,
+  conferenceRoom,
+  emergencyExit,
+  fireExtinguisher,
+  firstAid,
+  meetingRoom,
+  registrationDesk,
+  unisexWashroom,
+  smokingArea
+  ;
 
   String get assetPath {
     switch (this) {
@@ -36,7 +48,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.maleWashroom:
         return 'packages/unified_map_view/assets/markers/male_washroom.png';
       case LandmarkAssetType.accessibleWashroom:
-        return 'packages/unified_map_view/assets/markers/male_washroom.png';
+        return 'packages/unified_map_view/assets/markers/unisex_washroom.png';
       case LandmarkAssetType.washroom:
         return 'packages/unified_map_view/assets/markers/washroom.png';
       case LandmarkAssetType.waterFountain:
@@ -51,6 +63,8 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/building_entry.png';
       case LandmarkAssetType.genericMarker:
         return 'packages/unified_map_view/assets/markers/generic_marker.png';
+      case LandmarkAssetType.counter:
+        return 'packages/unified_map_view/assets/markers/counter.png';
       case LandmarkAssetType.user:
         return 'packages/unified_map_view/assets/markers/user.png';
       case LandmarkAssetType.source:
@@ -67,6 +81,25 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/selected_pin_selection.png';
       case LandmarkAssetType.sofa:
         return 'packages/unified_map_view/assets/isometric_elements/sofa.png';
+
+      case LandmarkAssetType.assemblyRoom:
+        return 'packages/unified_map_view/assets/markers/assembly_Room.png';
+      case LandmarkAssetType.conferenceRoom:
+        return 'packages/unified_map_view/assets/markers/conference_room.png';
+      case LandmarkAssetType.emergencyExit:
+        return 'packages/unified_map_view/assets/markers/emergency_exit.png';
+      case LandmarkAssetType.fireExtinguisher:
+        return 'packages/unified_map_view/assets/markers/fire_extinguisher.png';
+      case LandmarkAssetType.firstAid:
+        return 'packages/unified_map_view/assets/markers/first_aid.png';
+      case LandmarkAssetType.meetingRoom:
+        return 'packages/unified_map_view/assets/markers/meeting_room.png';
+      case LandmarkAssetType.registrationDesk:
+        return 'packages/unified_map_view/assets/markers/registration_Desk.png';
+      case LandmarkAssetType.unisexWashroom:
+        return 'packages/unified_map_view/assets/markers/unisex_washroom.png';
+      case LandmarkAssetType.smokingArea:
+        return 'packages/unified_map_view/assets/markers/smoking_area.png';
     }
   }
 
@@ -84,6 +117,18 @@ enum LandmarkAssetType {
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:
+
+      case LandmarkAssetType.unisexWashroom:
+      case LandmarkAssetType.assemblyRoom:
+      case LandmarkAssetType.conferenceRoom:
+      case LandmarkAssetType.emergencyExit:
+      case LandmarkAssetType.fireExtinguisher:
+        return false;
+      case LandmarkAssetType.firstAid:
+      case LandmarkAssetType.meetingRoom:
+      case LandmarkAssetType.registrationDesk:
+      case LandmarkAssetType.smokingArea:
+      case LandmarkAssetType.counter:
         return false;
 
       case LandmarkAssetType.waterFountain:
@@ -113,6 +158,9 @@ enum LandmarkAssetType {
       case LandmarkAssetType.doorOnly:
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.source:
+      case LandmarkAssetType.smokingArea:
+      case LandmarkAssetType.counter:
+      case LandmarkAssetType.accessibleWashroom:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.user:
@@ -123,11 +171,11 @@ enum LandmarkAssetType {
       case LandmarkAssetType.washroom:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
-      case LandmarkAssetType.accessibleWashroom:
       case LandmarkAssetType.destination:
         return const Offset(0.5, 1.0);
 
       case LandmarkAssetType.cafeteria:
+
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:
@@ -136,14 +184,19 @@ enum LandmarkAssetType {
 
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:
-        return const Offset(0.5, 0.5);
-    }
-  }
 
-  double? get bearing{
-    switch (this){
-      default: null;
+      case LandmarkAssetType.unisexWashroom:
+      case LandmarkAssetType.assemblyRoom:
+      case LandmarkAssetType.conferenceRoom:
+      case LandmarkAssetType.emergencyExit:
+      case LandmarkAssetType.fireExtinguisher:
+        return const Offset(0.5, 0.5);
+      case LandmarkAssetType.firstAid:
+      case LandmarkAssetType.meetingRoom:
+      case LandmarkAssetType.registrationDesk:
+        return const Offset(0.5, 0.5);
+
+
     }
-    return null;
   }
 }

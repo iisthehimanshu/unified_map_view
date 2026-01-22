@@ -3,6 +3,7 @@ import 'package:unified_map_view/src/apimodels/BuildingData.dart';
 import 'package:unified_map_view/src/apimodels/GlobalAppGeoJsonDataModel.dart';
 
 import '../../unified_map_view.dart';
+import '../utils/renderingUtilities.dart';
 
 class VenueData{
   VenueData._internal(this.venueName, this.json, this.buildingData) {
@@ -106,6 +107,26 @@ class VenueData{
           !lowerName.contains('non walkable') &&
           !lowerName.contains('iw');
     }).toList();
+
+    for (var data in filteredData) {
+      if(data.geometry?.type == "Point"){
+        String? polyId = data.properties?["polyId"];
+        final associatedPolygons = data.properties?['associatedPolygons'];
+        if (associatedPolygons is List && associatedPolygons.isNotEmpty) {
+          polyId = associatedPolygons.first;
+        }
+        if(polyId != null){
+          var polygons = filteredData.where((element)=>element.id == polyId).toList();
+          if(polygons.isNotEmpty){
+            GlobalAppGeoData polygon = polygons.first;
+            List<MapLocation>? polygonPoints = polygon.geometry?.coordinates?.first.map((point)=>MapLocation(latitude: point[1], longitude: point[1])).toList();
+            if(polygonPoints != null){
+              data.properties?['bearing'] = RenderingUtilities().findBestFitRectangleBearing(polygonPoints).bearing - 9;
+            }
+          }
+        }
+      }
+    }
 
     return filteredData.map((f) => GeoJsonFeature.fromJson(f.toJson())).toList();
   }

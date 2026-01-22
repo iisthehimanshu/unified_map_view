@@ -47,7 +47,7 @@ class AnnotationController{
 
   Future<void> renderVenue() async {
     if(!_unifiedMapController.controllerIsInitialized) return;
-    try{
+    // try{
       List<GeoJsonFeature> venueRenderData = [];
       _venueData.availableFloors.forEach((buildingId,floors){
         var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
@@ -63,9 +63,9 @@ class AnnotationController{
       if(_unifiedMapController.onReadyLandmarkSelectionID != null && _unifiedMapController.onReadyLandmarkSelectionID!.isNotEmpty){
         await _unifiedMapController.selectLocation(polyID: _unifiedMapController.onReadyLandmarkSelectionID!);
       }
-    }catch(e){
-      print("e $e");
-    }
+    // }catch(e){
+    //   print("e ${e}");
+    // }
   }
 
   Future<void> changeBuildingFloor(String buildingID, int floor) async {

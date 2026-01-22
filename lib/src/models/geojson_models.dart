@@ -3,7 +3,6 @@
 import 'dart:ui';
 import 'dart:developer' as developer;
 import 'dart:convert';
-import 'package:unified_map_view/src/utils/LandmarkAssetType.dart';
 
 import '../../unified_map_view.dart';
 import '../utils/renderingUtilities.dart';
@@ -246,6 +245,10 @@ class GeoJsonMarker {
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
+    if(feature.properties?["landmarkId"] == "69662a60a8a7487d6e1ba3c3"){
+      print("getAssetForLandmark isGlobal ${feature.properties}");
+    }
+
     if (feature.properties?["global"] == true &&
         (
                 feature.properties?["type"] == "Centroid" ||
@@ -262,6 +265,11 @@ class GeoJsonMarker {
       coords = feature.properties?["centroid"];
     }
 
+    if(coords == null || coords.first == null || coords.last == null){
+      print(feature.id);
+    }
+
+
     final asset = RenderingUtilities.getAssetForLandmark(feature.properties);
     if(feature.id=="68aef48d96d312628c092985"){
       print("assetPath:${asset!.assetPath}");
@@ -270,13 +278,12 @@ class GeoJsonMarker {
     String? iconName;
     bool? getTextVisibility;
     Offset? anchor;
-    double? bearing;
     if(asset != null){
       assetPath = asset.assetPath;
       iconName = assetPath.split('/').last.split('.').first;
       getTextVisibility = asset.textVisibility;
       anchor = asset.anchor;
-      bearing = asset.bearing;
+      feature.properties?['bearing'] = null;
     }
 
     String? polyId = feature.properties?["polyId"];
@@ -285,8 +292,7 @@ class GeoJsonMarker {
       polyId = associatedPolygons.first;
     }
 
-    feature.properties?["bearing"] = bearing;
-
+    print("feature.properties?[bearing] ${feature.properties?["bearing"]}");
 
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),
@@ -299,7 +305,6 @@ class GeoJsonMarker {
       textVisibility: getTextVisibility,
       priority: false,
       anchor: anchor,
-      bearing: bearing
     );
   }
 }
