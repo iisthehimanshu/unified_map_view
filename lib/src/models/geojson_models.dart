@@ -290,8 +290,6 @@ class GeoJsonMarker {
       polyId = associatedPolygons.first;
     }
 
-    print("feature.properties?[bearing] ${feature.properties?["bearing"]}");
-
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
