@@ -1257,7 +1257,7 @@ class MapplsMapProvider extends BaseMapProvider {
       }
 
       // Try to find polygon
-      // try {
+      try {
         if (_polygons.isNotEmpty) {
           polygon = _polygons.firstWhere(
                 (p) => (p.id.contains(polyID) || p.id.contains(polyIDInsideMarker!)),
@@ -1273,9 +1273,9 @@ class MapplsMapProvider extends BaseMapProvider {
             polygon = null;
           }
         }
-      // } catch (e) {
-      //   print('No polygon found for polyID: $polyID - $e');
-      // }
+      } catch (e) {
+        print('No polygon found for polyID: $polyID - $e');
+      }
 
       // Check if we found at least one
       if (polygon == null && marker == null) {
