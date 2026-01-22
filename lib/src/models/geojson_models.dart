@@ -271,20 +271,14 @@ class GeoJsonMarker {
 
 
     final asset = RenderingUtilities.getAssetForLandmark(feature.properties);
+    if(feature.id=="68aef48d96d312628c092985"){
+      print("assetPath:${asset!.assetPath}");
+    }
     String? assetPath;
     String? iconName;
     bool? getTextVisibility;
     Offset? anchor;
     String? parsedTitle;
-
-    assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
-    print("assetPath ${assetPath}");
-
-    String? polyId = feature.properties?["polyId"];
-    final associatedPolygons = feature.properties?['associatedPolygons'];
-    if (associatedPolygons is List && associatedPolygons.isNotEmpty) {
-      polyId = associatedPolygons.first;
-    }
 
     if(asset != null){
       assetPath = asset.assetPath;
@@ -293,9 +287,19 @@ class GeoJsonMarker {
       anchor = asset.anchor;
       feature.properties?['bearing'] = null;
     }
+    assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
+    // print("assetPath ${assetPath}");
+
+    String? polyId = feature.properties?["polyId"];
+    final associatedPolygons = feature.properties?['associatedPolygons'];
+    if (associatedPolygons is List && associatedPolygons.isNotEmpty) {
+      polyId = associatedPolygons.first;
+    }
+
 
     parsedTitle = feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"] ?? feature.properties?["sponsorRef"]?["name"] ?? feature.properties?["name"] ?? "";
-    print("parsedTitle ${parsedTitle}");
+    // print("parsedTitle ${parsedTitle}");
+
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),
       position: MapLocation(latitude: coords.last, longitude: coords.first),
