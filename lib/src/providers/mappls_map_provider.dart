@@ -33,10 +33,12 @@ class MapplsMapProvider extends BaseMapProvider {
   SelectedLocation? selectedLocation;
 
   final String _clusterSourceId = 'markers-source';
-  final String _normalMarkerLayerId = 'normal-markers-layer';
+  final String _normalTextMarkerLayerId = 'normalText-markers-layer';
+  final String _normalIconMarkerLayerId = 'normalIcon-markers-layer';
   final String _normalFixedMarkerLayerId = 'normalFixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
+  final String _subSectionMarkerLayerId = 'subSection-markers-layer';
 
   final String _rotationSourceId = 'rotation-markers-source';
   final String _rotationMarkerLayerId = 'rotation-marker-layer';
@@ -86,7 +88,7 @@ class MapplsMapProvider extends BaseMapProvider {
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
-                    point, [_normalMarkerLayerId, _normalFixedMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
+                    point, [_normalTextMarkerLayerId, _normalIconMarkerLayerId, _normalFixedMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
                 );
 
                 if (markerFeatures.isNotEmpty) {
@@ -490,6 +492,7 @@ class MapplsMapProvider extends BaseMapProvider {
             if (marker.compassBasedRotation) "bearing": 0.0,
             'iconOffset': [anchor.dy, anchor.dx],
             'section' : marker.properties?['type'] == "Section",
+            'subSection' : marker.properties?['type'] == "SubSection",
             if(marker.properties?["bearing"] != null) "bearing":marker.properties?["bearing"]
           }
         };
@@ -882,10 +885,37 @@ class MapplsMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      // Layer 1: Normal markers (rendered first, can be hidden)
+      // Layer 1: Normal text markers (no icon, no bearing) - lowest priority
       await controller.addSymbolLayer(
           _clusterSourceId,
-          _normalMarkerLayerId,
+          _normalTextMarkerLayerId,
+          SymbolLayerProperties(
+            textField: ["get", "title"],
+            textSize: 14,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 1.5,
+            textAnchor: "center",
+            textOffset: [0, 0],
+            textAllowOverlap: false,
+          ),
+          filter: [
+            "all",
+            ["!", ["get", "isPriority"]], // Fixed: use ! for boolean negation
+            ["!", ["get", "section"]],
+            ["!", ["get", "subSection"]],
+            ["!", ["has", "bearing"]],
+            ["!", ["has", "icon"]],
+          ],
+          enableInteraction: true,
+          belowLayerId: null,
+          minzoom: 18.0 // Don't show at zoom 17+ (let fixed markers take over)
+      );
+
+      // Layer 2: Normal icon markers (has icon, no bearing)
+      await controller.addSymbolLayer(
+          _clusterSourceId,
+          _normalIconMarkerLayerId,
           SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
@@ -895,31 +925,34 @@ class MapplsMapProvider extends BaseMapProvider {
             textColor: "#000000",
             textHaloColor: "#f8f9fa",
             textHaloWidth: 1.5,
-            textAnchor: ["case", ["has", "icon"], "left", "center"],
-            textOffset: [
-              "case",
-              ["has", "icon"],
-              ["literal", [3.5, 0]],
-              ["literal", [0, 0]]
-            ],
+            textAnchor: "left",
+            textOffset: [3.5, 0],
             iconAllowOverlap: false,
             textAllowOverlap: false,
           ),
           filter: [
             "all",
-            ["!=", ["get", "isPriority"], true],
-            ["!=", ["get", "section"], true],
-            ["!=", ["has", "bearing"]],
+            ["!", ["get", "isPriority"]],
+            ["!", ["get", "section"]],
+            ["!", ["get", "subSection"]],
+            ["!", ["has", "bearing"]],
+            ["has", "icon"], // Fixed: removed ==
           ],
           enableInteraction: true,
-          belowLayerId: null
+          belowLayerId: _normalTextMarkerLayerId,
       );
 
+      // Layer 3: Normal fixed/rotated markers (has bearing) - show at zoom 17+
       await controller.addSymbolLayer(
           _clusterSourceId,
           _normalFixedMarkerLayerId,
           SymbolLayerProperties(
-            iconImage: ["get", "icon"],
+            iconImage: [
+              "case",
+              ["has", "icon"],
+              ["get", "icon"],
+              "default-marker" // Provide fallback icon
+            ],
             iconSize: 1.5,
             iconOffset: ["get", "iconOffset"],
             iconRotate: ["get", "bearing"],
@@ -941,21 +974,101 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: [
             "all",
-            ["!=", ["get", "isPriority"], true],
-            ["!=", ["get", "section"], true],
+            ["!", ["get", "isPriority"]],
+            ["!", ["get", "section"]],
+            ["!", ["get", "subSection"]],
             ["has", "bearing"],
           ],
           enableInteraction: true,
-          belowLayerId: null,
-        minzoom: 17
+          belowLayerId: _normalIconMarkerLayerId,
+          minzoom: 17.0
       );
 
-      // Layer 2: Priority markers (rendered last, always visible)
+      // Layer 4: Section markers (zoom < 17)
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _sectionMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: [
+            "case",
+            ["has", "icon"],
+            ["get", "icon"],
+            "default-section-marker"
+          ],
+          iconSize: 1.5,
+          iconOffset: ["get", "iconOffset"],
+          textField: ["get", "title"],
+          textSize: 12,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 2,
+          textAnchor: "center",
+          textOffset: [0, 2],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: ["get", "section"], // Fixed: removed ==
+        enableInteraction: true,
+        belowLayerId: _normalFixedMarkerLayerId,
+        maxzoom: 17.0,
+      );
+
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _subSectionMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: [
+            "case",
+            ["has", "icon"],
+            ["get", "icon"],
+            "default-section-marker"
+          ],
+          iconSize: 1.5,
+          iconOffset: ["get", "iconOffset"],
+          textField: ["get", "title"],
+          textSize: 12,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 2,
+          textAnchor: "center",
+          textOffset: [0, 2],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: ["get", "subSection"], // Fixed: removed ==
+        enableInteraction: true,
+        belowLayerId: _normalFixedMarkerLayerId,
+        maxzoom: 18.0,
+        minzoom: 17.0
+      );
+
+      // Layer 5: Rotation markers (separate source)
+      await controller.addSymbolLayer(
+        _rotationSourceId,
+        _rotationMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          iconOffset: ["get", "iconOffset"],
+          iconRotate: ["get", "bearing"],
+          iconRotationAlignment: "map",
+          iconAllowOverlap: true,
+        ),
+        enableInteraction: true,
+        belowLayerId: _sectionMarkerLayerId,
+      );
+
+      // Layer 6: Priority markers (rendered on top - always visible)
       await controller.addSymbolLayer(
           _clusterSourceId,
           _priorityMarkerLayerId,
           SymbolLayerProperties(
-            iconImage: ["get", "icon"],
+            iconImage: [
+              "case",
+              ["has", "icon"],
+              ["get", "icon"],
+              "default-priority-marker"
+            ],
             iconSize: 1.5,
             iconOffset: ["get", "iconOffset"],
             textField: ["get", "title"],
@@ -973,52 +1086,14 @@ class MapplsMapProvider extends BaseMapProvider {
             iconAllowOverlap: true,
             textAllowOverlap: true,
           ),
-          filter: ["==", ["get", "isPriority"], true],
+          filter: ["get", "isPriority"], // Fixed: removed ==
           enableInteraction: true,
-          belowLayerId: _normalMarkerLayerId
-      );
-
-      await controller.addSymbolLayer(
-        _rotationSourceId,
-        _rotationMarkerLayerId,
-        SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 1.5,
-          iconOffset: ["get", "iconOffset"],
-          iconRotate: ["get", "bearing"],
-          iconRotationAlignment: "map",
-          iconAllowOverlap: true,
-        ),
-        enableInteraction: true,
-        belowLayerId: _priorityMarkerLayerId,
-      );
-
-      await controller.addSymbolLayer(
-        _clusterSourceId,
-        _sectionMarkerLayerId,
-        SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 1.5,
-          iconOffset: ["get", "iconOffset"],
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "center",
-          textOffset: [0, 2], // Position text below icon
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-        ),
-        filter: ["==", ["get", "section"], true], // Optional: extra safety filter
-        enableInteraction: true,
-        belowLayerId: _priorityMarkerLayerId, // Position it appropriately
-        maxzoom: 17.0, // Show only at zoom level 17 and above (same as section layer)
+          belowLayerId: null // On top of everything
       );
 
       _isClusteringEnabled = true;
 
-      if(_symbols.isNotEmpty){
+      if (_symbols.isNotEmpty) {
         List<GeoJsonMarker> symbols = [..._symbols];
         clearMarkers(controller);
         setGeoJsonSource(controller, symbols, _clusterSourceId);
@@ -1162,7 +1237,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["!=", ["get", "path"], true],
         enableInteraction: true,
-        belowLayerId: _normalMarkerLayerId,
+        belowLayerId: _normalIconMarkerLayerId,
       );
 
       /// 🔹 Path polylines (highlighted route)
@@ -1188,7 +1263,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["==", ["get", "path"], true],
         enableInteraction: true,
-        belowLayerId: _normalMarkerLayerId,
+        belowLayerId: _normalIconMarkerLayerId,
       );
 
       _isPolylineLayersEnabled = true;
