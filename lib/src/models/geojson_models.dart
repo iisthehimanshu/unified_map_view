@@ -280,14 +280,15 @@ class GeoJsonMarker {
     Offset? anchor;
     String? parsedTitle;
 
+    assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
+
     if(asset != null){
-      assetPath = asset.assetPath;
+      assetPath ??= asset.assetPath;
       iconName = assetPath?.split('/').last.split('.').first;
       getTextVisibility = asset.textVisibility;
       anchor = asset.anchor;
       feature.properties?['bearing'] = null;
     }
-    assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
     // print("assetPath ${assetPath}");
 
     String? polyId = feature.properties?["polyId"];
