@@ -132,7 +132,6 @@ class RenderingUtilities{
         return LandmarkAssetType.smokingArea;
       }
       if(type.contains("fire extinguisher")){
-        print("fire Extinguisher");
         return LandmarkAssetType.fireExtinguisher;
       }
 

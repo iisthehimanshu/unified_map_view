@@ -228,7 +228,7 @@ class UnifiedMarkerCreator {
     final double spacingPx = spacing * ratio;
 
     // Format text
-    final String formattedText = _formatText(text, textFormat);
+    final String formattedText = formatText(text, textFormat);
 
     // Load & decode image at exact pixel size (if provided)
     ui.Image? markerImage;
@@ -570,7 +570,7 @@ class UnifiedMarkerCreator {
     return MarkerIconWithAnchor(pngBytes, finalAnchor);
   }
 
-  String _formatText(String text, TextFormat format) {
+  String formatText(String text, TextFormat format) {
     switch (format) {
       case TextFormat.simple:
         return text;

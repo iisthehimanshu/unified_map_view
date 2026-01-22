@@ -215,7 +215,7 @@ class GeoJsonMarker {
   final bool? priority;
   final Map<String, dynamic>? properties;
   final Size? imageSize;
-  final bool? textVisibility;
+  final bool textVisibility;
   final bool compassBasedRotation;
   final double? bearing;
   Offset? anchor;
@@ -230,7 +230,7 @@ class GeoJsonMarker {
     this.priority,
     this.properties,
     this.imageSize,
-    this.textVisibility = false,
+    this.textVisibility = true,
     this.compassBasedRotation = false,
     this.bearing,
     this.anchor
@@ -276,16 +276,19 @@ class GeoJsonMarker {
     }
     String? assetPath;
     String? iconName;
-    bool? getTextVisibility;
+    bool? textVisibility;
     Offset? anchor;
     String? parsedTitle;
 
     assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
+    if(assetPath != null){
+      textVisibility = false;
+    }
 
     if(asset != null){
       assetPath ??= asset.assetPath;
       iconName = assetPath?.split('/').last.split('.').first;
-      getTextVisibility = asset.textVisibility;
+      textVisibility = asset.textVisibility;
       anchor = asset.anchor;
       feature.properties?['bearing'] = null;
     }
@@ -309,7 +312,7 @@ class GeoJsonMarker {
       assetPath: assetPath,
       iconName: iconName,
       properties: feature.properties,
-      textVisibility: getTextVisibility,
+      textVisibility: textVisibility??true,
       priority: false,
       anchor: anchor,
     );

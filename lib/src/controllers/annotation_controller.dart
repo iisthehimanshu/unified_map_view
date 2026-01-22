@@ -53,9 +53,9 @@ class AnnotationController{
         var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
         venueRenderData.addAll(floorData);
       });
-
-      await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 18);
+      await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+      await _unifiedMapController.fitBoundsToGeoJson();
       if(_user != null){
         await _unifiedMapController.fitBoundsToGeoJson();
       }

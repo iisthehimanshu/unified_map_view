@@ -23,7 +23,7 @@ class VenueData{
   static VenueData? get instance => _instance;
 
   String venueName;
-  MapLocation venueLatLng = MapLocation(latitude: 28.543733294529066, longitude: 77.18772931714324);
+  MapLocation venueLatLng = MapLocation(latitude: 21.7679, longitude: 78.8718);
   Map<String, dynamic> json;
 
   Map<String,int> _selectedFloor = {};

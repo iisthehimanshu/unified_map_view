@@ -117,32 +117,22 @@ enum LandmarkAssetType {
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.emergency:
-
       case LandmarkAssetType.unisexWashroom:
       case LandmarkAssetType.assemblyRoom:
       case LandmarkAssetType.conferenceRoom:
       case LandmarkAssetType.emergencyExit:
       case LandmarkAssetType.fireExtinguisher:
-        return false;
       case LandmarkAssetType.firstAid:
       case LandmarkAssetType.meetingRoom:
       case LandmarkAssetType.registrationDesk:
       case LandmarkAssetType.smokingArea:
       case LandmarkAssetType.counter:
-        return false;
-
       case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.room:
       case LandmarkAssetType.genericMarker:
-        return true;
-
       case LandmarkAssetType.user:
-        return false;
-
       case LandmarkAssetType.source:
       case LandmarkAssetType.destination:
-        return true;
-
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:
       case LandmarkAssetType.sofa:
