@@ -619,7 +619,7 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> _updatePolygonSource(MapplsMapController controller) async {
+  Future<void> _updatePolygonSource(MapplsMapController controller, {String? selectPolygonId}) async {
     if (!_isPolygonLayersEnabled) {
       print("Polygon layers not enabled yet");
       return;
@@ -656,7 +656,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
           'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
           'fillOpacity': fillColor.a,
-          'isSelected': false,
+          'isSelected': polygon.id == selectPolygonId,
           'boundary' : polygon.properties?['type'] == "Boundary",
           'section' : polygon.properties?['type'] == "Section",
           'subsection' : polygon.properties?['type'] == "SubSection"
@@ -1512,58 +1512,10 @@ class MapplsMapProvider extends BaseMapProvider {
   /// Update polygon selection state in GeoJSON source
   Future<void> _updatePolygonSelectionState(
       MapplsMapController controller,
-      String polygonId,
+      String selectPolygonId,
       bool isSelected,
       ) async {
-    // Update the polygon's isSelected property in the list
-    final index = _polygons.indexWhere((p) => p.id.toLowerCase().contains(polygonId.toLowerCase()));
-    if (index == -1) return;
-
-    // Rebuild the GeoJSON with updated selection state
-    final features = _polygons.map((polygon) {
-      final String? rawType = polygon.properties?["type"] ?? polygon.properties?["polygonType"];
-      final String? type = rawType?.toLowerCase();
-
-      final String? fillColorHex = polygon.properties?["fillColor"];
-      final String? strokeColorHex = polygon.properties?["strokeColor"];
-
-      final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
-          ? RenderingUtilities.hexToColor(fillColorHex)
-          : RenderingUtilities.polygonColorMap[type]?["fillColor"] ?? Colors.white;
-
-      final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
-          ? RenderingUtilities.hexToColor(strokeColorHex)
-          : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ?? Color(0xffD3D3D3);
-
-      final coordinates = polygon.points
-          .map((p) => [p.longitude, p.latitude])
-          .toList();
-
-      return {
-        'type': 'Feature',
-        'id': polygon.id,
-        'geometry': {
-          'type': 'Polygon',
-          'coordinates': [coordinates],
-        },
-        'properties': {
-          'id': polygon.id,
-          'type': type ?? 'default',
-          'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
-          'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillOpacity': fillColor.a,
-          'isSelected': polygon.id == polygonId ? isSelected : false,
-        }
-      };
-    }).toList();
-
-    await controller.setGeoJsonSource(
-      _polygonSourceId,
-      {
-        "type": "FeatureCollection",
-        "features": features,
-      },
-    );
+    _updatePolygonSource(controller, selectPolygonId: selectPolygonId);
   }
 
   /// Deselect a polygon and restore its original colors
