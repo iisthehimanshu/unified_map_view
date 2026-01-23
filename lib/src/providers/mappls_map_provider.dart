@@ -667,7 +667,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'type': type ?? 'default',
           'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
           'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillOpacity': fillColor.opacity,
+          'fillOpacity': fillColor.a,
           'isSelected': polygon.id == selectPolygonId,
           'boundary' : polygon.properties?['type'] == "Boundary",
           'section' : polygon.properties?['type'] == "Section",
