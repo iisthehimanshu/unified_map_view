@@ -913,7 +913,7 @@ class MapplsMapProvider extends BaseMapProvider {
             textHaloColor: "#f8f9fa",
             textHaloWidth: 1.5,
             textAnchor: "center",
-            textOffset: [0, 0],
+            textOffset: [0.0, 0.0],
             textAllowOverlap: false,
           ),
           filter: [
@@ -943,7 +943,7 @@ class MapplsMapProvider extends BaseMapProvider {
             textHaloColor: "#f8f9fa",
             textHaloWidth: 1.5,
             textAnchor: "left",
-            textOffset: [3.5, 0],
+            textOffset: [3.5, 0.0],
             iconAllowOverlap: false,
             textAllowOverlap: false,
           ),
@@ -983,8 +983,8 @@ class MapplsMapProvider extends BaseMapProvider {
             textOffset: [
               "case",
               ["has", "icon"],
-              ["literal", [3.5, 0]],
-              ["literal", [0, 0]]
+              ["literal", [3.5, 0.0]],
+              ["literal", [0.0, 0.0]]
             ],
             iconAllowOverlap: false,
             textAllowOverlap: false,
@@ -1020,7 +1020,7 @@ class MapplsMapProvider extends BaseMapProvider {
           textHaloColor: "#f8f9fa",
           textHaloWidth: 2,
           textAnchor: "center",
-          textOffset: [0, 2],
+          textOffset: [0.0, 2.0],
           iconAllowOverlap: true,
           textAllowOverlap: true,
         ),
@@ -1048,7 +1048,7 @@ class MapplsMapProvider extends BaseMapProvider {
           textHaloColor: "#f8f9fa",
           textHaloWidth: 2,
           textAnchor: "center",
-          textOffset: [0, 2],
+          textOffset: [0.0, 2.0],
           iconAllowOverlap: true,
           textAllowOverlap: true,
         ),
@@ -1097,8 +1097,8 @@ class MapplsMapProvider extends BaseMapProvider {
             textOffset: [
               "case",
               ["has", "icon"],
-              ["literal", [3.5, 0]],
-              ["literal", [0, 0]]
+              ["literal", [3.5, 0.0]],
+              ["literal", [0.0, 0.0]]
             ],
             iconAllowOverlap: true,
             textAllowOverlap: true,
@@ -1340,12 +1340,10 @@ class MapplsMapProvider extends BaseMapProvider {
       print('Error: Invalid controller type');
       return;
     }
-
     if (polyID.isEmpty) {
       print('Error: polyID cannot be empty');
       return;
     }
-
     // Deselect previous location if exists
     if (selectedLocation != null) {
       print("selectedLocation is ${selectedLocation.toString()}");
