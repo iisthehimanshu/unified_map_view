@@ -14,6 +14,7 @@ class PredefinedMarkers{
         iconName: "Generic Marker",
         properties: marker.properties,
         priority: true,
+      imageSize: Size(45, 45),
       anchor: LandmarkAssetType.genericMarker.anchor
     );
   }

@@ -237,6 +237,41 @@ class GeoJsonMarker {
     this.anchor
   });
 
+  GeoJsonMarker copyWith({
+    String? id,
+    MapLocation? position,
+    String? title,
+    String? snippet,
+    String? assetPath,
+    String? iconName,
+    bool? priority,
+    Map<String, dynamic>? properties,
+    Size? imageSize,
+    bool? textVisibility,
+    bool? compassBasedRotation,
+    double? bearing,
+    Offset? anchor,
+  }) {
+    return GeoJsonMarker(
+      id: id ?? this.id,
+      position: position ?? this.position.copyWith(), // deep copy
+      title: title ?? this.title,
+      snippet: snippet ?? this.snippet,
+      assetPath: assetPath ?? this.assetPath,
+      iconName: iconName ?? this.iconName,
+      priority: priority ?? this.priority,
+      properties: properties ?? (this.properties != null
+          ? Map<String, dynamic>.from(this.properties!)
+          : null),
+      imageSize: imageSize ?? this.imageSize,
+      textVisibility: textVisibility ?? this.textVisibility,
+      compassBasedRotation:
+      compassBasedRotation ?? this.compassBasedRotation,
+      bearing: bearing ?? this.bearing,
+      anchor: anchor ?? this.anchor,
+    );
+  }
+
 
   @override
   String toString() {

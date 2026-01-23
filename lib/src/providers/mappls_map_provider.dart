@@ -472,7 +472,8 @@ class MapplsMapProvider extends BaseMapProvider {
       }
 
       final features = symbols.map((marker) {
-        // final anchor = marker.anchor ?? const Offset(0.5, 0.5);
+        final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)?"center":"bottom";
+
 
         return {
           'type': 'Feature',
@@ -484,10 +485,11 @@ class MapplsMapProvider extends BaseMapProvider {
             // ✅ Always include ALL properties with defaults
             'title': marker.textVisibility ? creator.formatText(marker.title ?? "", TextFormat.smartWrap) : '',
             'id': marker.id,
-            'icon': marker.iconName ?? marker.id, // ✅ Always set (even if using marker.id as fallback)
+            if (marker.iconName != null) 'icon': marker.id,
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             'bearing': marker.compassBasedRotation ? 0.0 : (marker.properties?["bearing"] ?? 0.0), // ✅ Always set with default
+            'iconAnchor': anchor,
             // 'iconOffset': [anchor.dy, anchor.dx],
             'section': marker.properties?['type'] == "Section",
             'subSection': marker.properties?['type'] == "SubSection",
@@ -823,10 +825,11 @@ class MapplsMapProvider extends BaseMapProvider {
     if(marker.assetPath == null) return false;
     try {
       if(marker.textVisibility){
+        print("in 1");
         MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
             imageSize: marker.imageSize??const Size(25, 25),
             fontSize: 8.5,
-            text: marker.textVisibility ? (marker.title??"") : "",
+            text: "",
             imageSource: marker.assetPath,
             layout: MarkerLayout.horizontal,
             textFormat: TextFormat.smartWrap,
@@ -841,9 +844,11 @@ class MapplsMapProvider extends BaseMapProvider {
       }else{
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
+          print("in 2");
           final response = await http.get(Uri.parse(marker.assetPath!));
           if (response.statusCode == 200) iconBytes = response.bodyBytes;
         } else {
+          print("in 3");
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
         }
@@ -935,7 +940,7 @@ class MapplsMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           iconImage: ["get", "icon"], // ✅ Just get
           iconSize: 0.8,
-          textField: ["get", "title"],
+          iconAnchor: ["get", "iconAnchor"],
           textSize: 14,
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
@@ -1053,12 +1058,6 @@ class MapplsMapProvider extends BaseMapProvider {
           SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
-            textField: ["get", "title"],
-            textSize: 12,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
-            textAnchor: "left",
             iconAllowOverlap: true,
             textAllowOverlap: true,
           ),
@@ -1208,9 +1207,9 @@ class MapplsMapProvider extends BaseMapProvider {
         _polylineSourceId,
         _pathLayerId,
         LineLayerProperties(
-          lineColor: ["get", "lineColor"],
-          lineWidth: ["get", "lineWidth"],
-          lineOpacity: ["get", "lineOpacity"],
+          lineColor: "#448AFF",
+          lineWidth: 8.0,
+          lineOpacity: 1.0,
         ),
         filter: ["to-boolean", ["get", "path"]],
         enableInteraction: true,
@@ -1281,11 +1280,6 @@ class MapplsMapProvider extends BaseMapProvider {
       print('Error: polyID cannot be empty');
       return;
     }
-    // Deselect previous location if exists
-    if (selectedLocation != null) {
-      print("selectedLocation is ${selectedLocation.toString()}");
-      await deSelectLocation(controller);
-    }
 
     try {
       GeoJsonPolygon? polygon;
@@ -1300,6 +1294,15 @@ class MapplsMapProvider extends BaseMapProvider {
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
+        return;
+      }
+
+      if(marker != null){
+        // Deselect previous location if exists
+        if (selectedLocation != null) {
+          print("selectedLocation is ${selectedLocation.toString()}");
+          await deSelectLocation(controller);
+        }
       }
 
       String polyIDInsideMarker = polyID;
@@ -1389,6 +1392,7 @@ class MapplsMapProvider extends BaseMapProvider {
         await _updatePolygonSelectionState(controller, polygon.id, true);
       }
 
+      print("marker $marker");
       // Handle marker styling if marker exists
       if (marker != null) {
         if(marker.assetPath == null){
@@ -1399,8 +1403,14 @@ class MapplsMapProvider extends BaseMapProvider {
           } catch (e) {
             print('Warning: Failed to update marker styling: $e');
           }
+        }else{
+          var copyMarker = marker?.copyWith(imageSize: Size(50, 50), textVisibility: true, priority: true);
+          print("copyMarker ${copyMarker?.assetPath}");
+          await removeMarker(controller, polyID);
+          await addMarker(controller, copyMarker!);
         }
       }
+
 
       // Store selected location
       selectedLocation = SelectedLocation(
