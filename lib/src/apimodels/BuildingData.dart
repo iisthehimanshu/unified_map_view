@@ -7,7 +7,7 @@ class BuildingData {
     required this.campus,
   });
 
-  BuildingData.fromJson(Map<String, dynamic> json){
+  BuildingData.fromJson(Map<dynamic,dynamic> json){
     if (json['buildings'] != null) {
       buildings = <Building>[];
       json['buildings'].forEach((v) {
@@ -20,7 +20,7 @@ class BuildingData {
   }
 
   static BuildingData parseBuildingData(dynamic json) {
-    if (json is Map<String, dynamic>) {
+    if (json is Map<dynamic,dynamic>) {
       return BuildingData.fromJson(json);
     }
     // If the API returns a string or list unexpectedly
@@ -38,8 +38,8 @@ class BuildingData {
   //   );
   // }
 
-  Map<String, dynamic> toJson() {
-    final Map<String, dynamic> data = new Map<String, dynamic>();
+  Map<dynamic,dynamic> toJson() {
+    final Map<dynamic,dynamic> data = new Map<dynamic,dynamic>();
     if (this.buildings != null) {
       data['buildings'] = this.buildings!.map((v) => v.toJson()).toList();
     }
@@ -141,7 +141,7 @@ class Building {
     );
   }
 
-  Map<String, dynamic> toJson() {
+  Map<dynamic,dynamic> toJson() {
     return {
       '_id': id,
       'initialBuildingName': initialBuildingName,
@@ -280,7 +280,7 @@ class Campus extends CampusResponse{
     );
   }
 
-  Map<String, dynamic> toJson() {
+  Map<dynamic,dynamic> toJson() {
     return {
       '_id': id,
       'initialBuildingName': initialBuildingName,
@@ -324,21 +324,21 @@ class CampusMeta extends CampusResponse {
 
   CampusMeta({this.totalFloors, this.buildingNames});
 
-  factory CampusMeta.fromJson(Map<String, dynamic> json) {
+  factory CampusMeta.fromJson(Map<dynamic,dynamic> json) {
     return CampusMeta(
       totalFloors: (json['totalFloors'] as List?)?.map((e) => int.parse(e.toString())).toList(),
       buildingNames: (json['buildingNames'] as List?)?.map((e) => e.toString()).toList(),
     );
   }
-  Map<String, dynamic> toJson() {
-    final Map<String, dynamic> data = new Map<String, dynamic>();
+  Map<dynamic,dynamic> toJson() {
+    final Map<dynamic,dynamic> data = new Map<dynamic,dynamic>();
     data['totalFloors'] = this.totalFloors;
     data['buildingNames'] = this.buildingNames;
     return data;
   }
 }
 
-CampusResponse parseCampusResponse(Map<String, dynamic> json) {
+CampusResponse parseCampusResponse(Map<dynamic,dynamic> json) {
   if (json.containsKey('globalAnnotation') ||
       json.containsKey('coordinates') ||
       json.containsKey('_id')) {

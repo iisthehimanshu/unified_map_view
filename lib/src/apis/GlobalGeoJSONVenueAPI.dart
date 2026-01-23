@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
@@ -19,7 +20,10 @@ class GlobalGeoJSONVenueAPI{
     print('Adapter registered: ${Hive.isAdapterRegistered(1)}');
     if(fromDB && _globalGeoJSONService.contiansID(venueName) != null && _globalGeoJSONService.contiansID(venueName)==true){
       print("GlobalGeoJSONVenueAPI from DataBase");
-      getGeoJSONData(venueName,fromDB: false);
+      bool isInternetConnected = await checkInternetConnectivity();
+      if(isInternetConnected) {
+        getGeoJSONData(venueName,fromDB: false);
+      }
       GlobalGeoJSONVenueAPIModel? globalGeoJSONVenueAPIModel = _globalGeoJSONService.getGeoData(venueName);
       return globalGeoJSONVenueAPIModel?.responseBody;
     }
@@ -43,5 +47,12 @@ class GlobalGeoJSONVenueAPI{
       return null;
       throw Exception('Failed to load data');
     }
+  }
+  static Future<bool> checkInternetConnectivity() async {
+    var connectivityResult = await (Connectivity().checkConnectivity());
+    if (connectivityResult.contains(ConnectivityResult.mobile) || connectivityResult.contains(ConnectivityResult.wifi)) {
+      return true;
+    }
+    return false;
   }
 }

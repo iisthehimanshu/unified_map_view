@@ -18,6 +18,8 @@ dependencies:
   http:
   flutter_speed_dial: ^7.0.0
   flutter_compass: ^0.8.1
+  connectivity_plus: ^6.1.4
+
 
   turn_highlighter:
     git:

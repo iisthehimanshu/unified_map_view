@@ -4,6 +4,7 @@ library unified_map_view;
 
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/adapters.dart';
+import 'package:unified_map_view/src/database/model/BuildingByVenueAPIModel.dart';
 import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
 
 // Enums
@@ -43,8 +44,11 @@ class UnifiedMapViewPackage {
     await Hive.initFlutter();
 
     // Register adapters
-      Hive.registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
-      await Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile');
+    Hive.registerAdapter(BuildingByVenueAPIModelAdapter());
+    await Hive.openBox<BuildingByVenueAPIModel>('UNifiedBuildingByVenueAPIModelFile');
+
+    Hive.registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
+    await Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile');
     _initialized = true;
   }
 
