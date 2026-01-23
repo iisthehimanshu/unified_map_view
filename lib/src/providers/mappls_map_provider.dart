@@ -839,7 +839,6 @@ class MapplsMapProvider extends BaseMapProvider {
     if(marker.assetPath == null) return false;
     try {
       if(marker.textVisibility){
-        print("in 1");
         MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
             imageSize: marker.imageSize??const Size(25, 25),
             fontSize: 8.5,
@@ -848,7 +847,7 @@ class MapplsMapProvider extends BaseMapProvider {
             layout: MarkerLayout.horizontal,
             textFormat: TextFormat.smartWrap,
             textColor: const Color(0xff000000),
-            customAnchor: marker.anchor??Offset(0.5, 0.5),
+            customAnchor: marker.renderAnchor??marker.anchor??Offset(0.5, 0.5),
             expandCanvasForRotation: true
         );
         final Uint8List iconBytes = markerIconWithAnchor.icon;
@@ -858,11 +857,9 @@ class MapplsMapProvider extends BaseMapProvider {
       }else{
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
-          print("in 2");
           final response = await http.get(Uri.parse(marker.assetPath!));
           if (response.statusCode == 200) iconBytes = response.bodyBytes;
         } else {
-          print("in 3");
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
         }

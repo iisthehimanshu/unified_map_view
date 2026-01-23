@@ -220,6 +220,7 @@ class GeoJsonMarker {
   final bool compassBasedRotation;
   final double? bearing;
   Offset? anchor;
+  Offset? renderAnchor;
 
   GeoJsonMarker({
     required this.id,
@@ -234,7 +235,8 @@ class GeoJsonMarker {
     this.textVisibility = true,
     this.compassBasedRotation = false,
     this.bearing,
-    this.anchor
+    this.anchor,
+    this.renderAnchor,
   });
 
   GeoJsonMarker copyWith({
@@ -251,6 +253,7 @@ class GeoJsonMarker {
     bool? compassBasedRotation,
     double? bearing,
     Offset? anchor,
+    Offset? renderAnchor,
   }) {
     return GeoJsonMarker(
       id: id ?? this.id,
@@ -269,6 +272,7 @@ class GeoJsonMarker {
       compassBasedRotation ?? this.compassBasedRotation,
       bearing: bearing ?? this.bearing,
       anchor: anchor ?? this.anchor,
+      renderAnchor: renderAnchor ?? this.renderAnchor,
     );
   }
 
