@@ -87,7 +87,7 @@ class MapplsMapProvider extends BaseMapProvider {
             // Handle polygon taps
             controller.onFeatureTapped.add((id, point, coordinates) async {
               print("Mappls onFeatureTapped id $id $point $coordinates");
-
+              if(_symbols.where((symbol)=>symbol.id.toLowerCase().contains("path")).isNotEmpty) return;
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
