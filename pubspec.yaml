@@ -20,6 +20,7 @@ dependencies:
   flutter_compass: ^0.8.1
   connectivity_plus: ^6.1.4
 
+  url_launcher: ^6.3.1
 
   turn_highlighter:
     git:

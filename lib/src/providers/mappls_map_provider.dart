@@ -17,6 +17,7 @@ import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 
 /// Mappls GL implementation of BaseMapProvider
@@ -64,7 +65,8 @@ class MapplsMapProvider extends BaseMapProvider {
   bool _isCircleLayersEnabled = false;
 
   @override
-  Widget buildMap({required MapConfig config}) {
+  Widget buildMap({required MapConfig config, required BuildContext context}) {
+    var width=MediaQuery.of(context).size.width;
     return Stack(
       children:[
         MapplsMap(
@@ -85,7 +87,7 @@ class MapplsMapProvider extends BaseMapProvider {
             // Handle polygon taps
             controller.onFeatureTapped.add((id, point, coordinates) async {
               print("Mappls onFeatureTapped id $id $point $coordinates");
-
+              if(_symbols.where((symbol)=>symbol.id.toLowerCase().contains("path")).isNotEmpty) return;
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
@@ -137,10 +139,10 @@ class MapplsMapProvider extends BaseMapProvider {
                 final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
                 final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
                 final cameraPos = _controller!.cameraPosition;
-                // print("cameraPos tilt ${cameraPos?.tilt}");
-                // print("cameraPos bearing ${cameraPos?.bearing}");
-                // print("cameraPos zoom ${cameraPos?.zoom}");
-                // print("cameraPos target ${cameraPos?.target}");
+                print("cameraPos tilt ${cameraPos?.tilt}");
+                print("cameraPos bearing ${cameraPos?.bearing}");
+                print("cameraPos zoom ${cameraPos?.zoom}");
+                print("cameraPos target ${cameraPos?.target}");
                 config.onCameraMove(UnifiedCameraPosition(
                   mapLocation: MapLocation(
                     latitude: centerLat,
@@ -164,11 +166,23 @@ class MapplsMapProvider extends BaseMapProvider {
           minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
           logoViewMargins:Point(50, 5),
         ),
-        Positioned(bottom:-11,right: 58,child: Row(
+        Positioned(bottom:-11,right: width*0.19,child: Row(
           children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 3.0),
-              child: Text("| ",style: TextStyle(fontSize: 21,fontWeight: FontWeight.w700,color: Colors.grey[800]),),
+            InkWell(
+              onTap: () async {
+                try {
+                  var url = "https://www.iwayplus.com/";
+                  if (await canLaunch(url)) {
+                    await launch(url);
+                  } else {
+                    throw 'Could not launch $url';
+                  }
+                }catch(e){}
+              },
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 3.0),
+                child: Text("| ",style: TextStyle(fontSize: 21,fontWeight: FontWeight.w700,color: Colors.grey[800]),),
+              ),
             ),
             Image.asset("packages/unified_map_view/assets/logos/iwayplus_logo.png",height: 52,width: 52,),
           ],
@@ -472,12 +486,9 @@ class MapplsMapProvider extends BaseMapProvider {
       }
 
       final features = symbols.map((marker) {
-        // Get anchor and size
-        final anchor = marker.anchor ?? const Offset(0.5, 0.5);
-        // Calculate pixel offset from center
-        // (0.5, 0.5) = [0, 0] (no offset, centered)
-        // (0.5, 1.0) = [0, height/2] (bottom anchor)
-        // (0.5, 0.0) = [0, -height/2] (top anchor)
+        final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)?"center":"bottom";
+
+
         return {
           'type': 'Feature',
           'geometry': {
@@ -485,16 +496,17 @@ class MapplsMapProvider extends BaseMapProvider {
             'coordinates': [marker.position.longitude, marker.position.latitude],
           },
           'properties': {
-            'title': marker.textVisibility?creator.formatText(marker.title??"", TextFormat.smartWrap):'',
+            // ✅ Always include ALL properties with defaults
+            'title': marker.textVisibility ? creator.formatText(marker.title ?? "", TextFormat.smartWrap) : '',
             'id': marker.id,
             if (marker.iconName != null) 'icon': marker.id,
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
-            if (marker.compassBasedRotation) "bearing": 0.0,
-            'iconOffset': [anchor.dy, anchor.dx],
-            'section' : marker.properties?['type'] == "Section",
-            'subSection' : marker.properties?['type'] == "SubSection",
-            if(marker.properties?["bearing"] != null) "bearing":marker.properties?["bearing"]
+            'bearing': marker.compassBasedRotation ? 0.0 : (marker.properties?["bearing"] ?? 0.0), // ✅ Always set with default
+            'iconAnchor': anchor,
+            // 'iconOffset': [anchor.dy, anchor.dx],
+            'section': marker.properties?['type'] == "Section",
+            'subSection': marker.properties?['type'] == "SubSection",
           }
         };
       }).toList();
@@ -619,11 +631,12 @@ class MapplsMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> _updatePolygonSource(MapplsMapController controller) async {
+  Future<void> _updatePolygonSource(MapplsMapController controller, {String? selectPolygonId}) async {
     if (!_isPolygonLayersEnabled) {
       print("Polygon layers not enabled yet");
       return;
     }
+
     final features = _polygons.map((polygon) {
       final String? rawType = polygon.properties?["type"] ?? polygon.properties?["polygonType"];
       final String? type = rawType?.toLowerCase();
@@ -651,12 +664,13 @@ class MapplsMapProvider extends BaseMapProvider {
           'coordinates': [coordinates],
         },
         'properties': {
+          // ✅ Always include ALL properties
           'id': polygon.id,
           'type': type ?? 'default',
           'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
           'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
           'fillOpacity': fillColor.a,
-          'isSelected': false,
+          'isSelected': polygon.id == selectPolygonId,
           'boundary' : polygon.properties?['type'] == "Boundary",
           'section' : polygon.properties?['type'] == "Section",
           'subsection' : polygon.properties?['type'] == "SubSection"
@@ -757,6 +771,7 @@ class MapplsMapProvider extends BaseMapProvider {
       print("Polyline layers not enabled yet");
       return;
     }
+
     final features = _lines.map((line) {
       return {
         'type': 'Feature',
@@ -766,13 +781,14 @@ class MapplsMapProvider extends BaseMapProvider {
           'coordinates': line.points.map((point) => [point.longitude, point.latitude]).toList(),
         },
         'properties': {
+          // ✅ Always include ALL properties with defaults
           'id': line.id,
           'type': 'default',
           'isSelected': false,
-          if(line.properties?['fillColor'] != null)'lineColor': line.properties?['fillColor'],
-          if(line.properties?['fillOpacity'] != null)'lineOpacity': line.properties?['fillOpacity'],
-          if(line.properties?['width'] != null)'lineWidth': line.properties?['width'],
-          'path': line.properties?['path']??line.id.toLowerCase().contains("path")
+          'lineColor': line.properties?['fillColor'] ?? '#000000', // ✅ Always set with default
+          'lineOpacity': line.properties?['fillOpacity'] ?? 1.0,  // ✅ Always set
+          'lineWidth': line.properties?['width']?.toDouble() ?? 4.0, // ✅ Always set, ensure double
+          'path': line.properties?['path'] ?? line.id.toLowerCase().contains("path")
         }
       };
     }).toList();
@@ -826,12 +842,12 @@ class MapplsMapProvider extends BaseMapProvider {
         MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
             imageSize: marker.imageSize??const Size(25, 25),
             fontSize: 8.5,
-            text: marker.textVisibility ? (marker.title??"") : "",
+            text: "",
             imageSource: marker.assetPath,
             layout: MarkerLayout.horizontal,
             textFormat: TextFormat.smartWrap,
             textColor: const Color(0xff000000),
-            customAnchor: marker.anchor??Offset(0.5, 0.5),
+            customAnchor: marker.renderAnchor??marker.anchor??Offset(0.5, 0.5),
             expandCanvasForRotation: true
         );
         final Uint8List iconBytes = markerIconWithAnchor.icon;
@@ -907,56 +923,54 @@ class MapplsMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalTextMarkerLayerId,
           SymbolLayerProperties(
-            textField: ["get", "title"],
+            textField: ["get", "title"], // ✅ Just get, no case/has
             textSize: 14,
             textColor: "#000000",
             textHaloColor: "#f8f9fa",
             textHaloWidth: 1.5,
             textAnchor: "center",
-            textOffset: [0, 0],
             textAllowOverlap: false,
           ),
           filter: [
             "all",
-            ["!", ["get", "isPriority"]], // Fixed: use ! for boolean negation
-            ["!", ["get", "section"]],
-            ["!", ["get", "subSection"]],
-            ["!", ["has", "bearing"]],
-            ["!", ["has", "icon"]],
+            ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "section"]]],
+            ["!", ["to-boolean", ["get", "subSection"]]],
+            ["!", ["to-boolean", ["get", "bearing"]]],
+            ["!", ["to-boolean", ["get", "icon"]]],
           ],
           enableInteraction: true,
           belowLayerId: null,
-          minzoom: 18.0 // Don't show at zoom 17+ (let fixed markers take over)
+          minzoom: 18.0
       );
 
       // Layer 2: Normal icon markers (has icon, no bearing)
       await controller.addSymbolLayer(
-          _clusterSourceId,
-          _normalIconMarkerLayerId,
-          SymbolLayerProperties(
-            iconImage: ["get", "icon"],
-            iconSize: 0.8,
-            iconOffset: ["get", "iconOffset"],
-            textField: ["get", "title"],
-            textSize: 14,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 1.5,
-            textAnchor: "left",
-            textOffset: [3.5, 0],
-            iconAllowOverlap: false,
-            textAllowOverlap: false,
-          ),
-          filter: [
-            "all",
-            ["!", ["get", "isPriority"]],
-            ["!", ["get", "section"]],
-            ["!", ["get", "subSection"]],
-            ["!", ["has", "bearing"]],
-            ["has", "icon"], // Fixed: removed ==
-          ],
-          enableInteraction: true,
-          belowLayerId: _normalTextMarkerLayerId,
+        _clusterSourceId,
+        _normalIconMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"], // ✅ Just get
+          iconSize: 0.8,
+          iconAnchor: ["get", "iconAnchor"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "left",
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalTextMarkerLayerId,
+        minzoom: 15.0
       );
 
       // Layer 3: Normal fixed/rotated markers (has bearing) - show at zoom 17+
@@ -964,14 +978,8 @@ class MapplsMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalFixedMarkerLayerId,
           SymbolLayerProperties(
-            iconImage: [
-              "case",
-              ["has", "icon"],
-              ["get", "icon"],
-              "default-marker" // Provide fallback icon
-            ],
+            iconImage: ["get", "icon"],
             iconSize: 1.5,
-            iconOffset: ["get", "iconOffset"],
             iconRotate: ["get", "bearing"],
             iconRotationAlignment: "map",
             textField: ["get", "title"],
@@ -979,26 +987,20 @@ class MapplsMapProvider extends BaseMapProvider {
             textColor: "#000000",
             textHaloColor: "#f8f9fa",
             textHaloWidth: 2,
-            textAnchor: ["case", ["has", "icon"], "left", "center"],
-            textOffset: [
-              "case",
-              ["has", "icon"],
-              ["literal", [3.5, 0]],
-              ["literal", [0, 0]]
-            ],
+            textAnchor: "left",
             iconAllowOverlap: false,
             textAllowOverlap: false,
           ),
           filter: [
             "all",
-            ["!", ["get", "isPriority"]],
-            ["!", ["get", "section"]],
-            ["!", ["get", "subSection"]],
-            ["has", "bearing"],
+            ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "section"]]],
+            ["!", ["to-boolean", ["get", "subSection"]]],
+            ["to-boolean", ["get", "bearing"]],
           ],
           enableInteraction: true,
           belowLayerId: _normalIconMarkerLayerId,
-          minzoom: 17.0
+          minzoom: 18.0
       );
 
       // Layer 4: Section markers (zoom < 17)
@@ -1006,57 +1008,45 @@ class MapplsMapProvider extends BaseMapProvider {
         _clusterSourceId,
         _sectionMarkerLayerId,
         SymbolLayerProperties(
-          iconImage: [
-            "case",
-            ["has", "icon"],
-            ["get", "icon"],
-            "default-section-marker"
-          ],
+          iconImage: ["get", "icon"],
           iconSize: 1.5,
-          iconOffset: ["get", "iconOffset"],
           textField: ["get", "title"],
           textSize: 12,
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
           textHaloWidth: 2,
           textAnchor: "center",
-          textOffset: [0, 2],
           iconAllowOverlap: true,
           textAllowOverlap: true,
         ),
-        filter: ["get", "section"], // Fixed: removed ==
+        filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,
         maxzoom: 17.0,
+        minzoom: 15.0
       );
 
+      // Layer 4b: SubSection markers
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        _subSectionMarkerLayerId,
-        SymbolLayerProperties(
-          iconImage: [
-            "case",
-            ["has", "icon"],
-            ["get", "icon"],
-            "default-section-marker"
-          ],
-          iconSize: 1.5,
-          iconOffset: ["get", "iconOffset"],
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "center",
-          textOffset: [0, 2],
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-        ),
-        filter: ["get", "subSection"], // Fixed: removed ==
-        enableInteraction: true,
-        belowLayerId: _normalFixedMarkerLayerId,
-        maxzoom: 18.0,
-        minzoom: 17.0
+          _clusterSourceId,
+          _subSectionMarkerLayerId,
+          SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: "center",
+            iconAllowOverlap: true,
+            textAllowOverlap: true,
+          ),
+          filter: ["to-boolean", ["get", "subSection"]],
+          enableInteraction: true,
+          belowLayerId: _normalFixedMarkerLayerId,
+          maxzoom: 18.0,
+          minzoom: 17.0
       );
 
       // Layer 5: Rotation markers (separate source)
@@ -1066,7 +1056,6 @@ class MapplsMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 1.5,
-          iconOffset: ["get", "iconOffset"],
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,
@@ -1080,32 +1069,14 @@ class MapplsMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _priorityMarkerLayerId,
           SymbolLayerProperties(
-            iconImage: [
-              "case",
-              ["has", "icon"],
-              ["get", "icon"],
-              "default-priority-marker"
-            ],
+            iconImage: ["get", "icon"],
             iconSize: 1.5,
-            iconOffset: ["get", "iconOffset"],
-            textField: ["get", "title"],
-            textSize: 12,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
-            textAnchor: ["case", ["has", "icon"], "left", "center"],
-            textOffset: [
-              "case",
-              ["has", "icon"],
-              ["literal", [3.5, 0]],
-              ["literal", [0, 0]]
-            ],
             iconAllowOverlap: true,
             textAllowOverlap: true,
           ),
-          filter: ["get", "isPriority"], // Fixed: removed ==
+          filter: ["to-boolean", ["get", "isPriority"]],
           enableInteraction: true,
-          belowLayerId: null // On top of everything
+          belowLayerId: null
       );
 
       _isClusteringEnabled = true;
@@ -1115,15 +1086,15 @@ class MapplsMapProvider extends BaseMapProvider {
         clearMarkers(controller);
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
-    } catch (e) {
+    } catch (e, stack) {
       print('Error enabling clustering: $e');
+      print('Stack trace: $stack');
     }
   }
 
   /// Enable polygon layers with GeoJSON source
   Future<void> enablePolygonLayers(MapplsMapController controller) async {
     try {
-      // Create GeoJSON source for polygons
       await controller.addGeoJsonSource(_polygonSourceId, {
         'type': 'FeatureCollection',
         'features': [],
@@ -1138,9 +1109,9 @@ class MapplsMapProvider extends BaseMapProvider {
           fillOpacity: ["get", "fillOpacity"],
           fillOutlineColor: ["get", "strokeColor"],
         ),
-        filter: ["==", ["get", "boundary"], true],
+        filter: ["to-boolean", ["get", "boundary"]],
         enableInteraction: true,
-        belowLayerId: _polylineLayerId, // ⬅️ BELOW POLYLINES
+        belowLayerId: _polylineLayerId,
       );
 
       await controller.addFillLayer(
@@ -1153,18 +1124,36 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
-          ["!=", ["get", "isSelected"], true],
-          ["!=", ["get", "section"], true],
-          ["!=", ["get", "subsection"], true],
-          ["!=", ["get", "boundary"], true],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subsection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
         ],
         enableInteraction: true,
         belowLayerId: _polylineLayerId,
       );
 
       await controller.addFillLayer(
+        _polygonSourceId,
+        _sectionPolygonLayerId,
+        FillLayerProperties(
+          fillColor: ["get", "fillColor"],
+          fillOpacity: ["get", "fillOpacity"],
+          fillOutlineColor: ["get", "strokeColor"],
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "section"]],
+          ["!", ["to-boolean", ["get", "subsection"]]],
+        ],
+        enableInteraction: false,
+        belowLayerId: _polylineLayerId,
+        maxzoom: 17.0,
+      );
+
+      await controller.addFillLayer(
           _polygonSourceId,
-          _sectionPolygonLayerId,
+          _subSectionPolygonLayerId,
           FillLayerProperties(
             fillColor: ["get", "fillColor"],
             fillOpacity: ["get", "fillOpacity"],
@@ -1172,30 +1161,13 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: [
             "all",
-            ["==", ["get", "section"], true],
-            ["!=", ["get", "subsection"], true],
+            ["!", ["to-boolean", ["get", "section"]]],
+            ["to-boolean", ["get", "subsection"]],
           ],
           enableInteraction: false,
           belowLayerId: _polylineLayerId,
-          maxzoom: 17.0,
-      );
-
-      await controller.addFillLayer(_polygonSourceId,
-          _subSectionPolygonLayerId,
-          FillLayerProperties(
-            fillColor: ["get", "fillColor"],
-            fillOpacity: ["get", "fillOpacity"],
-            fillOutlineColor: ["get", "strokeColor"],
-          ),
-        filter: [
-          "all",
-          ["!=", ["get", "section"], true],
-          ["==", ["get", "subsection"], true],
-        ],
-          enableInteraction: false,
-          belowLayerId: _polylineLayerId,
           maxzoom: 18.0,
-        minzoom: 17.0
+          minzoom: 17.0
       );
 
       await controller.addFillLayer(
@@ -1206,8 +1178,7 @@ class MapplsMapProvider extends BaseMapProvider {
           fillOpacity: 0.6,
           fillOutlineColor: "#2E7D32",
         ),
-        filter: [
-          "==", ["get", "isSelected"], true],
+        filter: ["to-boolean", ["get", "isSelected"]],
         enableInteraction: true,
         belowLayerId: _polylineLayerId,
       );
@@ -1217,8 +1188,9 @@ class MapplsMapProvider extends BaseMapProvider {
       if (_polygons.isNotEmpty) {
         await _updatePolygonSource(controller);
       }
-    } catch (e) {
+    } catch (e, stack) {
       print('Error enabling polygon layers: $e');
+      print('Stack trace: $stack');
     }
   }
 
@@ -1234,23 +1206,11 @@ class MapplsMapProvider extends BaseMapProvider {
         _polylineSourceId,
         _polylineLayerId,
         LineLayerProperties(
-          lineColor: [
-            "coalesce",
-            ["get", "lineColor"],
-            "#000000",
-          ],
-          lineWidth: [
-            "coalesce",
-            ["get", "lineWidth"],
-            4.0,
-          ],
-          lineOpacity: [
-            "coalesce",
-            ["get", "lineOpacity"],
-            1.0,
-          ],
+          lineColor: ["get", "lineColor"], // ✅ Direct get (ensure property exists in GeoJSON)
+          lineWidth: ["get", "lineWidth"],
+          lineOpacity: ["get", "lineOpacity"],
         ),
-        filter: ["!=", ["get", "path"], true],
+        filter: ["!", ["to-boolean", ["get", "path"]]],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
       );
@@ -1260,23 +1220,11 @@ class MapplsMapProvider extends BaseMapProvider {
         _polylineSourceId,
         _pathLayerId,
         LineLayerProperties(
-          lineColor: [
-            "coalesce",
-            ["get", "lineColor"],
-            "#448AFF",
-          ],
-          lineWidth: [
-            "coalesce",
-            ["get", "lineWidth"],
-            8.0,
-          ],
-          lineOpacity: [
-            "coalesce",
-            ["get", "lineOpacity"],
-            1.0,
-          ],
+          lineColor: "#448AFF",
+          lineWidth: 8.0,
+          lineOpacity: 1.0,
         ),
-        filter: ["==", ["get", "path"], true],
+        filter: ["to-boolean", ["get", "path"]],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
       );
@@ -1286,8 +1234,9 @@ class MapplsMapProvider extends BaseMapProvider {
       if (_lines.isNotEmpty) {
         await _updatePolylineSource(controller);
       }
-    } catch (e) {
+    } catch (e, stack) {
       print('Error enabling polyline layers: $e');
+      print('Stack trace: $stack');
     }
   }
 
@@ -1340,16 +1289,9 @@ class MapplsMapProvider extends BaseMapProvider {
       print('Error: Invalid controller type');
       return;
     }
-
     if (polyID.isEmpty) {
       print('Error: polyID cannot be empty');
       return;
-    }
-
-    // Deselect previous location if exists
-    if (selectedLocation != null) {
-      print("selectedLocation is ${selectedLocation.toString()}");
-      await deSelectLocation(controller);
     }
 
     try {
@@ -1365,6 +1307,15 @@ class MapplsMapProvider extends BaseMapProvider {
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
+        return;
+      }
+
+      if(marker != null){
+        // Deselect previous location if exists
+        if (selectedLocation != null) {
+          print("selectedLocation is ${selectedLocation.toString()}");
+          await deSelectLocation(controller);
+        }
       }
 
       String polyIDInsideMarker = polyID;
@@ -1454,6 +1405,7 @@ class MapplsMapProvider extends BaseMapProvider {
         await _updatePolygonSelectionState(controller, polygon.id, true);
       }
 
+      print("marker $marker");
       // Handle marker styling if marker exists
       if (marker != null) {
         if(marker.assetPath == null){
@@ -1464,8 +1416,14 @@ class MapplsMapProvider extends BaseMapProvider {
           } catch (e) {
             print('Warning: Failed to update marker styling: $e');
           }
+        }else{
+          var copyMarker = marker?.copyWith(imageSize: Size(50, 50), textVisibility: true, priority: true);
+          print("copyMarker ${copyMarker?.assetPath}");
+          await removeMarker(controller, polyID);
+          await addMarker(controller, copyMarker!);
         }
       }
+
 
       // Store selected location
       selectedLocation = SelectedLocation(
@@ -1514,58 +1472,10 @@ class MapplsMapProvider extends BaseMapProvider {
   /// Update polygon selection state in GeoJSON source
   Future<void> _updatePolygonSelectionState(
       MapplsMapController controller,
-      String polygonId,
+      String selectPolygonId,
       bool isSelected,
       ) async {
-    // Update the polygon's isSelected property in the list
-    final index = _polygons.indexWhere((p) => p.id.toLowerCase().contains(polygonId.toLowerCase()));
-    if (index == -1) return;
-
-    // Rebuild the GeoJSON with updated selection state
-    final features = _polygons.map((polygon) {
-      final String? rawType = polygon.properties?["type"] ?? polygon.properties?["polygonType"];
-      final String? type = rawType?.toLowerCase();
-
-      final String? fillColorHex = polygon.properties?["fillColor"];
-      final String? strokeColorHex = polygon.properties?["strokeColor"];
-
-      final Color fillColor = (fillColorHex != null && fillColorHex != "undefined" && fillColorHex.isNotEmpty)
-          ? RenderingUtilities.hexToColor(fillColorHex)
-          : RenderingUtilities.polygonColorMap[type]?["fillColor"] ?? Colors.white;
-
-      final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
-          ? RenderingUtilities.hexToColor(strokeColorHex)
-          : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ?? Color(0xffD3D3D3);
-
-      final coordinates = polygon.points
-          .map((p) => [p.longitude, p.latitude])
-          .toList();
-
-      return {
-        'type': 'Feature',
-        'id': polygon.id,
-        'geometry': {
-          'type': 'Polygon',
-          'coordinates': [coordinates],
-        },
-        'properties': {
-          'id': polygon.id,
-          'type': type ?? 'default',
-          'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
-          'strokeColor': '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillOpacity': fillColor.a,
-          'isSelected': polygon.id == polygonId ? isSelected : false,
-        }
-      };
-    }).toList();
-
-    await controller.setGeoJsonSource(
-      _polygonSourceId,
-      {
-        "type": "FeatureCollection",
-        "features": features,
-      },
-    );
+    _updatePolygonSource(controller, selectPolygonId: selectPolygonId);
   }
 
   /// Deselect a polygon and restore its original colors

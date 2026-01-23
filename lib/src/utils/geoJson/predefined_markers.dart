@@ -14,6 +14,7 @@ class PredefinedMarkers{
         iconName: "Generic Marker",
         properties: marker.properties,
         priority: true,
+      imageSize: Size(45, 45),
       anchor: LandmarkAssetType.genericMarker.anchor
     );
   }
@@ -29,6 +30,7 @@ class PredefinedMarkers{
         priority: true,
         imageSize: Size(35, 35),
       anchor: LandmarkAssetType.user.anchor,
+      renderAnchor: Offset(0.51, 0.785),
       compassBasedRotation: true
     );
   }

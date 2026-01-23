@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'dart:ui';
 
 enum LandmarkAssetType {
   lift,
@@ -144,44 +145,33 @@ enum LandmarkAssetType {
       case LandmarkAssetType.doorOnly:
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.source:
-      case LandmarkAssetType.smokingArea:
       case LandmarkAssetType.counter:
       case LandmarkAssetType.accessibleWashroom:
-        return const Offset(0.5, 0.5);
-
       case LandmarkAssetType.user:
-        return const Offset(0.51, 0.785);
+      case LandmarkAssetType.floorConnection:
+      case LandmarkAssetType.sofa:
+      case LandmarkAssetType.optionPinSelection:
+      case LandmarkAssetType.selectedPinSelection:
+      case LandmarkAssetType.firstAid:
+        return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.room:
       case LandmarkAssetType.genericMarker:
       case LandmarkAssetType.washroom:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
-      case LandmarkAssetType.destination:
-        return const Offset(0.5, 1.0);
-
       case LandmarkAssetType.cafeteria:
-
-      case LandmarkAssetType.waterFountain:
-      case LandmarkAssetType.floorConnection:
-      case LandmarkAssetType.sofa:
-        return const Offset(0.5, 0.5);
-
-      case LandmarkAssetType.optionPinSelection:
-      case LandmarkAssetType.selectedPinSelection:
-
       case LandmarkAssetType.unisexWashroom:
+      case LandmarkAssetType.smokingArea:
+      case LandmarkAssetType.destination:
+      case LandmarkAssetType.waterFountain:
       case LandmarkAssetType.assemblyRoom:
       case LandmarkAssetType.conferenceRoom:
       case LandmarkAssetType.emergencyExit:
-        return const Offset(0.5, 1.0);
       case LandmarkAssetType.fireExtinguisher:
-        return const Offset(0.5, 1.0);
-      case LandmarkAssetType.firstAid:
       case LandmarkAssetType.meetingRoom:
       case LandmarkAssetType.registrationDesk:
         return const Offset(0.5, 1.0);
-
 
     }
   }

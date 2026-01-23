@@ -11,6 +11,18 @@ class MapLocation {
     this.id,
   });
 
+  MapLocation copyWith({
+    double? latitude,
+    double? longitude,
+    String? id,
+  }) {
+    return MapLocation(
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      id: id ?? this.id,
+    );
+  }
+
   MapLocation.fromLatLng(LatLng position)
       : latitude = position.latitude,
         longitude = position.longitude,

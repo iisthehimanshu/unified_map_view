@@ -50,7 +50,7 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Widget buildMap({
-    required MapConfig config}) {
+    required MapConfig config, required BuildContext context}) {
     return MapWidget(
       onMapCreated: (mapboxMap) async {
         config.onMapCreated(mapboxMap);

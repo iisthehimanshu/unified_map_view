@@ -32,7 +32,7 @@ class GoogleMapProvider extends BaseMapProvider {
 
 
   @override
-  Widget buildMap({required MapConfig config}) {
+  Widget buildMap({required MapConfig config, required BuildContext context}) {
     return GoogleMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(
