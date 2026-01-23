@@ -12,6 +12,7 @@ abstract class BaseMapProvider {
   /// Build the map widget
   Widget buildMap({
     required MapConfig config,
+    required BuildContext context
   });
 
   /// Move camera to a specific location
