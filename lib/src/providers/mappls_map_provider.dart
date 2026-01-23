@@ -66,7 +66,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Widget buildMap({required MapConfig config, required BuildContext context}) {
-    var height=MediaQuery.of(context).size.height;
+    var width=MediaQuery.of(context).size.width;
     return Stack(
       children:[
         MapplsMap(
@@ -139,10 +139,10 @@ class MapplsMapProvider extends BaseMapProvider {
                 final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
                 final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
                 final cameraPos = _controller!.cameraPosition;
-                // print("cameraPos tilt ${cameraPos?.tilt}");
-                // print("cameraPos bearing ${cameraPos?.bearing}");
-                // print("cameraPos zoom ${cameraPos?.zoom}");
-                // print("cameraPos target ${cameraPos?.target}");
+                print("cameraPos tilt ${cameraPos?.tilt}");
+                print("cameraPos bearing ${cameraPos?.bearing}");
+                print("cameraPos zoom ${cameraPos?.zoom}");
+                print("cameraPos target ${cameraPos?.target}");
                 config.onCameraMove(UnifiedCameraPosition(
                   mapLocation: MapLocation(
                     latitude: centerLat,
@@ -166,7 +166,7 @@ class MapplsMapProvider extends BaseMapProvider {
           minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
           logoViewMargins:Point(50, 5),
         ),
-        Positioned(bottom:-11,right: height*0.073,child: Row(
+        Positioned(bottom:-11,right: width*0.19,child: Row(
           children: [
             InkWell(
               onTap: () async {
@@ -970,6 +970,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ],
         enableInteraction: true,
         belowLayerId: _normalTextMarkerLayerId,
+        minzoom: 15.0
       );
 
       // Layer 3: Normal fixed/rotated markers (has bearing) - show at zoom 17+
@@ -999,7 +1000,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ],
           enableInteraction: true,
           belowLayerId: _normalIconMarkerLayerId,
-          minzoom: 17.0
+          minzoom: 18.0
       );
 
       // Layer 4: Section markers (zoom < 17)
@@ -1022,6 +1023,7 @@ class MapplsMapProvider extends BaseMapProvider {
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,
         maxzoom: 17.0,
+        minzoom: 15.0
       );
 
       // Layer 4b: SubSection markers
