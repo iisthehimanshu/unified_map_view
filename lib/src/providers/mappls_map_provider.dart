@@ -17,6 +17,7 @@ import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 
 /// Mappls GL implementation of BaseMapProvider
@@ -64,7 +65,8 @@ class MapplsMapProvider extends BaseMapProvider {
   bool _isCircleLayersEnabled = false;
 
   @override
-  Widget buildMap({required MapConfig config}) {
+  Widget buildMap({required MapConfig config, required BuildContext context}) {
+    var height=MediaQuery.of(context).size.height;
     return Stack(
       children:[
         MapplsMap(
@@ -164,11 +166,23 @@ class MapplsMapProvider extends BaseMapProvider {
           minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
           logoViewMargins:Point(50, 5),
         ),
-        Positioned(bottom:-11,right: 58,child: Row(
+        Positioned(bottom:-11,right: height*0.073,child: Row(
           children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 3.0),
-              child: Text("| ",style: TextStyle(fontSize: 21,fontWeight: FontWeight.w700,color: Colors.grey[800]),),
+            InkWell(
+              onTap: () async {
+                try {
+                  var url = "https://www.iwayplus.com/";
+                  if (await canLaunch(url)) {
+                    await launch(url);
+                  } else {
+                    throw 'Could not launch $url';
+                  }
+                }catch(e){}
+              },
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 3.0),
+                child: Text("| ",style: TextStyle(fontSize: 21,fontWeight: FontWeight.w700,color: Colors.grey[800]),),
+              ),
             ),
             Image.asset("packages/unified_map_view/assets/logos/iwayplus_logo.png",height: 52,width: 52,),
           ],

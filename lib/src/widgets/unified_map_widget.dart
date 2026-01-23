@@ -22,7 +22,7 @@ class UnifiedMapWidget extends StatelessWidget {
       builder: (context, child) {
         return Padding(
           padding: padding,
-          child : controller.currentProviderImplementation.buildMap(config: controller.config),
+          child : controller.currentProviderImplementation.buildMap(config: controller.config, context: context),
         );
       },
     );
