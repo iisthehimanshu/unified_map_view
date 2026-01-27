@@ -1,29 +1,29 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'GlobalGeoJSONVenueAPIModel.dart';
+part of 'BuildingByVenueAPIModel.dart';
 
 // **************************************************************************
 // TypeAdapterGenerator
 // **************************************************************************
 
-class GlobalGeoJSONVenueAPIModelAdapter
-    extends TypeAdapter<GlobalGeoJSONVenueAPIModel> {
+class BuildingByVenueAPIModelAdapter
+    extends TypeAdapter<BuildingByVenueAPIModel> {
   @override
-  final int typeId = 10;
+  final int typeId = 79;
 
   @override
-  GlobalGeoJSONVenueAPIModel read(BinaryReader reader) {
+  BuildingByVenueAPIModel read(BinaryReader reader) {
     final numOfFields = reader.readByte();
     final fields = <int, dynamic>{
       for (int i = 0; i < numOfFields; i++) reader.readByte(): reader.read(),
     };
-    return GlobalGeoJSONVenueAPIModel(
+    return BuildingByVenueAPIModel(
       responseBody: (fields[0] as Map).cast<String, dynamic>(),
     );
   }
 
   @override
-  void write(BinaryWriter writer, GlobalGeoJSONVenueAPIModel obj) {
+  void write(BinaryWriter writer, BuildingByVenueAPIModel obj) {
     writer
       ..writeByte(1)
       ..writeByte(0)
@@ -36,7 +36,7 @@ class GlobalGeoJSONVenueAPIModelAdapter
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is GlobalGeoJSONVenueAPIModelAdapter &&
+      other is BuildingByVenueAPIModelAdapter &&
           runtimeType == other.runtimeType &&
           typeId == other.typeId;
 }

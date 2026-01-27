@@ -186,6 +186,9 @@ class RenderingUtilities{
       if (type.contains('counter')) {
         return LandmarkAssetType.counter;
       }
+      if(type.contains('first aid')){
+        return LandmarkAssetType.firstAid;
+      }
 
       return null;
     } catch (e) {
