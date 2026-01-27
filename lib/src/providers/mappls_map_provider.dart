@@ -487,8 +487,6 @@ class MapplsMapProvider extends BaseMapProvider {
 
       final features = symbols.map((marker) {
         final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)?"center":"bottom";
-
-
         return {
           'type': 'Feature',
           'geometry': {
@@ -1319,9 +1317,11 @@ class MapplsMapProvider extends BaseMapProvider {
       }
 
       String polyIDInsideMarker = polyID;
+      print("markerid ${marker?.id}");
       if(marker?.id != null){
         polyIDInsideMarker = _extractPolygonIdFromTap(marker!.id)??polyID;
       }
+      print("polyIDInsideMarker ${polyIDInsideMarker}");
 
       // Try to find polygon
       try {
@@ -1411,6 +1411,7 @@ class MapplsMapProvider extends BaseMapProvider {
         if(marker.assetPath == null){
           try {
             final genericMarker = PredefinedMarkers.getGenericMarker(marker);
+            print("genericMarker id ${genericMarker.id}");
             await removeMarker(controller, polyID);
             await addMarker(controller, genericMarker);
           } catch (e) {
@@ -1506,6 +1507,10 @@ class MapplsMapProvider extends BaseMapProvider {
       // Handle marker
       try {
         final marker = selectedLocation?.marker as GeoJsonMarker?;
+        print("marker in deselect ${polyID} ${_symbols.where((marker)=>marker.id.toLowerCase().contains(polyID))}");
+        _symbols.forEach((symbol){
+          print("symbol ${symbol.id}");
+        });
         if (marker != null) {
           await removeMarker(controller, polyID);
           await addMarker(controller, marker);

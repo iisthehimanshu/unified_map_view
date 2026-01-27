@@ -345,7 +345,9 @@ class GeoJsonMarker {
       polyId = associatedPolygons.first;
     }
 
-
+    print("feature.id ${feature.id}");
+    print("feature.properties?[exhibitorRef]?[organizationDetails]  ${feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"]}");
+    print("feature.properties?[sponsorRef]?[name] ${feature.properties?["sponsorRef"]?["name"]}");
     parsedTitle = feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"] ?? feature.properties?["sponsorRef"]?["name"] ?? feature.properties?["name"] ?? "";
     // print("parsedTitle ${parsedTitle}");
 

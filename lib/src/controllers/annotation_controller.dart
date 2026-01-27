@@ -58,6 +58,7 @@ class AnnotationController{
       await _unifiedMapController.fitBoundsToGeoJson();
       if(_user != null){
         await _unifiedMapController.fitBoundsToGeoJson();
+        localizeUser(_user!);
       }
       print("onReadyLandmarkSelectionID ${_unifiedMapController.onReadyLandmarkSelectionID}");
       if(_unifiedMapController.onReadyLandmarkSelectionID != null && _unifiedMapController.onReadyLandmarkSelectionID!.isNotEmpty){
