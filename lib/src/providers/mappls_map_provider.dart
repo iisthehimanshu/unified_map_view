@@ -1218,9 +1218,9 @@ class MapplsMapProvider extends BaseMapProvider {
         _polylineSourceId,
         _pathLayerId,
         LineLayerProperties(
-          lineColor: "#448AFF",
-          lineWidth: 8.0,
-          lineOpacity: 1.0,
+          lineColor: ["get", "lineColor"],
+          lineWidth: ["get", "lineWidth"],
+          lineOpacity: ["get", "lineOpacity"],
         ),
         filter: ["to-boolean", ["get", "path"]],
         enableInteraction: true,

@@ -28,6 +28,7 @@ class GeoJsonUtils{
       'buildingID': buildingID,
       'floor': floor,
       'path': path,
+      'time': DateTime.now().millisecondsSinceEpoch.toString()
     };
 
     return values.entries

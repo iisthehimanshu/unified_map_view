@@ -477,6 +477,10 @@ class UnifiedMapController extends ChangeNotifier {
     return _annotationController.addPath(path.map((map)=>Cell.fromJson(map)).toList());
   }
 
+  Future<bool> addMultiPathGraph({required List<Map<String, dynamic>> path}) async {
+    return _annotationController.addMultiPathGraph(path.map((map)=>Cell.fromJson(map)).toList());
+  }
+
   Future<void> clearPath() async {
     _annotationController.clearPath();
     notifyListeners();

@@ -22,6 +22,7 @@ class AnnotationController{
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
 
   Map<String, Map<int, List<Cell>>>? _path;
+  List<Map<String, Map<int, List<Cell>>>>? _multiPath;
 
   User? _user;
 
@@ -133,6 +134,7 @@ class AnnotationController{
     _unifiedMapController.removePolyline('path');
     _unifiedMapController.removeMarker('path');
     _path = null;
+    _multiPath = null;
     return true;
   }
 
@@ -146,9 +148,21 @@ class AnnotationController{
     return true;
   }
 
+  bool addMultiPathGraph(List<Cell> path){
+    _multiPath ??= [];
+    Map<String, Map<int, List<Cell>>> obj = Map();
+    for (var cell in path) {
+      obj.putIfAbsent(cell.bid!, ()=><int, List<Cell>>{});
+      obj[cell.bid]!.putIfAbsent(cell.floor, ()=>[]);
+      obj[cell.bid]![cell.floor]!.add(cell);
+    }
+    _multiPath!.add(obj);
+    return true;
+  }
+
   Future<bool> annotatePath(int sourceFloor) async {
     if(_path == null) return false;
-    _path!.forEach((bid, value){
+    _path?.forEach((bid, value){
       value.forEach((floor, path) async {
         if(floor == sourceFloor){
           List<MapLocation> points = [];
@@ -156,9 +170,15 @@ class AnnotationController{
             points.add(MapLocation(latitude: point.lat, longitude: point.lng));
           }
           GeoJsonPolyline polyline = GeoJsonPolyline(
-              id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'true'),
-              points: points
+              id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'mainLine'),
+              points: points,
+              properties: {
+                "fillColor": "#448AFF",
+                "width": 8.0,
+                "fillOpacity": 1.0,
+              }
           );
+
           var mappedPath = path.map((cell)=>MapLocation(latitude: cell.lat, longitude: cell.lng).toJson()).toList();
           final highlighter = TurnHighlighter(path: mappedPath, highlightRadiusMeters: 1.5, polylineWidth: 8);
           var turnFeaturesMap = highlighter.getTurnPolylines();
@@ -168,6 +188,29 @@ class AnnotationController{
           // await _unifiedMapController.addPolylines(turnFeatures);
           _annotatePathMarkers(path);
         }
+      });
+    });
+
+    _multiPath?.forEach((possiblePath){
+      possiblePath.forEach((bid, value){
+        value.forEach((floor, path) async {
+          if(floor == sourceFloor){
+            List<MapLocation> points = [];
+            for (var point in path) {
+              points.add(MapLocation(latitude: point.lat, longitude: point.lng));
+            }
+            GeoJsonPolyline polyline = GeoJsonPolyline(
+                id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'alternatePath'),
+                points: points,
+                properties: {
+                  "fillColor": "#D3D3D3",
+                  "width": 8.0,
+                  "fillOpacity": 1.0,
+                }
+            );
+            await _unifiedMapController.addPolyline(polyline);
+          }
+        });
       });
     });
 
