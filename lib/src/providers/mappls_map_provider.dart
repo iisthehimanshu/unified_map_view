@@ -1508,9 +1508,7 @@ class MapplsMapProvider extends BaseMapProvider {
       try {
         final marker = selectedLocation?.marker as GeoJsonMarker?;
         print("marker in deselect ${polyID} ${_symbols.where((marker)=>marker.id.toLowerCase().contains(polyID))}");
-        _symbols.forEach((symbol){
-          print("symbol ${symbol.id}");
-        });
+
         if (marker != null) {
           await removeMarker(controller, polyID);
           await addMarker(controller, marker);

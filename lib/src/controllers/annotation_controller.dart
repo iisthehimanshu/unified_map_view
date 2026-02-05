@@ -21,7 +21,7 @@ class AnnotationController{
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
 
-  Map<String, Map<int, List<Cell>>>? _path;
+  Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
 
   User? _user;
@@ -138,15 +138,49 @@ class AnnotationController{
     return true;
   }
 
-  bool addPath(List<Cell> path){
-    _path ??= <String, Map<int, List<Cell>>>{};
+  bool addPath(List<Cell> path) {
+    _path ??= <String, Map<int, List<List<Cell>>>>{};
+
+    if (path.isEmpty) return false;
+
+    List<Cell> currentSegment = [];
+    String? lastBid;
+
     for (var cell in path) {
-      _path!.putIfAbsent(cell.bid!, ()=><int, List<Cell>>{});
-      _path![cell.bid]!.putIfAbsent(cell.floor, ()=>[]);
-      _path![cell.bid]![cell.floor]!.add(cell);
+      final bid = cell.bid ?? "";
+      final floor = cell.floor;
+
+      // If building changes, store previous segment
+      if (lastBid != null && bid != lastBid) {
+        _storeSegment(currentSegment);
+        currentSegment = [];
+      }
+
+      currentSegment.add(cell);
+      lastBid = bid;
     }
+
+    // Store last segment
+    if (currentSegment.isNotEmpty) {
+      _storeSegment(currentSegment);
+    }
+
     return true;
   }
+
+  void _storeSegment(List<Cell> segment) {
+    if (segment.isEmpty) return;
+
+    final bid = segment.first.bid!;
+    final floor = segment.first.floor;
+
+    _path!.putIfAbsent(bid, () => <int, List<List<Cell>>>{});
+    _path![bid]!.putIfAbsent(floor, () => <List<Cell>>[]);
+
+    // Add whole segment as a separate list
+    _path![bid]![floor]!.add(segment);
+  }
+
 
   bool addMultiPathGraph(List<Cell> path){
     _multiPath ??= [];
@@ -163,30 +197,32 @@ class AnnotationController{
   Future<bool> annotatePath(int sourceFloor) async {
     if(_path == null) return false;
     _path?.forEach((bid, value){
-      value.forEach((floor, path) async {
-        if(floor == sourceFloor){
-          List<MapLocation> points = [];
-          for (var point in path) {
-            points.add(MapLocation(latitude: point.lat, longitude: point.lng));
-          }
-          GeoJsonPolyline polyline = GeoJsonPolyline(
-              id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'mainLine'),
-              points: points,
-              properties: {
-                "fillColor": "#448AFF",
-                "width": 8.0,
-                "fillOpacity": 1.0,
-              }
-          );
+      value.forEach((floor, paths) async {
+        for(var path in paths){
+          if(floor == sourceFloor){
+            List<MapLocation> points = [];
+            for (var point in path) {
+              points.add(MapLocation(latitude: point.lat, longitude: point.lng));
+            }
+            GeoJsonPolyline polyline = GeoJsonPolyline(
+                id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'mainLine'),
+                points: points,
+                properties: {
+                  "fillColor": "#448AFF",
+                  "width": 8.0,
+                  "fillOpacity": 1.0,
+                }
+            );
 
-          var mappedPath = path.map((cell)=>MapLocation(latitude: cell.lat, longitude: cell.lng).toJson()).toList();
-          final highlighter = TurnHighlighter(path: mappedPath, highlightRadiusMeters: 1.5, polylineWidth: 8);
-          var turnFeaturesMap = highlighter.getTurnPolylines();
-          var turnFeatures = turnFeaturesMap.map((element)=>GeoJsonPolyline.fromJson(element)).toList();
-          await _unifiedMapController.fitCameraToLine(polyline);
-          await _unifiedMapController.addPolyline(polyline);
-          // await _unifiedMapController.addPolylines(turnFeatures);
-          _annotatePathMarkers(path);
+            var mappedPath = path.map((cell)=>MapLocation(latitude: cell.lat, longitude: cell.lng).toJson()).toList();
+            final highlighter = TurnHighlighter(path: mappedPath, highlightRadiusMeters: 1.5, polylineWidth: 8);
+            var turnFeaturesMap = highlighter.getTurnPolylines();
+            var turnFeatures = turnFeaturesMap.map((element)=>GeoJsonPolyline.fromJson(element)).toList();
+            await _unifiedMapController.fitCameraToLine(polyline);
+            await _unifiedMapController.addPolyline(polyline);
+            // await _unifiedMapController.addPolylines(turnFeatures);
+            _annotatePathMarkers(path);
+          }
         }
       });
     });
