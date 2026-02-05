@@ -402,24 +402,27 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   /// Fit map bounds to show all GeoJSON features
-  Future<void> fitBoundsToGeoJson() async {
+  Future<void> fitBoundsToGeoJson({List<MapLocation>? allPoint, double padding = 0.1}) async {
     if (_currentMapController == null) return;
 
-    final allPoints = <MapLocation>[];
+    var allPoints = <MapLocation>[];
+    if(allPoint == null){
+      // Collect all points from markers
+      allPoints.addAll(_markers.map((m){
+        return m.position;
+      }));
 
-    // Collect all points from markers
-    allPoints.addAll(_markers.map((m){
-      return m.position;
-    }));
+      // Collect points from polygons
+      for (var polygon in _polygons) {
+        allPoints.addAll(polygon.points);
+      }
 
-    // Collect points from polygons
-    for (var polygon in _polygons) {
-      allPoints.addAll(polygon.points);
-    }
-
-    // Collect points from polylines
-    for (var polyline in _polylines) {
-      allPoints.addAll(polyline.points);
+      // Collect points from polylines
+      for (var polyline in _polylines) {
+        allPoints.addAll(polyline.points);
+      }
+    }else{
+      allPoints = allPoint;
     }
 
     if (allPoints.isEmpty) return;
@@ -440,8 +443,8 @@ class UnifiedMapController extends ChangeNotifier {
     // Move to center
     try{
       // Add padding to the bounds (adjust these values as needed)
-      final latPadding = (maxLat - minLat) * 0.1; // 10% padding
-      final lngPadding = (maxLng - minLng) * 0.1;
+      final latPadding = (maxLat - minLat) * padding; // 10% padding
+      final lngPadding = (maxLng - minLng) * padding;
 
       // Create bounds with padding
       final bounds = CameraBound(

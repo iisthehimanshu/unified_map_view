@@ -1263,8 +1263,8 @@ class MapplsMapProvider extends BaseMapProvider {
     // Move to center
     try {
       // Add padding to the bounds (adjust these values as needed)
-      final latPadding = (maxLat - minLat) * 0.1; // 10% padding
-      final lngPadding = (maxLng - minLng) * 0.1;
+      final latPadding = (maxLat - minLat) * 0.5; // 50% padding
+      final lngPadding = (maxLng - minLng) * 0.5;
 
       // Create bounds with padding
       final bounds = CameraBound(
