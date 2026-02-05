@@ -3,6 +3,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
 import '../../unified_map_view.dart';
+import '../config.dart';
 import '../models/Cell.dart';
 import '../providers/google_map_provider.dart';
 import '../providers/mapbox_map_provider.dart';
