@@ -139,10 +139,10 @@ class MapplsMapProvider extends BaseMapProvider {
                 final centerLat = (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
                 final centerLng = (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
                 final cameraPos = _controller!.cameraPosition;
-                print("cameraPos tilt ${cameraPos?.tilt}");
-                print("cameraPos bearing ${cameraPos?.bearing}");
-                print("cameraPos zoom ${cameraPos?.zoom}");
-                print("cameraPos target ${cameraPos?.target}");
+                // print("cameraPos tilt ${cameraPos?.tilt}");
+                // print("cameraPos bearing ${cameraPos?.bearing}");
+                // print("cameraPos zoom ${cameraPos?.zoom}");
+                // print("cameraPos target ${cameraPos?.target}");
                 config.onCameraMove(UnifiedCameraPosition(
                   mapLocation: MapLocation(
                     latitude: centerLat,
