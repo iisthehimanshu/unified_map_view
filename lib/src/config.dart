@@ -3,9 +3,16 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 class AppConfig {
+
+  static String? url;
+
   static String get baseUrl {
+    if(url != null){
+      return url!;
+    }
+
     if (kDebugMode) {
-      return 'https://maps.iwayplus.in';
+      return 'https://dev.iwayplus.in';
     } else {
       return 'https://maps.iwayplus.in';
     }

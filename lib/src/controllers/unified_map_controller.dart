@@ -2,7 +2,6 @@
 
 import 'package:flutter/foundation.dart';
 import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
-
 import '../../unified_map_view.dart';
 import '../models/Cell.dart';
 import '../providers/google_map_provider.dart';
@@ -39,9 +38,14 @@ class UnifiedMapController extends ChangeNotifier {
     Function ({required String polygonId, required List<MapLocation> coordinates})? onPolygon,
     Function ({required String polylineId, required List<MapLocation> coordinates})? onPolyline,
 
-    this.onReadyLandmarkSelectionID
+    this.onReadyLandmarkSelectionID,
+
+    String? url
 
   }) {
+
+    AppConfig.url = url;
+
     _currentProvider = initialProvider;
 
     _config = MapConfig(

@@ -1263,7 +1263,7 @@ class MapplsMapProvider extends BaseMapProvider {
     // Move to center
     try {
       // Add padding to the bounds (adjust these values as needed)
-      final latPadding = (maxLat - minLat) * 0.5; // 50% padding
+      final latPadding = (maxLat - minLat) * 0.5; // % padding
       final lngPadding = (maxLng - minLng) * 0.5;
 
       // Create bounds with padding

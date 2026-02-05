@@ -9,6 +9,7 @@ import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.d
 
 // Enums
 export 'src/enums/map_provider.dart';
+export 'src/config.dart';
 
 // Models
 export 'src/models/map_config.dart';
