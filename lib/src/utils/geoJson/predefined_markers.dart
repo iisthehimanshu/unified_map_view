@@ -63,17 +63,64 @@ class PredefinedMarkers{
     );
   }
 
-  static GeoJsonMarker getFloorConnectionMarker(MapLocation location, String id){
-    return GeoJsonMarker(
-        id: id,
-        position: location,
-        title: "",
-        snippet: "",
-        assetPath: LandmarkAssetType.floorConnection.assetPath,
-        iconName: "Floor Connection",
-        priority: true,
-        anchor: LandmarkAssetType.floorConnection.anchor
-    );
+  static GeoJsonMarker getFloorConnectionMarker(MapLocation location, String id, String? type){
+    switch (type){
+      case "Lift":
+        return GeoJsonMarker(
+            id: id,
+            position: location,
+            title: "",
+            snippet: "",
+            assetPath: LandmarkAssetType.lift.assetPath,
+            iconName: "Floor Connection",
+            priority: true,
+            anchor: LandmarkAssetType.lift.anchor
+        );
+      case "Stair":
+        return GeoJsonMarker(
+            id: id,
+            position: location,
+            title: "",
+            snippet: "",
+            assetPath: LandmarkAssetType.stairs.assetPath,
+            iconName: "Floor Connection",
+            priority: true,
+            anchor: LandmarkAssetType.stairs.anchor
+        );
+      case "Escalator":
+        return GeoJsonMarker(
+            id: id,
+            position: location,
+            title: "",
+            snippet: "",
+            assetPath: LandmarkAssetType.escalator.assetPath,
+            iconName: "Floor Connection",
+            priority: true,
+            anchor: LandmarkAssetType.escalator.anchor
+        );
+      case "Ramp":
+        return GeoJsonMarker(
+            id: id,
+            position: location,
+            title: "",
+            snippet: "",
+            assetPath: LandmarkAssetType.ramp.assetPath,
+            iconName: "Floor Connection",
+            priority: true,
+            anchor: LandmarkAssetType.ramp.anchor
+        );
+        default:
+          return GeoJsonMarker(
+              id: id,
+              position: location,
+              title: "",
+              snippet: "",
+              assetPath: LandmarkAssetType.lift.assetPath,
+              iconName: "Floor Connection",
+              priority: true,
+              anchor: LandmarkAssetType.lift.anchor
+          );
+    }
   }
 
   static GeoJsonMarker getOptionPinSelectionMarker(MapLocation location, String id){

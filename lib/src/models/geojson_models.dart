@@ -306,7 +306,7 @@ class GeoJsonMarker {
     }
 
     if(coords == null || coords.first == null || coords.last == null){
-      print(feature.id);
+      return null;
     }
 
 

@@ -230,28 +230,28 @@ class AnnotationController{
     });
     await _unifiedMapController.fitBoundsToGeoJson(allPoint: pathPoints, padding: 0.3);
 
-    _multiPath?.forEach((possiblePath){
-      possiblePath.forEach((bid, value){
-        value.forEach((floor, path) async {
-          if(floor == sourceFloor){
-            List<MapLocation> points = [];
-            for (var point in path) {
-              points.add(MapLocation(latitude: point.lat, longitude: point.lng));
-            }
-            GeoJsonPolyline polyline = GeoJsonPolyline(
-                id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'alternatePath'),
-                points: points,
-                properties: {
-                  "fillColor": "#D3D3D3",
-                  "width": 8.0,
-                  "fillOpacity": 1.0,
-                }
-            );
-            await _unifiedMapController.addPolyline(polyline);
-          }
-        });
-      });
-    });
+    // _multiPath?.forEach((possiblePath){
+    //   possiblePath.forEach((bid, value){
+    //     value.forEach((floor, path) async {
+    //       if(floor == sourceFloor){
+    //         List<MapLocation> points = [];
+    //         for (var point in path) {
+    //           points.add(MapLocation(latitude: point.lat, longitude: point.lng));
+    //         }
+    //         GeoJsonPolyline polyline = GeoJsonPolyline(
+    //             id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'alternatePath'),
+    //             points: points,
+    //             properties: {
+    //               "fillColor": "#D3D3D3",
+    //               "width": 8.0,
+    //               "fillOpacity": 1.0,
+    //             }
+    //         );
+    //         await _unifiedMapController.addPolyline(polyline);
+    //       }
+    //     });
+    //   });
+    // });
 
     return true;
   }
@@ -265,7 +265,7 @@ class AnnotationController{
         _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
       }
       if(cell.isFloorConnection){
-        _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), cell.connectorType));
       }
     }
   }

@@ -54,6 +54,7 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _patchPolygonLayerId = 'patch-polygon-layer';
   final String _sectionPolygonLayerId = 'section-polygon-layer';
   final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
+  final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
   final String _polylineSourceId = 'polylines-source';
   final String _pathLayerId = 'path-polyline-layer';
@@ -123,6 +124,7 @@ class MapplsMapProvider extends BaseMapProvider {
           },
           onStyleLoadedCallback: () async {
             if (_controller != null) {
+
               // Now initialize layers after style is loaded
               await enablePolygonLayers(_controller!);
               await enablePolylineLayers(_controller!);
@@ -356,6 +358,9 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   Future<void> localizeUser(controller, GeoJsonMarker marker) async {
     if (controller is MapplsMapController) {
+      if(_rotatingSymbols.where((element)=>element.id.toLowerCase().contains("user")).isNotEmpty){
+        return;
+      }
       print("localizeUser ${StackTrace.current}");
       _rotatingSymbols.add(marker);
       await _loadMarkerIcon(controller, marker);
@@ -654,6 +659,22 @@ class MapplsMapProvider extends BaseMapProvider {
           .map((p) => [p.longitude, p.latitude])
           .toList();
 
+      // Parse height and baseHeight
+      double? baseHeight;
+      double? height;
+
+      // if (polygon.properties?['baseHeight'] != null && polygon.properties?['baseHeight'].isNotEmpty) {
+      //   baseHeight = double.parse(polygon.properties?['baseHeight']);
+      // }
+      //
+      // if (polygon.properties?['height'] != null && polygon.properties?['height'].isNotEmpty) {
+      //   height = double.parse(polygon.properties?['height']);
+      //   // If baseHeight exists, add it to height
+      //   if (baseHeight != null) {
+      //     height = height + baseHeight;
+      //   }
+      // }
+
       return {
         'type': 'Feature',
         'id': polygon.id,
@@ -662,7 +683,6 @@ class MapplsMapProvider extends BaseMapProvider {
           'coordinates': [coordinates],
         },
         'properties': {
-          // ✅ Always include ALL properties
           'id': polygon.id,
           'type': type ?? 'default',
           'fillColor': '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
@@ -671,7 +691,9 @@ class MapplsMapProvider extends BaseMapProvider {
           'isSelected': polygon.id == selectPolygonId,
           'boundary' : polygon.properties?['type'] == "Boundary",
           'section' : polygon.properties?['type'] == "Section",
-          'subsection' : polygon.properties?['type'] == "SubSection"
+          'subsection' : polygon.properties?['type'] == "SubSection",
+          if(baseHeight != null) 'base_height': baseHeight,
+          if(height != null) 'height': height
         }
       };
     }).toList();
@@ -1021,7 +1043,7 @@ class MapplsMapProvider extends BaseMapProvider {
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,
         maxzoom: 17.0,
-        minzoom: 15.0
+        minzoom: 15.0,
       );
 
       // Layer 4b: SubSection markers
@@ -1107,7 +1129,11 @@ class MapplsMapProvider extends BaseMapProvider {
           fillOpacity: ["get", "fillOpacity"],
           fillOutlineColor: ["get", "strokeColor"],
         ),
-        filter: ["to-boolean", ["get", "boundary"]],
+        filter: [
+          "all",
+          ["to-boolean", ["get", "boundary"]],
+          ["!", ["has", "height"]],  // Exclude polygons with height
+        ],
         enableInteraction: true,
         belowLayerId: _polylineLayerId,
       );
@@ -1126,6 +1152,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["has", "height"]],  // Exclude polygons with height
         ],
         enableInteraction: true,
         belowLayerId: _polylineLayerId,
@@ -1143,6 +1170,7 @@ class MapplsMapProvider extends BaseMapProvider {
           "all",
           ["to-boolean", ["get", "section"]],
           ["!", ["to-boolean", ["get", "subsection"]]],
+          ["!", ["has", "height"]],  // Exclude polygons with height
         ],
         enableInteraction: false,
         belowLayerId: _polylineLayerId,
@@ -1161,6 +1189,7 @@ class MapplsMapProvider extends BaseMapProvider {
             "all",
             ["!", ["to-boolean", ["get", "section"]]],
             ["to-boolean", ["get", "subsection"]],
+            ["!", ["has", "height"]],  // Exclude polygons with height
           ],
           enableInteraction: false,
           belowLayerId: _polylineLayerId,
@@ -1176,9 +1205,29 @@ class MapplsMapProvider extends BaseMapProvider {
           fillOpacity: 0.6,
           fillOutlineColor: "#2E7D32",
         ),
-        filter: ["to-boolean", ["get", "isSelected"]],
+        filter: [
+          "all",
+          ["to-boolean", ["get", "isSelected"]],
+          ["!", ["has", "height"]],  // Exclude polygons with height
+        ],
         enableInteraction: true,
         belowLayerId: _polylineLayerId,
+      );
+
+      await controller.addFillExtrusionLayer(
+        _polygonSourceId,
+        _extrudedPolygonLayerId,
+        FillExtrusionLayerProperties(
+          fillExtrusionColor: ["get", "fillColor"],
+          fillExtrusionHeight: [
+            'get', 'height'  // Get height from feature properties
+          ],
+          fillExtrusionBase: [
+            'get', 'base_height'  // Optional: base elevation
+          ],
+          fillExtrusionOpacity: 1.0,
+        ),
+        filter: ['has', 'height'],  // Only render polygons with height property
       );
 
       _isPolygonLayersEnabled = true;

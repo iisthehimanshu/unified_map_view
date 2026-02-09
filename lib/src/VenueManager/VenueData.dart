@@ -103,7 +103,6 @@ class VenueData{
       return feature.buildingID == buildingId &&
           feature.properties?["floor"] == floor &&
           name != null &&
-          !lowerName.contains('piller') &&
           !lowerName.contains('non walkable') &&
           !lowerName.contains('iw');
     }).toList();

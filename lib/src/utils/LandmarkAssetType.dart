@@ -5,6 +5,7 @@ enum LandmarkAssetType {
   lift,
   stairs,
   escalator,
+  ramp,
   femaleWashroom,
   maleWashroom,
   accessibleWashroom,
@@ -19,7 +20,6 @@ enum LandmarkAssetType {
   user,
   source,
   destination,
-  floorConnection,
   optionPinSelection,
   selectedPinSelection,
   sofa,
@@ -43,6 +43,8 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/stairs.png';
       case LandmarkAssetType.escalator:
         return 'packages/unified_map_view/assets/markers/escalator.png';
+      case LandmarkAssetType.ramp:
+        return 'packages/unified_map_view/assets/markers/ramp.png';
       case LandmarkAssetType.femaleWashroom:
         return 'packages/unified_map_view/assets/markers/female_washroom.png';
       case LandmarkAssetType.maleWashroom:
@@ -71,8 +73,6 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/source.png';
       case LandmarkAssetType.destination:
         return 'packages/unified_map_view/assets/markers/destination.png';
-      case LandmarkAssetType.floorConnection:
-        return 'packages/unified_map_view/assets/markers/lift.png';
       case LandmarkAssetType.optionPinSelection:
         return 'packages/unified_map_view/assets/markers/option_pin_selection.png';
       case LandmarkAssetType.selectedPinSelection:
@@ -106,6 +106,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.lift:
       case LandmarkAssetType.stairs:
       case LandmarkAssetType.escalator:
+      case LandmarkAssetType.ramp:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
       case LandmarkAssetType.accessibleWashroom:
@@ -113,7 +114,6 @@ enum LandmarkAssetType {
       case LandmarkAssetType.cafeteria:
       case LandmarkAssetType.doorOnly:
       case LandmarkAssetType.mainEntry:
-      case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.unisexWashroom:
       case LandmarkAssetType.assemblyRoom:
       case LandmarkAssetType.conferenceRoom:
@@ -142,13 +142,13 @@ enum LandmarkAssetType {
       case LandmarkAssetType.lift:
       case LandmarkAssetType.stairs:
       case LandmarkAssetType.escalator:
+      case LandmarkAssetType.ramp:
       case LandmarkAssetType.doorOnly:
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.source:
       case LandmarkAssetType.counter:
       case LandmarkAssetType.accessibleWashroom:
       case LandmarkAssetType.user:
-      case LandmarkAssetType.floorConnection:
       case LandmarkAssetType.sofa:
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:

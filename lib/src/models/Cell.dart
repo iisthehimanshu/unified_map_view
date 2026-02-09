@@ -20,8 +20,9 @@ class Cell{
   bool isSource;
   bool isDestination;
   bool isFloorConnection;
+  String? connectorType;
 
-  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false});
+  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType});
 
   Map<String, dynamic> toJson() => {
     'node': node,
@@ -47,7 +48,8 @@ class Cell{
         : null,
     'isSource': isSource,
     'isDestination': isDestination,
-    'isFloorConnection': isFloorConnection
+    'isFloorConnection': isFloorConnection,
+    'connectorType': connectorType
   };
 
 
@@ -83,6 +85,7 @@ class Cell{
       isSource: json['isSource'],
       isDestination: json['isDestination'],
       isFloorConnection: json['isFloorConnection'],
+        connectorType: json['connectorType']
     );
   }
 
