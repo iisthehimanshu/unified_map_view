@@ -194,41 +194,68 @@ class AnnotationController{
   }
 
   Future<bool> annotatePath(int sourceFloor) async {
-    if(_path == null) return false;
-    List<MapLocation> pathPoints = [];
-    _path?.forEach((bid, value){
-      value.forEach((floor, paths) async {
-        for(var path in paths){
-          if(floor == sourceFloor){
-            List<MapLocation> points = [];
-            for (var point in path) {
-              var mapLocation = MapLocation(latitude: point.lat, longitude: point.lng);
-              pathPoints.add(mapLocation);
-              points.add(mapLocation);
-            }
-            GeoJsonPolyline polyline = GeoJsonPolyline(
-                id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'mainLine'),
-                points: points,
-                properties: {
-                  "fillColor": "#448AFF",
-                  "width": 8.0,
-                  "fillOpacity": 1.0,
-                }
-            );
+    if (_path == null) return false;
 
-            var mappedPath = path.map((cell)=>MapLocation(latitude: cell.lat, longitude: cell.lng).toJson()).toList();
-            final highlighter = TurnHighlighter(path: mappedPath, highlightRadiusMeters: 1.5, polylineWidth: 8);
-            var turnFeaturesMap = highlighter.getTurnPolylines();
-            var turnFeatures = turnFeaturesMap.map((element)=>GeoJsonPolyline.fromJson(element)).toList();
-            // await _unifiedMapController.fitCameraToLine(polyline);
-            await _unifiedMapController.addPolyline(polyline);
-            // await _unifiedMapController.addPolylines(turnFeatures);
-            _annotatePathMarkers(path);
+    List<MapLocation> pathPoints = [];
+
+    for (var entry in _path!.entries) {
+      final bid = entry.key;
+      final floors = entry.value;
+
+      for (var floorEntry in floors.entries) {
+        final floor = floorEntry.key;
+        final paths = floorEntry.value;
+
+        if (floor != sourceFloor) continue;
+
+        for (var path in paths) {
+          List<MapLocation> segmentPoints = [];
+          String? currentColor;
+
+          for (int i = 0; i < path.length; i++) {
+            final point = path[i];
+            final color = point.color ?? "#448AFF"; // default color
+
+            final mapLocation =
+            MapLocation(latitude: point.lat, longitude: point.lng);
+
+            pathPoints.add(mapLocation);
+
+            // If color changes, draw previous segment
+            if (currentColor != null && color != currentColor) {
+              await _drawSegmentPolyline(
+                bid,
+                floor,
+                segmentPoints,
+                currentColor,
+              );
+              segmentPoints = [];
+            }
+
+            segmentPoints.add(mapLocation);
+            currentColor = color;
           }
+
+          // Draw last segment
+          if (segmentPoints.length > 1 && currentColor != null) {
+            await _drawSegmentPolyline(
+              bid,
+              floor,
+              segmentPoints,
+              currentColor,
+            );
+          }
+
+          _annotatePathMarkers(path);
         }
-      });
-    });
-    await _unifiedMapController.fitBoundsToGeoJson(allPoint: pathPoints, padding: 0.3);
+      }
+    }
+
+    await _unifiedMapController.fitBoundsToGeoJson(
+      allPoint: pathPoints,
+      padding: 0.3,
+    );
+
 
     // _multiPath?.forEach((possiblePath){
     //   possiblePath.forEach((bid, value){
@@ -254,6 +281,31 @@ class AnnotationController{
     // });
 
     return true;
+  }
+
+  Future<void> _drawSegmentPolyline(
+      String bid,
+      int floor,
+      List<MapLocation> points,
+      String color,
+      ) async {
+    if (points.length < 2) return;
+
+    final polyline = GeoJsonPolyline(
+      id: GeoJsonUtils.buildKey(
+        buildingID: bid,
+        floor: floor.toString(),
+        path: 'mainLine_${DateTime.now().microsecondsSinceEpoch}',
+      ),
+      points: points,
+      properties: {
+        "fillColor": color,
+        "width": 8.0,
+        "fillOpacity": 1.0,
+      },
+    );
+
+    await _unifiedMapController.addPolyline(polyline);
   }
 
   void _annotatePathMarkers(List<Cell> path){

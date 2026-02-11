@@ -120,7 +120,7 @@ class VenueData{
             GlobalAppGeoData polygon = polygons.first;
             List<MapLocation>? polygonPoints = polygon.geometry?.coordinates?.first.map((point)=>MapLocation(latitude: point[1], longitude: point[1])).toList();
             if(polygonPoints != null){
-              // data.properties?['bearing'] = RenderingUtilities().findBestFitRectangleBearing(polygonPoints).bearing - 9;
+              // data.properties?['bearing'] = RenderingUtilities().findBestFitRectangleBearing(polygonPoints).bearing;
             }
           }
         }

@@ -150,6 +150,12 @@ class RenderingUtilities{
         return LandmarkAssetType.emergencyExit;
       }
       // ================= Other Types =================
+      if (type.contains('gadget') || type.contains('mobile') || type.contains('phone')) {
+        return LandmarkAssetType.gadgets;
+      }
+      if (type.contains('clothes') || type.contains('garment')) {
+        return LandmarkAssetType.garments;
+      }
       if (type.contains('entry') || type.contains('entrance') || type.contains('exit')) {
         return LandmarkAssetType.mainEntry;
       }

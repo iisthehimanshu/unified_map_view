@@ -294,7 +294,8 @@ class GeoJsonMarker {
                 feature.properties?["type"] == "Centroid" ||
                 feature.properties?["type"] == "BP" ||
                 feature.properties?["type"] == "Wall" ||
-                feature.properties?["polygonType"] == "Wall"
+                feature.properties?["polygonType"] == "Wall" ||
+                feature.properties?["type"] == "Jumper"
         )
     ) {
       return null;
@@ -311,9 +312,7 @@ class GeoJsonMarker {
 
 
     final asset = RenderingUtilities.getAssetForLandmark(feature.properties);
-    if(feature.id=="68aef48d96d312628c092985"){
-      print("assetPath:${asset!.assetPath}");
-    }
+
     String? assetPath;
     String? iconName;
     bool? textVisibility;

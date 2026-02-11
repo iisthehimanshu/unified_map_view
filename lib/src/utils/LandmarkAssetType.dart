@@ -23,7 +23,6 @@ enum LandmarkAssetType {
   optionPinSelection,
   selectedPinSelection,
   sofa,
-
   assemblyRoom,
   conferenceRoom,
   emergencyExit,
@@ -32,7 +31,9 @@ enum LandmarkAssetType {
   meetingRoom,
   registrationDesk,
   unisexWashroom,
-  smokingArea
+  smokingArea,
+  gadgets,
+  garments
   ;
 
   String get assetPath {
@@ -98,6 +99,10 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/unisex_washroom.png';
       case LandmarkAssetType.smokingArea:
         return 'packages/unified_map_view/assets/markers/smoking_area.png';
+      case LandmarkAssetType.gadgets:
+        return 'packages/unified_map_view/assets/markers/gadgets.png';
+      case LandmarkAssetType.garments:
+        return 'packages/unified_map_view/assets/markers/garments.png';
     }
   }
 
@@ -133,6 +138,8 @@ enum LandmarkAssetType {
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:
       case LandmarkAssetType.sofa:
+      case LandmarkAssetType.gadgets:
+      case LandmarkAssetType.garments:
         return false;
     }
   }
@@ -171,6 +178,8 @@ enum LandmarkAssetType {
       case LandmarkAssetType.fireExtinguisher:
       case LandmarkAssetType.meetingRoom:
       case LandmarkAssetType.registrationDesk:
+      case LandmarkAssetType.gadgets:
+      case LandmarkAssetType.garments:
         return const Offset(0.5, 1.0);
 
     }

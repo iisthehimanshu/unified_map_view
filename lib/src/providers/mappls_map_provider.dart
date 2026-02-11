@@ -990,7 +990,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ],
         enableInteraction: true,
         belowLayerId: _normalTextMarkerLayerId,
-        minzoom: 15.0
+        minzoom: 17.0
       );
 
       // Layer 3: Normal fixed/rotated markers (has bearing) - show at zoom 17+
@@ -998,17 +998,14 @@ class MapplsMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalFixedMarkerLayerId,
           SymbolLayerProperties(
-            iconImage: ["get", "icon"],
-            iconSize: 1.5,
-            iconRotate: ["get", "bearing"],
-            iconRotationAlignment: "map",
+            textRotate: ["get", "bearing"],
+            textRotationAlignment: "map",
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
             textHaloColor: "#f8f9fa",
             textHaloWidth: 2,
             textAnchor: "left",
-            iconAllowOverlap: false,
             textAllowOverlap: false,
           ),
           filter: [
@@ -1043,7 +1040,6 @@ class MapplsMapProvider extends BaseMapProvider {
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,
         maxzoom: 17.0,
-        minzoom: 15.0,
       );
 
       // Layer 4b: SubSection markers

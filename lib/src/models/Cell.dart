@@ -9,6 +9,7 @@ class Cell{
   double lat;
   double lng;
   final Function(double angle, {int? currPointer,int? totalCells})? move;
+  String? color;
   bool ttsEnabled;
   String? bid;
   int floor;
@@ -22,7 +23,7 @@ class Cell{
   bool isFloorConnection;
   String? connectorType;
 
-  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType});
+  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType, this.color});
 
   Map<String, dynamic> toJson() => {
     'node': node,
@@ -49,7 +50,8 @@ class Cell{
     'isSource': isSource,
     'isDestination': isDestination,
     'isFloorConnection': isFloorConnection,
-    'connectorType': connectorType
+    'connectorType': connectorType,
+    'color': color
   };
 
 
@@ -85,7 +87,8 @@ class Cell{
       isSource: json['isSource'],
       isDestination: json['isDestination'],
       isFloorConnection: json['isFloorConnection'],
-        connectorType: json['connectorType']
+        connectorType: json['connectorType'],
+      color: json['color']
     );
   }
 
