@@ -834,4 +834,10 @@ class GoogleMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  void setOnMapTapCallback(Function(MapLocation p1)? callback) {
+    // TODO: implement setOnMapTapCallback
+    throw UnimplementedError();
+  }
+
 }

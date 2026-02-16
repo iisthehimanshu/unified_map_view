@@ -29,6 +29,7 @@ class MapplsMapProvider extends BaseMapProvider {
   final List<GeoJsonMarker> _rotatingSymbols = [];
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _lines = [];
+  Function(MapLocation)? _tapCallback;
 
   late MapConfig _config;
 
@@ -79,6 +80,8 @@ class MapplsMapProvider extends BaseMapProvider {
             ),
             zoom: config.initialLocation.zoom,
           ),
+
+
           onMapCreated: (MapplsMapController controller) async {
             _config = config;
             _controller = controller;
@@ -88,6 +91,14 @@ class MapplsMapProvider extends BaseMapProvider {
             // Handle polygon taps
             controller.onFeatureTapped.add((id, point, coordinates) async {
               print("Mappls onFeatureTapped id $id $point $coordinates");
+
+              if (_tapCallback != null && coordinates.latitude!=null) {
+                final tappedLocation = coordinates;
+                _tapCallback!(MapLocation(
+                  latitude: tappedLocation.latitude,
+                  longitude: tappedLocation.longitude,
+                ));
+              }
               if(_symbols.where((symbol)=>symbol.id.toLowerCase().contains("path")).isNotEmpty) return;
               try {
                 // Query rendered features at the tap point for marker layers
@@ -122,6 +133,10 @@ class MapplsMapProvider extends BaseMapProvider {
               }
             });
           },
+
+
+
+
           onStyleLoadedCallback: () async {
             if (_controller != null) {
 
@@ -509,7 +524,7 @@ class MapplsMapProvider extends BaseMapProvider {
             'iconAnchor': anchor,
             // 'iconOffset': [anchor.dy, anchor.dx],
             'section': marker.properties?['type'] == "Section",
-            'subSection': marker.properties?['type'] == "SubSection",
+            'subSection': marker.properties?['type'] == "Sub Section",
           }
         };
       }).toList();
@@ -691,7 +706,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'isSelected': polygon.id == selectPolygonId,
           'boundary' : polygon.properties?['type'] == "Boundary",
           'section' : polygon.properties?['type'] == "Section",
-          'subsection' : polygon.properties?['type'] == "SubSection",
+          'subsection' : polygon.properties?['type'] == "Sub Section",
           if(baseHeight != null) 'base_height': baseHeight,
           if(height != null) 'height': height
         }
@@ -1670,6 +1685,11 @@ class MapplsMapProvider extends BaseMapProvider {
       ),
     );
 
+  }
+
+  @override
+  void setOnMapTapCallback(Function(MapLocation p1)? callback) {
+    _tapCallback = callback;
   }
 
 }

@@ -20,6 +20,7 @@ class UnifiedMapController extends ChangeNotifier {
   final List<GeoJsonPolyline> _polylines = [];
   late UnifiedCameraPosition _cameraPosition;
   late AnnotationController _annotationController;
+  Function(MapLocation)? _onMapTapCallback;
 
   String? onReadyLandmarkSelectionID;
 
@@ -397,6 +398,19 @@ class UnifiedMapController extends ChangeNotifier {
       await currentProviderImplementation.clearPolylines(_currentMapController);
     }
     notifyListeners();
+  }
+
+  void setOnMapTapCallback(Function(MapLocation)? callback) {
+    _onMapTapCallback = callback;
+    print("setOnMapTapCallback:${callback} ${_currentMapController}");
+    // if (_currentMapController != null) {
+      currentProviderImplementation.setOnMapTapCallback(callback);
+    // }
+    notifyListeners();
+  }
+
+  void handleMapTap(MapLocation location) {
+    _onMapTapCallback?.call(location);
   }
 
   /// Clear all GeoJSON features (markers, polygons, polylines)

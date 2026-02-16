@@ -18,6 +18,9 @@ abstract class BaseMapProvider {
   /// Move camera to a specific location
   Future<void> moveCamera(dynamic controller, MapLocation location, double zoom);
 
+
+  void setOnMapTapCallback(Function(MapLocation)? callback);
+
   Future<void> zoom(dynamic controller, {double zoom = 0.0});
 
   Future<void> zoomTo(dynamic controller, double zoom);

@@ -253,7 +253,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           Expanded(
             child: Stack(
               children: [
-                UnifiedMapWidget(controller: _unifiedMapController),
+                UnifiedMapWidget(controller: _unifiedMapController,enablePinDrop: true,),
                 Positioned(bottom: 150,
                 right: 16,
                 child: FloorSpeedDial(controller: _unifiedMapController),)
