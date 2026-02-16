@@ -858,7 +858,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     if(marker.assetPath == null) return false;
     try {
-      if(marker.textVisibility){
+      if(marker.textVisibility && false){
         MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
             imageSize: marker.imageSize??const Size(25, 25),
             fontSize: 8.5,
@@ -966,31 +966,33 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Layer 2: Normal icon markers (has icon, no bearing)
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        _normalIconMarkerLayerId,
-        SymbolLayerProperties(
-          iconImage: ["get", "icon"], // ✅ Just get
-          iconSize: 0.8,
-          iconAnchor: ["get", "iconAnchor"],
-          textSize: 14,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: "left",
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
-        ),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "bearing"]]],
-          ["to-boolean", ["get", "icon"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: _normalTextMarkerLayerId,
-        minzoom: 17.0
+          _clusterSourceId,
+          _normalIconMarkerLayerId,
+          SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 0.8,
+            iconAnchor: ["get", "iconAnchor"],
+            textOffset: ["literal", [1.6, 0]], // ✅ Wrapped in literal expression
+            textField: ["get", "title"],
+            textSize: 14,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 1.5,
+            textAllowOverlap: false,
+            textAnchor: "left", // ✅ Anchors text at its left edge
+            iconAllowOverlap: false,
+          ),
+          filter: [
+            "all",
+            ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "section"]]],
+            ["!", ["to-boolean", ["get", "subSection"]]],
+            ["!", ["to-boolean", ["get", "bearing"]]],
+            ["to-boolean", ["get", "icon"]],
+          ],
+          enableInteraction: true,
+          belowLayerId: _normalTextMarkerLayerId,
+          minzoom: 17.0
       );
 
       // Layer 3: Normal fixed/rotated markers (has bearing) - show at zoom 17+

@@ -108,17 +108,11 @@ enum LandmarkAssetType {
 
   bool get textVisibility {
     switch (this) {
-      case LandmarkAssetType.lift:
-      case LandmarkAssetType.stairs:
-      case LandmarkAssetType.escalator:
-      case LandmarkAssetType.ramp:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
       case LandmarkAssetType.accessibleWashroom:
       case LandmarkAssetType.washroom:
-      case LandmarkAssetType.cafeteria:
       case LandmarkAssetType.doorOnly:
-      case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.unisexWashroom:
       case LandmarkAssetType.assemblyRoom:
       case LandmarkAssetType.conferenceRoom:
@@ -141,6 +135,14 @@ enum LandmarkAssetType {
       case LandmarkAssetType.gadgets:
       case LandmarkAssetType.garments:
         return false;
+
+      case LandmarkAssetType.cafeteria:
+      case LandmarkAssetType.lift:
+      case LandmarkAssetType.stairs:
+      case LandmarkAssetType.escalator:
+      case LandmarkAssetType.ramp:
+      case LandmarkAssetType.mainEntry:
+        return true;
     }
   }
 
