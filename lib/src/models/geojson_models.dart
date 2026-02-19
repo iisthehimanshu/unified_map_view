@@ -139,6 +139,7 @@ class GeoJsonPolygon {
     if (feature.geometry.type != GeoJsonGeometryType.polygon) return null;
 
     final coords = feature.geometry.coordinates as List;
+    if(coords.length < 3) return null;
     final ring = coords[0] as List; // First ring (outer boundary)
 
     return GeoJsonPolygon(
@@ -169,6 +170,8 @@ class GeoJsonPolyline {
     if (feature.geometry.type != GeoJsonGeometryType.lineString) return null;
 
     final coords = feature.geometry.coordinates as List;
+
+    if(coords.length < 2) return null;
 
     return GeoJsonPolyline(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId),
