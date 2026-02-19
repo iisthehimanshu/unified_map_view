@@ -15,7 +15,8 @@ class PredefinedMarkers{
         properties: marker.properties,
         priority: true,
       imageSize: Size(45, 45),
-      anchor: LandmarkAssetType.genericMarker.anchor
+      anchor: LandmarkAssetType.genericMarker.anchor,
+        customRendering: true
     );
   }
 
@@ -31,7 +32,8 @@ class PredefinedMarkers{
         imageSize: Size(35, 35),
       anchor: LandmarkAssetType.user.anchor,
       renderAnchor: Offset(0.51, 0.785),
-      compassBasedRotation: true
+      compassBasedRotation: true,
+      customRendering: true
     );
   }
 
@@ -45,7 +47,8 @@ class PredefinedMarkers{
         iconName: "source",
         priority: true,
         imageSize: Size(14, 14),
-        anchor: LandmarkAssetType.source.anchor
+        anchor: LandmarkAssetType.source.anchor,
+      customRendering: true
     );
   }
 
@@ -59,7 +62,8 @@ class PredefinedMarkers{
         iconName: "Destination",
         priority: true,
         imageSize: Size(30, 30),
-        anchor: LandmarkAssetType.destination.anchor
+        anchor: LandmarkAssetType.destination.anchor,
+      customRendering: true
     );
   }
 
@@ -74,7 +78,8 @@ class PredefinedMarkers{
             assetPath: LandmarkAssetType.lift.assetPath,
             iconName: "Floor Connection",
             priority: true,
-            anchor: LandmarkAssetType.lift.anchor
+            anchor: LandmarkAssetType.lift.anchor,
+            customRendering: true
         );
       case "Stair":
         return GeoJsonMarker(
@@ -85,7 +90,8 @@ class PredefinedMarkers{
             assetPath: LandmarkAssetType.stairs.assetPath,
             iconName: "Floor Connection",
             priority: true,
-            anchor: LandmarkAssetType.stairs.anchor
+            anchor: LandmarkAssetType.stairs.anchor,
+            customRendering: true
         );
       case "Escalator":
         return GeoJsonMarker(
@@ -96,7 +102,8 @@ class PredefinedMarkers{
             assetPath: LandmarkAssetType.escalator.assetPath,
             iconName: "Floor Connection",
             priority: true,
-            anchor: LandmarkAssetType.escalator.anchor
+            anchor: LandmarkAssetType.escalator.anchor,
+            customRendering: true
         );
       case "Ramp":
         return GeoJsonMarker(
@@ -107,7 +114,8 @@ class PredefinedMarkers{
             assetPath: LandmarkAssetType.ramp.assetPath,
             iconName: "Floor Connection",
             priority: true,
-            anchor: LandmarkAssetType.ramp.anchor
+            anchor: LandmarkAssetType.ramp.anchor,
+            customRendering: true
         );
         default:
           return GeoJsonMarker(
@@ -118,7 +126,8 @@ class PredefinedMarkers{
               assetPath: LandmarkAssetType.lift.assetPath,
               iconName: "Floor Connection",
               priority: true,
-              anchor: LandmarkAssetType.lift.anchor
+              anchor: LandmarkAssetType.lift.anchor,
+              customRendering: true
           );
     }
   }
@@ -132,7 +141,8 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.optionPinSelection.assetPath,
         iconName: "Option Pin Selection",
         priority: true,
-        anchor: LandmarkAssetType.optionPinSelection.anchor
+        anchor: LandmarkAssetType.optionPinSelection.anchor,
+        customRendering: true
     );
   }
 
@@ -145,7 +155,8 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.selectedPinSelection.assetPath,
         iconName: "Selected Pin Selection",
         priority: true,
-        anchor: LandmarkAssetType.selectedPinSelection.anchor
+        anchor: LandmarkAssetType.selectedPinSelection.anchor,
+        customRendering: true
     );
   }
 }

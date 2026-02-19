@@ -121,6 +121,10 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     // });
   }
 
+  void localizeUser(){
+    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.54341202393808, longitude: 77.20446501199446), "696f514c1caa6fd666e58a74", -1));
+  }
+
   void _stopMovingUser() {
     _moveUserTimer?.cancel();
   }
@@ -181,6 +185,18 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: localizeUser,
+                        icon: const Icon(Icons.my_location, size: 16),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.green,
+                          foregroundColor: Colors.white,
+                        ),
+                        label: const Text('Start Moving'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
                         onPressed: _startMovingUser,

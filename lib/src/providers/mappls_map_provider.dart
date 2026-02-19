@@ -502,14 +502,13 @@ class MapplsMapProvider extends BaseMapProvider {
             // ✅ Always include ALL properties with defaults
             'title': marker.textVisibility ? creator.formatText(marker.title ?? "", TextFormat.smartWrap) : '',
             'id': marker.id,
-            if (marker.iconName != null) 'icon': marker.id,
+            if (marker.assetPath != null) 'icon': marker.id,
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             'bearing': marker.compassBasedRotation ? 0.0 : (marker.properties?["bearing"] ?? 0.0), // ✅ Always set with default
             'iconAnchor': anchor,
-            // 'iconOffset': [anchor.dy, anchor.dx],
             'section': marker.properties?['type'] == "Section",
-            'subSection': marker.properties?['type'] == "SubSection",
+            'subSection': marker.properties?['type'] == "Sub Section",
           }
         };
       }).toList();
@@ -663,17 +662,17 @@ class MapplsMapProvider extends BaseMapProvider {
       double? baseHeight;
       double? height;
 
-      if (polygon.properties?['baseHeight'] != null && polygon.properties?['baseHeight'].isNotEmpty) {
-        baseHeight = double.parse(polygon.properties?['baseHeight']);
-      }
-
-      if (polygon.properties?['height'] != null && polygon.properties?['height'].isNotEmpty) {
-        height = double.parse(polygon.properties?['height']);
-        // If baseHeight exists, add it to height
-        if (baseHeight != null) {
-          height = height + baseHeight;
-        }
-      }
+      // if (polygon.properties?['baseHeight'] != null && polygon.properties?['baseHeight'].isNotEmpty && polygon.properties?['baseHeight'].toLowerCase() != "undefined") {
+      //   baseHeight = double.tryParse(polygon.properties?['baseHeight']);
+      // }
+      //
+      // if (polygon.properties?['height'] != null && polygon.properties?['height'].isNotEmpty && polygon.properties?['height'].toLowerCase() != "undefined") {
+      //   height = double.tryParse(polygon.properties?['height']);
+      //   // If baseHeight exists, add it to height
+      //   if (baseHeight != null && height != null) {
+      //     height = height + baseHeight;
+      //   }
+      // }
 
       return {
         'type': 'Feature',
@@ -691,7 +690,7 @@ class MapplsMapProvider extends BaseMapProvider {
           'isSelected': polygon.id == selectPolygonId,
           'boundary' : polygon.properties?['type'] == "Boundary",
           'section' : polygon.properties?['type'] == "Section",
-          'subsection' : polygon.properties?['type'] == "SubSection",
+          'subsection' : polygon.properties?['type'] == "Sub Section",
           if(baseHeight != null) 'base_height': baseHeight,
           if(height != null) 'height': height
         }
@@ -858,7 +857,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     if(marker.assetPath == null) return false;
     try {
-      if(marker.textVisibility && false){
+      if(marker.customRendering){
         MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
             imageSize: marker.imageSize??const Size(25, 25),
             fontSize: 8.5,
@@ -870,6 +869,7 @@ class MapplsMapProvider extends BaseMapProvider {
             customAnchor: marker.renderAnchor??marker.anchor??Offset(0.5, 0.5),
             expandCanvasForRotation: true
         );
+        print("markerIconWithAnchor $markerIconWithAnchor");
         final Uint8List iconBytes = markerIconWithAnchor.icon;
         await controller.addImage(marker.id, iconBytes);
         marker.anchor = markerIconWithAnchor.anchor;
@@ -966,34 +966,36 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Layer 2: Normal icon markers (has icon, no bearing)
       await controller.addSymbolLayer(
-          _clusterSourceId,
-          _normalIconMarkerLayerId,
-          SymbolLayerProperties(
-            iconImage: ["get", "icon"],
-            iconSize: 0.8,
-            iconAnchor: ["get", "iconAnchor"],
-            textOffset: ["literal", [1.6, 0]], // ✅ Wrapped in literal expression
-            textField: ["get", "title"],
-            textSize: 14,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 1.5,
-            textAllowOverlap: false,
-            textAnchor: "left", // ✅ Anchors text at its left edge
-            iconAllowOverlap: false,
-          ),
-          filter: [
-            "all",
-            ["!", ["to-boolean", ["get", "isPriority"]]],
-            ["!", ["to-boolean", ["get", "section"]]],
-            ["!", ["to-boolean", ["get", "subSection"]]],
-            ["!", ["to-boolean", ["get", "bearing"]]],
-            ["to-boolean", ["get", "icon"]],
-          ],
-          enableInteraction: true,
-          belowLayerId: _normalTextMarkerLayerId,
-          minzoom: 17.0
+        _clusterSourceId,
+        _normalIconMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 0.8,
+          iconAnchor: "center",
+
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: ["literal", [0, 1.5]],
+          textAllowOverlap: false,
+          iconAllowOverlap: false,
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalTextMarkerLayerId,
+        minzoom: 18.0,
       );
+
 
       // Layer 3: Normal fixed/rotated markers (has bearing) - show at zoom 17+
       await controller.addSymbolLayer(
@@ -1028,15 +1030,32 @@ class MapplsMapProvider extends BaseMapProvider {
         _sectionMarkerLayerId,
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
-          iconSize: 1.5,
+          iconSize: 0.8,
+          iconAnchor: "center",
+
           textField: ["get", "title"],
-          textSize: 12,
+          textSize: 14,
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "center",
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
+          textHaloWidth: 1.5,
+
+          // 👇 Conditional anchor
+          textAnchor: [
+            "case",
+            ["has", "icon"],     // if icon exists
+            "top",               // place text above icon
+            "center"             // else center text
+          ],
+
+          textOffset: [
+            "case",
+            ["has", "icon"],
+            ["literal", [0, 1.5]],   // offset only if icon exists
+            ["literal", [0, 0]]      // no offset if no icon
+          ],
+
+          textAllowOverlap: false,
+          iconAllowOverlap: false,
         ),
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
@@ -1118,10 +1137,12 @@ class MapplsMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      // Add fill layer for patch polygons (bottom-most)
+      /// =========================
+      /// 1️⃣ SECTION (TOP-MOST)
+      /// =========================
       await controller.addFillLayer(
         _polygonSourceId,
-        _patchPolygonLayerId,
+        _sectionPolygonLayerId,
         FillLayerProperties(
           fillColor: ["get", "fillColor"],
           fillOpacity: ["get", "fillOpacity"],
@@ -1129,13 +1150,77 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
-          ["to-boolean", ["get", "boundary"]],
-          ["!", ["has", "height"]],  // Exclude polygons with height
+          ["to-boolean", ["get", "section"]],
+          ["!", ["to-boolean", ["get", "subsection"]]],
+          ["!", ["has", "height"]],
         ],
-        enableInteraction: true,
+        enableInteraction: false,
+        maxzoom: 17.0,
         belowLayerId: _polylineLayerId,
       );
 
+      /// =========================
+      /// 2️⃣ SUBSECTION
+      /// =========================
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _subSectionPolygonLayerId,
+        FillLayerProperties(
+          fillColor: ["get", "fillColor"],
+          fillOpacity: ["get", "fillOpacity"],
+          fillOutlineColor: ["get", "strokeColor"],
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["to-boolean", ["get", "subsection"]],
+          ["!", ["has", "height"]],
+        ],
+        enableInteraction: false,
+        minzoom: 17.0,
+        maxzoom: 18.0,
+        belowLayerId: _sectionPolygonLayerId,
+      );
+
+      /// =========================
+      /// 3️⃣ SELECTED
+      /// =========================
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _selectedPolygonLayerId,
+        FillLayerProperties(
+          fillColor: "#4CAF50",
+          fillOpacity: 0.6,
+          fillOutlineColor: "#2E7D32",
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "isSelected"]],
+          ["!", ["has", "height"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _subSectionPolygonLayerId,
+      );
+
+      /// =========================
+      /// 4️⃣ EXTRUDED
+      /// =========================
+      await controller.addFillExtrusionLayer(
+        _polygonSourceId,
+        _extrudedPolygonLayerId,
+        FillExtrusionLayerProperties(
+          fillExtrusionColor: ["get", "fillColor"],
+          fillExtrusionHeight: ["get", "height"],
+          fillExtrusionBase: ["get", "base_height"],
+          fillExtrusionOpacity: 1.0,
+        ),
+        filter: ['has', 'height'],
+        belowLayerId: _selectedPolygonLayerId,
+      );
+
+      /// =========================
+      /// 5️⃣ NORMAL
+      /// =========================
       await controller.addFillLayer(
         _polygonSourceId,
         _normalPolygonLayerId,
@@ -1150,15 +1235,18 @@ class MapplsMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["has", "height"]],  // Exclude polygons with height
+          ["!", ["has", "height"]],
         ],
         enableInteraction: true,
-        belowLayerId: _polylineLayerId,
+        belowLayerId: _extrudedPolygonLayerId,
       );
 
+      /// =========================
+      /// 6️⃣ PATCH (BOTTOM-MOST)
+      /// =========================
       await controller.addFillLayer(
         _polygonSourceId,
-        _sectionPolygonLayerId,
+        _patchPolygonLayerId,
         FillLayerProperties(
           fillColor: ["get", "fillColor"],
           fillOpacity: ["get", "fillOpacity"],
@@ -1166,66 +1254,11 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
-          ["to-boolean", ["get", "section"]],
-          ["!", ["to-boolean", ["get", "subsection"]]],
-          ["!", ["has", "height"]],  // Exclude polygons with height
-        ],
-        enableInteraction: false,
-        belowLayerId: _polylineLayerId,
-        maxzoom: 17.0,
-      );
-
-      await controller.addFillLayer(
-          _polygonSourceId,
-          _subSectionPolygonLayerId,
-          FillLayerProperties(
-            fillColor: ["get", "fillColor"],
-            fillOpacity: ["get", "fillOpacity"],
-            fillOutlineColor: ["get", "strokeColor"],
-          ),
-          filter: [
-            "all",
-            ["!", ["to-boolean", ["get", "section"]]],
-            ["to-boolean", ["get", "subsection"]],
-            ["!", ["has", "height"]],  // Exclude polygons with height
-          ],
-          enableInteraction: false,
-          belowLayerId: _polylineLayerId,
-          maxzoom: 18.0,
-          minzoom: 17.0
-      );
-
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _selectedPolygonLayerId,
-        FillLayerProperties(
-          fillColor: "#4CAF50",
-          fillOpacity: 0.6,
-          fillOutlineColor: "#2E7D32",
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "isSelected"]],
-          ["!", ["has", "height"]],  // Exclude polygons with height
+          ["to-boolean", ["get", "boundary"]],
+          ["!", ["has", "height"]],
         ],
         enableInteraction: true,
-        belowLayerId: _polylineLayerId,
-      );
-
-      await controller.addFillExtrusionLayer(
-        _polygonSourceId,
-        _extrudedPolygonLayerId,
-        FillExtrusionLayerProperties(
-          fillExtrusionColor: ["get", "fillColor"],
-          fillExtrusionHeight: [
-            'get', 'height'  // Get height from feature properties
-          ],
-          fillExtrusionBase: [
-            'get', 'base_height'  // Optional: base elevation
-          ],
-          fillExtrusionOpacity: 1.0,
-        ),
-        filter: ['has', 'height'],  // Only render polygons with height property
+        belowLayerId: _normalPolygonLayerId,
       );
 
       _isPolygonLayersEnabled = true;
@@ -1238,6 +1271,7 @@ class MapplsMapProvider extends BaseMapProvider {
       print('Stack trace: $stack');
     }
   }
+
 
   Future<void> enablePolylineLayers(MapplsMapController controller) async {
     try {

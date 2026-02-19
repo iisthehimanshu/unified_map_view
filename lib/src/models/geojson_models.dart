@@ -217,6 +217,7 @@ class GeoJsonMarker {
   final Map<String, dynamic>? properties;
   final Size? imageSize;
   final bool textVisibility;
+  final bool customRendering;
   final bool compassBasedRotation;
   final double? bearing;
   Offset? anchor;
@@ -233,6 +234,7 @@ class GeoJsonMarker {
     this.properties,
     this.imageSize,
     this.textVisibility = true,
+    this.customRendering = false,
     this.compassBasedRotation = false,
     this.bearing,
     this.anchor,
@@ -319,15 +321,9 @@ class GeoJsonMarker {
     Offset? anchor;
     String? parsedTitle;
 
-    // if(feature.properties?["imageFile"] != null){
-    //   assetPath ??= "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
-    //   textVisibility = false;
-    // }
-
-    // // assetPath = feature.properties?["exhibitorRef"]?["brandingDetails"]?["companyLogo"] ?? feature.properties?["sponsorRef"]?["logo_url"];
-    // if(assetPath != null){
-    //
-    // }
+    if(feature.properties?["imageFile"] != null && feature.properties?["imageFile"].isNotEmpty){
+      assetPath = "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
+    }
 
     if(asset != null){
       assetPath ??= asset.assetPath;
@@ -336,7 +332,6 @@ class GeoJsonMarker {
       anchor = asset.anchor;
       feature.properties?['bearing'] = null;
     }
-    // print("assetPath ${assetPath}");
 
     String? polyId = feature.properties?["polyId"];
     final associatedPolygons = feature.properties?['associatedPolygons'];
@@ -344,8 +339,11 @@ class GeoJsonMarker {
       polyId = associatedPolygons.first;
     }
 
-    parsedTitle = feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"] ?? feature.properties?["sponsorRef"]?["name"] ?? feature.properties?["name"] ?? "";
-    // print("parsedTitle ${parsedTitle}");
+    parsedTitle = feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"] ?? feature.properties?["sponsorRef"]?["name"] ?? feature.properties?["renderName"]??feature.properties?["name"] ?? "";
+
+    if(feature.id == "b2a3cf8bbd837a698381270f89f7e373"){
+      print("parsedTitle $parsedTitle");
+    }
 
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),
