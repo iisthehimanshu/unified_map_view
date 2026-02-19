@@ -13,7 +13,7 @@ class AppConfig {
     if (kDebugMode) {
       return 'https://dev.iwayplus.in';
     } else {
-      return 'https://maps.iwayplus.in';
+      return 'https://dev.iwayplus.in';
     }
   }
 

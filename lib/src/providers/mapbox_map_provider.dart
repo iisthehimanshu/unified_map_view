@@ -1233,4 +1233,10 @@ class MapboxMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  Future<void> addFingerprintMarkers(controller, List<MapLocation> positions) {
+    // TODO: implement addFingerprintMarkers
+    throw UnimplementedError();
+  }
+
 }

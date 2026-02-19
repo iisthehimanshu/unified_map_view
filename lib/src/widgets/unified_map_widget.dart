@@ -26,8 +26,10 @@ class UnifiedMapWidget extends StatefulWidget {
 }
 
 class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
-  bool _isPinDropMode = false;
   MapLocation? _pendingPinLocation;
+  bool _isPinDropMode = false;
+  Offset? _dragPosition;
+
 
   @override
   void initState() {
@@ -45,46 +47,19 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
 
   /// Handle map tap - this gets called by the map provider
   void _handleMapTap(MapLocation location) {
-    print("tapped on map");
+    print("tapped on map ${_isPinDropMode}");
     if (_isPinDropMode) {
-
       _onMapTap(location);
     }
   }
 
   /// Toggle pin drop mode
-  void _togglePinDropMode() {
-    setState(() {
-      _isPinDropMode = !_isPinDropMode;
-    });
-
-    if (_isPinDropMode) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('📍 Tap on the map to drop a pin'),
-          duration: Duration(seconds: 2),
-          backgroundColor: Colors.blue,
-        ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Pin drop mode disabled'),
-          duration: Duration(seconds: 1),
-          backgroundColor: Colors.grey,
-        ),
-      );
-    }
-  }
 
   /// Handle map tap for pin dropping
   void _onMapTap(MapLocation location) {
-    if (!_isPinDropMode) return;
-
     setState(() {
       _pendingPinLocation = location;
     });
-
     _showPinConfirmationDialog(location);
   }
 
@@ -160,7 +135,9 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
               child: const Text('Cancel'),
             ),
             ElevatedButton.icon(
-              onPressed: () => Navigator.of(context).pop(true),
+             onPressed:(){
+               Navigator.of(context).pop(true);
+             },
               icon: const Icon(Icons.check, size: 18),
               label: const Text('Drop Pin'),
               style: ElevatedButton.styleFrom(
@@ -173,9 +150,11 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
       },
     );
 
+    print("confirmed:${confirmed}");
+
     if (confirmed == true) {
       _confirmPinDrop(location);
-    } else {
+    }else{
       setState(() {
         _pendingPinLocation = null;
       });
@@ -192,16 +171,12 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
     print('Longitude: ${location.longitude}');
     print('Formatted: (${location.latitude}, ${location.longitude})');
     print('═══════════════════════════════════════');
-
     // Add a marker at the dropped location
     _addPinMarker(location);
-
     // Call the callback if provided
     widget.onPinDropped?.call(location);
-
     // Exit pin drop mode
     setState(() {
-      _isPinDropMode = false;
       _pendingPinLocation = null;
     });
 
@@ -257,6 +232,33 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
     }
   }
 
+  Future<void> _confirmCrosshairPin() async {
+    try {
+      final cameraPosition = widget.controller.cameraPosition;
+
+      final MapLocation centerLocation = MapLocation(
+        latitude: cameraPosition.mapLocation.latitude,
+        longitude: cameraPosition.mapLocation.longitude,
+      );
+
+      // Exit pin drop mode
+      setState(() {
+        _pendingPinLocation = centerLocation;
+        _isPinDropMode = false;
+      });
+
+      // Trigger same dialog as map tap
+      _confirmPinDrop(centerLocation);
+
+    } catch (e) {
+      debugPrint("Error getting camera center: $e");
+    }
+  }
+
+
+
+
+
   @override
   Widget build(BuildContext context) {
     return Stack(
@@ -276,60 +278,118 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
         ),
 
         // Pin drop mode indicator
-        if (_isPinDropMode)
-          Positioned(
-            top: 260,
-            left: 0,
-            right: 0,
-            child: Center(
+        if (_isPinDropMode) ...[
+          // Darken edges
+          Positioned.fill(
+            child: IgnorePointer(
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
                 decoration: BoxDecoration(
-                  color: Colors.blue.shade700,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.3),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
+                  gradient: RadialGradient(
+                    colors: [Colors.transparent, Colors.black26],
+                    stops: const [0.6, 1.0],
+                  ),
                 ),
-                child: const Row(
+              ),
+            ),
+          ),
+
+          // Center crosshair pin (visual only, map scrolls under it)
+          const Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.touch_app, color: Colors.white, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      'Tap anywhere to drop pin',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
+                    Icon(Icons.location_on, color: Colors.red, size: 50,
+                        shadows: [Shadow(color: Colors.black45, blurRadius: 8)]),
+                    SizedBox(height: 2),
+                    CircleAvatar(radius: 3, backgroundColor: Colors.black38),
                   ],
                 ),
               ),
             ),
           ),
 
-        // Pin drop toggle button (only if enabled)
-        if (widget.enablePinDrop)
+          // Top instruction banner
+          Positioned(
+            top: 260,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade700,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8)],
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.open_with, color: Colors.white, size: 18),
+                    SizedBox(width: 8),
+                    Text('Move map to position pin',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // Bottom confirm + cancel buttons
+          Positioned(
+            bottom: 40,
+            left: 24,
+            right: 24,
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => setState(() => _isPinDropMode = false),
+                    icon: const Icon(Icons.close),
+                    label: const Text('Cancel'),
+                    style: OutlinedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: _confirmCrosshairPin,
+                    icon: const Icon(Icons.location_on),
+                    label: const Text('Drop Pin Here'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
+// FAB to enter pin drop mode
+        if (widget.enablePinDrop && !_isPinDropMode)
           Positioned(
             bottom: 80,
             right: 16,
-            child: FloatingActionButton(
-              onPressed: _togglePinDropMode,
-              backgroundColor: _isPinDropMode ? Colors.red : Colors.blue,
-              child: Icon(
-                _isPinDropMode ? Icons.close : Icons.add_location,
-                color: Colors.white,
-              ),
-              heroTag: 'pin_drop_fab',
+            child: Column(
+              children: [
+                FloatingActionButton(
+                  onPressed: () => setState(() => _isPinDropMode = true),
+                  backgroundColor: Colors.blue,
+                  heroTag: 'pin_drop_fab',
+                  child: const Icon(Icons.add_location, color: Colors.white),
+                ),
+                const SizedBox(height: 4),
+                const Text('Drop Pin',
+                    style: TextStyle(fontSize: 10, color: Colors.black54)),
+              ],
             ),
           ),
       ],

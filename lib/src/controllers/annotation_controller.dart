@@ -20,6 +20,7 @@ class AnnotationController{
   String? get focusedBuilding => _focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
+  String get venueName => _venueData.venueName;
 
   Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;

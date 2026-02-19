@@ -1,5 +1,7 @@
 // lib/src/controllers/unified_map_controller.dart
 
+import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
 import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
 import '../../unified_map_view.dart';
@@ -7,6 +9,7 @@ import '../config.dart';
 import '../models/Cell.dart';
 import '../providers/google_map_provider.dart';
 import '../providers/mapbox_map_provider.dart';
+import '../utils/LandmarkAssetType.dart';
 
 /// Main controller for managing map providers and operations
 class UnifiedMapController extends ChangeNotifier {
@@ -21,6 +24,17 @@ class UnifiedMapController extends ChangeNotifier {
   late UnifiedCameraPosition _cameraPosition;
   late AnnotationController _annotationController;
   Function(MapLocation)? _onMapTapCallback;
+
+
+  final List<MapLocation> _fingerprintPositions = [];
+  MapLocation? _droppedPinPosition;
+
+  // Getters
+  List<MapLocation> get fingerprintPositions => _fingerprintPositions;
+  MapLocation? get droppedPinPosition => _droppedPinPosition;
+  bool get hasPinDropped => _droppedPinPosition != null;
+
+
 
   String? onReadyLandmarkSelectionID;
 
@@ -335,7 +349,6 @@ class UnifiedMapController extends ChangeNotifier {
     }
     notifyListeners();
   }
-
   /// Remove a polygon from the map
   Future<void> removePolygon(String polygonId,{String? exclude}) async {
     _polygons.removeWhere((p) => p.id == polygonId);
@@ -344,7 +357,6 @@ class UnifiedMapController extends ChangeNotifier {
     }
     notifyListeners();
   }
-
   /// Clear all polygons
   Future<void> clearPolygons() async {
     _polygons.clear();
@@ -353,7 +365,6 @@ class UnifiedMapController extends ChangeNotifier {
     }
     notifyListeners();
   }
-
   /// Clear polygons by id
   Future<void> clearPolygonByID(String id) async {
     _polygons.removeWhere((polygon){
@@ -402,10 +413,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   void setOnMapTapCallback(Function(MapLocation)? callback) {
     _onMapTapCallback = callback;
-    print("setOnMapTapCallback:${callback} ${_currentMapController}");
-    // if (_currentMapController != null) {
       currentProviderImplementation.setOnMapTapCallback(callback);
-    // }
     notifyListeners();
   }
 
@@ -488,6 +496,8 @@ class UnifiedMapController extends ChangeNotifier {
   String? get focusedBuilding => _annotationController.focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
+  String get focusedBuildingName =>_annotationController.focusedBuilding??"";
+  String get focusedVenueName => _annotationController.venueName;
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
@@ -544,6 +554,58 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> moveUser(MapLocation location) async {
     await _annotationController.moveUser(location);
+    notifyListeners();
+  }
+
+
+  /// Add markers at multiple predefined locations
+  Future<void> addMarkersAtLocations(List<MapLocation> locations, {
+    String? title,
+    LandmarkAssetType assetType = LandmarkAssetType.genericMarker,
+    Size imageSize = const Size(45, 45),
+  }) async {
+    for (int i = 0; i < locations.length; i++) {
+      final location = locations[i];
+      try {
+        final marker = GeoJsonMarker(
+          id: 'Fingerprinted-marker-$i-${DateTime.now().millisecondsSinceEpoch}',
+          position: location,
+          title: title ?? 'Marker ${i + 1}',
+          snippet: 'Lat: ${location.latitude.toStringAsFixed(4)}, Lng: ${location.longitude.toStringAsFixed(4)}',
+          assetPath: assetType.assetPath,
+          iconName: title ?? 'Marker ${i + 1}',
+          properties: {
+            'type': 'Fingerprinted-marker',
+            'index': i,
+            'latitude': location.latitude,
+            'longitude': location.longitude,
+          },
+          priority: false,
+          imageSize: imageSize,
+          anchor: assetType.anchor,
+        );
+        await addMarker(marker);
+      } catch (e) {
+        debugPrint('Error adding marker at index $i: $e');
+      }
+    }
+  }
+
+
+  void setFingerprintPositions(List<MapLocation> positions) {
+    print("positions:${positions}");
+    _fingerprintPositions.clear();
+    _fingerprintPositions.addAll(positions);
+    notifyListeners();
+  }
+
+  void addFingerprintPosition(MapLocation position) {
+    _fingerprintPositions.add(position);
+    notifyListeners();
+  }
+
+  void clearFingerprintPositions() {
+    _fingerprintPositions.clear();
     notifyListeners();
   }
 

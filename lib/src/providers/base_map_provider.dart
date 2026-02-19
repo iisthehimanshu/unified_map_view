@@ -21,6 +21,11 @@ abstract class BaseMapProvider {
 
   void setOnMapTapCallback(Function(MapLocation)? callback);
 
+  Future<void> addFingerprintMarkers(
+      dynamic controller,
+      List<MapLocation> positions,
+      );
+
   Future<void> zoom(dynamic controller, {double zoom = 0.0});
 
   Future<void> zoomTo(dynamic controller, double zoom);

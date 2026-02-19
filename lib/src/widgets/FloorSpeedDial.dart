@@ -1,4 +1,5 @@
 
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_speed_dial/flutter_speed_dial.dart';
@@ -9,11 +10,12 @@ class FloorSpeedDial extends StatelessWidget {
 
   final UnifiedMapController controller;
   final Color color;
+  final Function(int floor)? onFloorChanged;
 
   const FloorSpeedDial({
     super.key,
     required this.controller,
-    this.color= Colors.blue
+    this.color= Colors.blue, this.onFloorChanged
   });
 
   @override
@@ -35,6 +37,7 @@ class FloorSpeedDial extends StatelessWidget {
             child: _floorLabel(floor),
             onTap: (){
               controller.changeBuildingFloor(buildingID: controller.focusedBuilding!, floor: floor);
+              onFloorChanged?.call(floor);
             },
           ),
         )

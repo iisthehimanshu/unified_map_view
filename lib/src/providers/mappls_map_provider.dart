@@ -66,6 +66,8 @@ class MapplsMapProvider extends BaseMapProvider {
   bool _isPolylineLayersEnabled = false;
   bool _isCircleLayersEnabled = false;
 
+  final List<Symbol> _fingerprintSymbols = [];
+
   @override
   Widget buildMap({required MapConfig config, required BuildContext context}) {
     var width=MediaQuery.of(context).size.width;
@@ -873,7 +875,7 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
     if(marker.assetPath == null) return false;
     try {
-      if(marker.textVisibility && false){
+      if(marker.textVisibility){
         MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
             imageSize: marker.imageSize??const Size(25, 25),
             fontSize: 8.5,
@@ -1690,6 +1692,45 @@ class MapplsMapProvider extends BaseMapProvider {
   @override
   void setOnMapTapCallback(Function(MapLocation p1)? callback) {
     _tapCallback = callback;
+  }
+
+  @override
+  Future<void> addFingerprintMarkers(
+      dynamic controller,
+      List<MapLocation> positions,
+      ) async {
+    if (controller is! MapplsMapController) return;
+
+    // Remove existing fingerprint symbols
+    for (final symbol in _fingerprintSymbols) {
+      try {
+        await controller.removeSymbol(symbol);
+      } catch (e) {
+        print('Error removing fingerprint symbol: $e');
+      }
+    }
+    _fingerprintSymbols.clear();
+
+    // Add new fingerprint symbols
+    for (int i = 0; i < positions.length; i++) {
+      final position = positions[i];
+
+      try {
+        final symbol = await controller.addSymbol(
+          SymbolOptions(
+            geometry: LatLng(position.latitude, position.longitude),
+            iconImage: 'marker-blue', // Use Mappls default blue marker
+            iconSize: 1.0,
+            iconAnchor: 'bottom',
+            draggable: false,
+          ),
+        );
+
+        _fingerprintSymbols.add(symbol);
+      } catch (e) {
+        print('Error adding fingerprint marker $i: $e');
+      }
+    }
   }
 
 }
