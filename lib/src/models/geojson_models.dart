@@ -139,7 +139,7 @@ class GeoJsonPolygon {
     if (feature.geometry.type != GeoJsonGeometryType.polygon) return null;
 
     final coords = feature.geometry.coordinates as List;
-    if(coords.length < 3){
+    if(coords.first.length < 3){
       print("polygonId:${feature.id}");
       return null;
     }
@@ -174,7 +174,7 @@ class GeoJsonPolyline {
 
     final coords = feature.geometry.coordinates as List;
 
-    if(coords.length < 2){
+    if(coords.first.length < 2){
       print("polylinID:${feature.id}");
       return null;
     }

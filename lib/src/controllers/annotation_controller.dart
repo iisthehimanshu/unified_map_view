@@ -72,12 +72,14 @@ class AnnotationController{
   Future<void> changeBuildingFloor(String buildingID, int floor) async {
     if(_venueData.selectedFloor[buildingID] == floor) return;
     _focusBuildingSelectedFloor = floor;
-    _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
-    _unifiedMapController.removePolyline(buildingID);
-    _unifiedMapController.removeMarker(buildingID);
-    _unifiedMapController.removeCircle(buildingID);
     var floorData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
-    await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
+    if(floorData.isNotEmpty){
+      _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
+      _unifiedMapController.removePolyline(buildingID);
+      _unifiedMapController.removeMarker(buildingID);
+      _unifiedMapController.removeCircle(buildingID);
+      await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
+    }
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
       localizeUser(_user!);
     }else{
