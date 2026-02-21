@@ -53,7 +53,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.accessibleWashroom:
         return 'packages/unified_map_view/assets/markers/unisex_washroom.png';
       case LandmarkAssetType.washroom:
-        return 'packages/unified_map_view/assets/markers/washroom.png';
+        return 'packages/unified_map_view/assets/markers/unisex_washroom.png';
       case LandmarkAssetType.waterFountain:
         return 'packages/unified_map_view/assets/markers/water_fountain.png';
       case LandmarkAssetType.cafeteria:
@@ -156,7 +156,6 @@ enum LandmarkAssetType {
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.source:
       case LandmarkAssetType.counter:
-      case LandmarkAssetType.accessibleWashroom:
       case LandmarkAssetType.user:
       case LandmarkAssetType.sofa:
       case LandmarkAssetType.optionPinSelection:
@@ -166,6 +165,7 @@ enum LandmarkAssetType {
 
       case LandmarkAssetType.room:
       case LandmarkAssetType.genericMarker:
+      case LandmarkAssetType.accessibleWashroom:
       case LandmarkAssetType.washroom:
       case LandmarkAssetType.femaleWashroom:
       case LandmarkAssetType.maleWashroom:
