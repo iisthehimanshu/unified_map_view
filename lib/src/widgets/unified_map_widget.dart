@@ -60,7 +60,7 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
     setState(() {
       _pendingPinLocation = location;
     });
-    _showPinConfirmationDialog(location);
+    // _showPinConfirmationDialog(location);
   }
 
   /// Show confirmation dialog for pin drop
