@@ -20,7 +20,8 @@ class GeoJsonUtils{
     String? polyId,
     String? buildingID,
     String? floor,
-    String? path
+    String? path,
+    String? custom
   }) {
     final Map<String, String?> values = {
       'id': id,
@@ -28,6 +29,7 @@ class GeoJsonUtils{
       'buildingID': buildingID,
       'floor': floor,
       'path': path,
+      'custom': custom,
       'time': DateTime.now().millisecondsSinceEpoch.toString()
     };
 

@@ -61,13 +61,13 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mappls,
-        venueName: 'Ashoka University',
+        venueName: 'ENABLEINDIA',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
           bearing: 0.0,
         ),
-      url: "https://dev.iwayplus.in"
+      url: "https://maps.iwayplus.in"
     );
     
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
