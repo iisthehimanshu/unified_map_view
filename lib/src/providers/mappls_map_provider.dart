@@ -1120,7 +1120,6 @@ class MapplsMapProvider extends BaseMapProvider {
 
       if (_symbols.isNotEmpty) {
         List<GeoJsonMarker> symbols = [..._symbols];
-        clearMarkers(controller);
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
     } catch (e, stack) {
