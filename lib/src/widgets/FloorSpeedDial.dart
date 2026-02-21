@@ -19,29 +19,49 @@ class FloorSpeedDial extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if(controller.focusedBuildingAvailableFloors == null || controller.focusBuildingSelectedFloor == null) return SizedBox.shrink();
-    var floors = controller.focusedBuildingAvailableFloors!;
     var  selectedFloor =  controller.focusBuildingSelectedFloor!;
-    if (floors.isEmpty) return const SizedBox.shrink();
+    List<SpeedDialChild> floorsChildren = floorChildren();
+    if (floorsChildren.isEmpty) return const SizedBox.shrink();
 
     return SafeArea(
       child: SpeedDial(
         activeIcon: Icons.close,
         backgroundColor: color,
         foregroundColor: Colors.white,
+        activeBackgroundColor: color,
         overlayOpacity: 0.2,
-        children: floors
-            .map(
-              (floor) => SpeedDialChild(
-            child: _floorLabel(floor),
-            onTap: (){
-              controller.changeBuildingFloor(buildingID: controller.focusedBuilding!, floor: floor);
-            },
-          ),
-        )
-            .toList(),
+        children: floorsChildren,
         child: _floorLabel(selectedFloor, color: Colors.white),
       ),
     );
+  }
+
+  List<SpeedDialChild> floorChildren(){
+    if(controller.floorsContainingPath.isNotEmpty){
+      return controller.floorsContainingPath
+          .map(
+              (floor) => SpeedDialChild(
+            child: _floorLabel(floor),
+            backgroundColor: Colors.blue,
+            onTap: (){
+              controller.changeBuildingFloor(buildingID: controller.focusedBuilding!, floor: floor);
+            },
+          )
+      ).toList();
+    }else if(controller.focusedBuildingAvailableFloors != null && controller.focusedBuildingAvailableFloors!.isNotEmpty){
+      return controller.focusedBuildingAvailableFloors!
+          .map(
+              (floor) => SpeedDialChild(
+            child: _floorLabel(floor),
+                backgroundColor: Colors.white,
+            onTap: (){
+              controller.changeBuildingFloor(buildingID: controller.focusedBuilding!, floor: floor);
+            },
+          )
+      ).toList();
+    }else{
+      return [];
+    }
   }
 
   Widget _floorLabel(int floor,{Color? color}) {

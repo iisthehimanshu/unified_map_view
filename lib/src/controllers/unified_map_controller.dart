@@ -474,6 +474,7 @@ class UnifiedMapController extends ChangeNotifier {
   String? get focusedBuilding => _annotationController.focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
+  List<int> get floorsContainingPath => _annotationController.floorsContainingPath;
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);

@@ -20,6 +20,7 @@ class AnnotationController{
   String? get focusedBuilding => _focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
+  List<int> get floorsContainingPath => extractFloorsContainingPath(_path).toList();
 
   Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
@@ -389,6 +390,16 @@ class AnnotationController{
     if(_user == null) return;
     _user?.location = location;
     await _unifiedMapController.moveMarker("user", location);
+  }
+
+  Set<int> extractFloorsContainingPath(Map<String, Map<int, List<List<Cell>>>>? path) {
+    if (path == null) return {};
+    final floors = <int>{};
+
+    for (final building in path.values) {
+      floors.addAll(building.keys);
+    }
+    return floors;
   }
 
 }
