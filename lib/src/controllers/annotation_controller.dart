@@ -200,6 +200,8 @@ class AnnotationController{
 
     List<MapLocation> pathPoints = [];
 
+    _unifiedMapController.removePolyline("path");
+
     for (var entry in _path!.entries) {
       final bid = entry.key;
       final floors = entry.value;
