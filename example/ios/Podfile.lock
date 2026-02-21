@@ -1,0 +1,120 @@
+PODS:
+  - apple_maps_flutter (0.0.1):
+    - Flutter
+  - connectivity_plus (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - flutter_compass (0.0.1):
+    - Flutter
+  - Google-Maps-iOS-Utils (5.0.0):
+    - GoogleMaps (~> 8.0)
+  - google_maps_flutter_ios (0.0.1):
+    - Flutter
+    - Google-Maps-iOS-Utils (< 7.0, >= 5.0)
+    - GoogleMaps (< 10.0, >= 8.4)
+  - GoogleMaps (8.4.0):
+    - GoogleMaps/Maps (= 8.4.0)
+  - GoogleMaps/Base (8.4.0)
+  - GoogleMaps/Maps (8.4.0):
+    - GoogleMaps/Base
+  - mapbox_maps_flutter (2.17.0):
+    - Flutter
+    - MapboxMaps (= 11.17.0)
+    - Turf (= 4.0.0)
+  - MapboxCommon (24.17.0):
+    - Turf (= 4.0.0)
+  - MapboxCoreMaps (11.17.0):
+    - MapboxCommon (= 24.17.0)
+  - MapboxMaps (11.17.0):
+    - MapboxCommon (= 24.17.0)
+    - MapboxCoreMaps (= 11.17.0)
+    - Turf (= 4.0.0)
+  - mappls_gl (1.2.0):
+    - Flutter
+    - MapplsAnnotationExtension/Base (= 1.0.2)
+    - MapplsAPICore (= 1.0.16)
+    - MapplsAPIKit/Base (= 2.0.32)
+    - MapplsLMS/Base (= 1.0.6)
+    - MapplsMap/Base (= 5.13.16)
+  - MapplsAnnotationExtension/Base (1.0.2)
+  - MapplsAPICore (1.0.16)
+  - MapplsAPIKit/Base (2.0.32)
+  - MapplsLMS/Base (1.0.6)
+  - MapplsMap/Base (5.13.16)
+  - path_provider_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - Turf (4.0.0)
+  - url_launcher_ios (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - apple_maps_flutter (from `.symlinks/plugins/apple_maps_flutter/ios`)
+  - connectivity_plus (from `.symlinks/plugins/connectivity_plus/ios`)
+  - Flutter (from `Flutter`)
+  - flutter_compass (from `.symlinks/plugins/flutter_compass/ios`)
+  - google_maps_flutter_ios (from `.symlinks/plugins/google_maps_flutter_ios/ios`)
+  - mapbox_maps_flutter (from `.symlinks/plugins/mapbox_maps_flutter/ios`)
+  - mappls_gl (from `.symlinks/plugins/mappls_gl/ios`)
+  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
+  - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
+
+SPEC REPOS:
+  trunk:
+    - Google-Maps-iOS-Utils
+    - GoogleMaps
+    - MapboxCommon
+    - MapboxCoreMaps
+    - MapboxMaps
+    - MapplsAnnotationExtension
+    - MapplsAPICore
+    - MapplsAPIKit
+    - MapplsLMS
+    - MapplsMap
+    - Turf
+
+EXTERNAL SOURCES:
+  apple_maps_flutter:
+    :path: ".symlinks/plugins/apple_maps_flutter/ios"
+  connectivity_plus:
+    :path: ".symlinks/plugins/connectivity_plus/ios"
+  Flutter:
+    :path: Flutter
+  flutter_compass:
+    :path: ".symlinks/plugins/flutter_compass/ios"
+  google_maps_flutter_ios:
+    :path: ".symlinks/plugins/google_maps_flutter_ios/ios"
+  mapbox_maps_flutter:
+    :path: ".symlinks/plugins/mapbox_maps_flutter/ios"
+  mappls_gl:
+    :path: ".symlinks/plugins/mappls_gl/ios"
+  path_provider_foundation:
+    :path: ".symlinks/plugins/path_provider_foundation/darwin"
+  url_launcher_ios:
+    :path: ".symlinks/plugins/url_launcher_ios/ios"
+
+SPEC CHECKSUMS:
+  apple_maps_flutter: c59725efea39e13e703cde52a1d2b14866ad68a8
+  connectivity_plus: 2a701ffec2c0ae28a48cf7540e279787e77c447d
+  Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
+  flutter_compass: cbbd285cea1584c7ac9c4e0c3e1f17cbea55e855
+  Google-Maps-iOS-Utils: 66d6de12be1ce6d3742a54661e7a79cb317a9321
+  google_maps_flutter_ios: e31555a04d1986ab130f2b9f24b6cdc861acc6d3
+  GoogleMaps: 8939898920281c649150e0af74aa291c60f2e77d
+  mapbox_maps_flutter: 90e20e53fc21a15539085849f429791c3eb4b4e4
+  MapboxCommon: 5cc0e77733478a7b2a3a28af7c38adc8485e07d8
+  MapboxCoreMaps: b7b7703cd8af3ae9088f42c6d23b591947a1eb1f
+  MapboxMaps: 10b01217e5634aa7b6fc1fb10d036598d9240ba6
+  mappls_gl: d1026864c9c5d4542318a47fe5974369f97cfc13
+  MapplsAnnotationExtension: 2e63c96e540cc3b2f383c2b8ab1d4839a82ed350
+  MapplsAPICore: 922af98586ffbddb054822b302804f77f662fca5
+  MapplsAPIKit: 71385b8f702727239f72c63ed29958e542957676
+  MapplsLMS: e74a9047ae1c5a977f61eaaa42ae89a57c499e57
+  MapplsMap: ed09c505e87ba92602ec408ccae222bba68929ad
+  path_provider_foundation: 2b6b4c569c0fb62ec74538f866245ac84301af46
+  Turf: c9eb11a65d96af58cac523460fd40fec5061b081
+  url_launcher_ios: 5334b05cef931de560670eeae103fd3e431ac3fe
+
+PODFILE CHECKSUM: 1959d098c91d8a792531a723c4a9d7e9f6a01e38
+
+COCOAPODS: 1.16.2
