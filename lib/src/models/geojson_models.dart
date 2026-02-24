@@ -313,7 +313,7 @@ class GeoJsonMarker {
     }
 
     var coords = feature.geometry.coordinates[0];
-    if(feature.properties?["global"] == true && feature.properties?["centroid"] != null){
+    if(feature.properties?["global"] == true && feature.properties?["centroid"] != null && feature.properties?["centroid"].isNotEmpty){
       coords = feature.properties?["centroid"];
     }
 
