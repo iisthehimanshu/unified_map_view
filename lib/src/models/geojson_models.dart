@@ -317,7 +317,7 @@ class GeoJsonMarker {
       coords = feature.properties?["centroid"];
     }
 
-    if(coords == null || coords.first == null || coords.last == null){
+    if(coords == null || coords.isEmpty || coords.first == null || coords.last == null){
       return null;
     }
 

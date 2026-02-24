@@ -80,10 +80,6 @@ abstract class BaseMapProvider {
 
   Future<void> deSelectLocation(dynamic controller);
 
-  /// Clear all GeoJSON features
-  Future<void> clearAllGeoJsonFeatures(dynamic controller) async {
-    await clearMarkers(controller);
-    await clearPolygons(controller);
-    await clearPolylines(controller);
-  }
+  void dispose();
+
 }

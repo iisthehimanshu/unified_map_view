@@ -391,6 +391,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
+    print("markers $markers");
     if (controller is MapplsMapController) {
       for (var marker in markers) {
         await _loadMarkerIcon(controller, marker);
@@ -961,7 +962,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ],
           enableInteraction: true,
           belowLayerId: null,
-          minzoom: 18.0
+          // minzoom: 18.0
       );
 
       // Layer 2: Normal icon markers (has icon, no bearing)
@@ -993,7 +994,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ],
         enableInteraction: true,
         belowLayerId: _normalTextMarkerLayerId,
-        minzoom: 18.0,
+        // minzoom: 18.0,
       );
 
 
@@ -1021,7 +1022,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ],
           enableInteraction: true,
           belowLayerId: _normalIconMarkerLayerId,
-          minzoom: 18.0
+          // minzoom: 18.0
       );
 
       // Layer 4: Section markers (zoom < 17)
@@ -1060,7 +1061,7 @@ class MapplsMapProvider extends BaseMapProvider {
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,
-        maxzoom: 17.0,
+        // maxzoom: 17.0,
       );
 
       // Layer 4b: SubSection markers
@@ -1082,8 +1083,8 @@ class MapplsMapProvider extends BaseMapProvider {
           filter: ["to-boolean", ["get", "subSection"]],
           enableInteraction: true,
           belowLayerId: _normalFixedMarkerLayerId,
-          maxzoom: 18.0,
-          minzoom: 17.0
+          // maxzoom: 18.0,
+          // minzoom: 17.0
       );
 
       // Layer 5: Rotation markers (separate source)
@@ -1703,6 +1704,12 @@ class MapplsMapProvider extends BaseMapProvider {
       ),
     );
 
+  }
+
+  @override
+  void dispose() {
+    _compassSub?.cancel();
+    _compassSub = null;
   }
 
 }

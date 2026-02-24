@@ -1227,4 +1227,9 @@ class MapboxMapProvider extends BaseMapProvider {
     throw UnimplementedError();
   }
 
+  @override
+  void dispose() {
+    // TODO: implement dispose
+  }
+
 }

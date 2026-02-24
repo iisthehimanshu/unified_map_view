@@ -536,6 +536,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   @override
   void dispose() {
+    currentProviderImplementation.dispose();
     _currentMapController = null;
     super.dispose();
   }
