@@ -10,6 +10,9 @@ enum MapProvider {
 
   /// Mappls Maps provider
   mappls,
+
+  /// MapLibre Maps provider
+  mapLibre,
 }
 
 extension MapProviderExtension on MapProvider {
@@ -21,6 +24,8 @@ extension MapProviderExtension on MapProvider {
         return 'Mapbox';
       case MapProvider.mappls:
         return 'Mappls';
+      case MapProvider.mapLibre:
+        return 'MapLibre';
     }
   }
 }

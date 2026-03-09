@@ -1,6 +1,7 @@
 import 'package:turn_highlighter/turn_highlighter.dart';
 import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
+import 'package:unified_map_view/src/utils/renderingUtilities.dart';
 
 import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
@@ -58,6 +59,8 @@ class AnnotationController{
       await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
       await _unifiedMapController.fitBoundsToGeoJson();
+      // List<MapLocation> circlePoints = RenderingUtilities.generateCirclePoints(center: _venueData.venueLatLng, radiusInMeters: 5000);
+      // _unifiedMapController.addPolygon(GeoJsonPolygon(id: "venue patch", points: circlePoints, properties: {"type":"Boundary"}));
       if(_user != null){
         localizeUser(_user!);
       }

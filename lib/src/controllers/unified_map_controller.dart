@@ -6,6 +6,7 @@ import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
 import '../providers/google_map_provider.dart';
+import '../providers/mapLibre_map_provider.dart';
 import '../providers/mapbox_map_provider.dart';
 
 /// Main controller for managing map providers and operations
@@ -43,8 +44,7 @@ class UnifiedMapController extends ChangeNotifier {
 
     String? url
 
-  }) {
-
+  }) {print("insideuified $initialProvider");
     AppConfig.url = url;
 
     _currentProvider = initialProvider;
@@ -78,6 +78,7 @@ class UnifiedMapController extends ChangeNotifier {
     _providers[MapProvider.google] = GoogleMapProvider();
     _providers[MapProvider.mapbox] = MapboxMapProvider();
     _providers[MapProvider.mappls] = MapplsMapProvider();
+    _providers[MapProvider.mapLibre] = MaplibreMapProvider();
   }
 
   /// Register a custom map provider

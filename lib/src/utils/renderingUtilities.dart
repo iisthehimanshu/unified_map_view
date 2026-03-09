@@ -382,6 +382,47 @@ class RenderingUtilities{
     return bearing;
   }
 
+  static List<MapLocation> generateCirclePoints({
+    required MapLocation center,
+    required double radiusInMeters,
+    int pointCount = 64,
+  }) {
+    const double earthRadius = 6371000; // meters
+    final List<MapLocation> points = [];
+
+    final double centerLat = center.latitude * pi / 180;
+    final double centerLng = center.longitude * pi / 180;
+    final double angularRadius = radiusInMeters / earthRadius;
+
+    for (int i = 0; i < pointCount; i++) {
+      final double bearing = (2 * pi * i) / pointCount;
+
+      // Spherical law of cosines
+      final double lat = asin(
+        sin(centerLat) * cos(angularRadius) +
+            cos(centerLat) * sin(angularRadius) * cos(bearing),
+      );
+
+      final double lng = centerLng + atan2(
+        sin(bearing) * sin(angularRadius) * cos(centerLat),
+        cos(angularRadius) - sin(centerLat) * sin(lat),
+      );
+
+      points.add(MapLocation(
+        latitude: lat * 180 / pi,
+        longitude: lng * 180 / pi,
+        id: '${center.id}_circle_$i',
+      ));
+    }
+
+    // Close the circle by repeating the first point
+    if (points.isNotEmpty) {
+      points.add(points.first);
+    }
+
+    return points;
+  }
+
 }
 
 class RectangleResult {
