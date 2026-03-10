@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'dart:math';
 
+import '../database/cache/cache_controller.dart';
+
 class MarkerIconWithAnchor {
   final Uint8List icon;
   final Offset anchor; // normalized [0..1] offset
@@ -238,8 +240,8 @@ class UnifiedMarkerCreator {
       try {
         Uint8List? bytes;
         if (imageSource.startsWith('http')) {
-          final response = await http.get(Uri.parse(imageSource));
-          if (response.statusCode == 200) bytes = response.bodyBytes;
+          final response = await CacheController().fetchWithCache(imageSource!);
+           bytes = response;
         } else {
           final bd = await rootBundle.load(imageSource);
           bytes = bd.buffer.asUint8List();
@@ -296,6 +298,8 @@ class UnifiedMarkerCreator {
     TextPainter? strokePainter;
     double textWidthPx = 0;
     double textHeightPx = 0;
+    final double pillPaddingH = fontSizePx * 0.4;
+    final double pillPaddingV = fontSizePx * 0.2;
 
     if (layout != MarkerLayout.imageOnly && formattedText.isNotEmpty) {
       final fillStyle = TextStyle(
@@ -337,8 +341,8 @@ class UnifiedMarkerCreator {
     }
 
     // Compute canvas size in pixels depending on layout
-    double canvasWidthPx;
-    double canvasHeightPx;
+    double? canvasWidthPx;
+    double? canvasHeightPx;
     double imageX = 0, imageY = 0, textX = 0, textY = 0;
 
     // Calculate content size first (before expansion)
@@ -350,66 +354,63 @@ class UnifiedMarkerCreator {
         if (markerImage != null) {
           contentWidthPx = actualImageSizePx.width +
               spacingPx +
-              textWidthPx +
+              (textWidthPx + pillPaddingH * 2) +  // ← pill padding
               strokeWidthPx * 2;
           contentHeightPx =
-              max(actualImageSizePx.height, textHeightPx) + strokeWidthPx * 2;
+              max(actualImageSizePx.height, textHeightPx + pillPaddingV * 2) + // ← pill padding
+                  strokeWidthPx * 2;
           canvasWidthPx = contentWidthPx;
           canvasHeightPx = contentHeightPx;
           imageX = strokeWidthPx;
           imageY = (canvasHeightPx - actualImageSizePx.height) / 2;
-          textX = imageX + actualImageSizePx.width + spacingPx;
+          textX = imageX + actualImageSizePx.width + spacingPx + pillPaddingH; // ← offset by pill padding
           textY = (canvasHeightPx - textHeightPx) / 2;
         } else {
-          contentWidthPx = textWidthPx + strokeWidthPx * 2;
-          contentHeightPx = textHeightPx + strokeWidthPx * 2;
+          contentWidthPx = textWidthPx + pillPaddingH * 2 + strokeWidthPx * 2; // ← pill padding
+          contentHeightPx = textHeightPx + pillPaddingV * 2 + strokeWidthPx * 2;
           canvasWidthPx = contentWidthPx;
           canvasHeightPx = contentHeightPx;
-          textX = strokeWidthPx;
-          textY = strokeWidthPx;
+          textX = strokeWidthPx + pillPaddingH; // ← offset
+          textY = strokeWidthPx + pillPaddingV;
         }
         break;
 
       case MarkerLayout.vertical:
         if (markerImage != null) {
           contentWidthPx =
-              max(actualImageSizePx.width, textWidthPx) + strokeWidthPx * 2;
+              max(actualImageSizePx.width, textWidthPx + pillPaddingH * 2) + // ← pill padding
+                  strokeWidthPx * 2;
           contentHeightPx = actualImageSizePx.height +
               spacingPx +
-              textHeightPx +
+              (textHeightPx + pillPaddingV * 2) + // ← pill padding
               strokeWidthPx * 2;
           canvasWidthPx = contentWidthPx;
           canvasHeightPx = contentHeightPx;
           imageX = (canvasWidthPx - actualImageSizePx.width) / 2;
           imageY = strokeWidthPx;
-          textX = (canvasWidthPx - textWidthPx) / 2;
-          textY = imageY + actualImageSizePx.height + spacingPx;
+          textX = (canvasWidthPx - textWidthPx) / 2; // text centered, pill drawn around it
+          textY = imageY + actualImageSizePx.height + spacingPx + pillPaddingV; // ← offset
         } else {
-          contentWidthPx = textWidthPx + strokeWidthPx * 2;
-          contentHeightPx = textHeightPx + strokeWidthPx * 2;
+          contentWidthPx = textWidthPx + pillPaddingH * 2 + strokeWidthPx * 2;
+          contentHeightPx = textHeightPx + pillPaddingV * 2 + strokeWidthPx * 2;
           canvasWidthPx = contentWidthPx;
           canvasHeightPx = contentHeightPx;
-          textX = strokeWidthPx;
-          textY = strokeWidthPx;
+          textX = strokeWidthPx + pillPaddingH;
+          textY = strokeWidthPx + pillPaddingV;
         }
         break;
 
       case MarkerLayout.textOnly:
-        contentWidthPx = textWidthPx + strokeWidthPx * 2;
-        contentHeightPx = textHeightPx + strokeWidthPx * 2;
+        contentWidthPx = textWidthPx + pillPaddingH * 2 + strokeWidthPx * 2;
+        contentHeightPx = textHeightPx + pillPaddingV * 2 + strokeWidthPx * 2;
         canvasWidthPx = contentWidthPx;
         canvasHeightPx = contentHeightPx;
-        textX = strokeWidthPx;
-        textY = strokeWidthPx;
+        textX = strokeWidthPx + pillPaddingH;
+        textY = strokeWidthPx + pillPaddingV;
         break;
 
       case MarkerLayout.imageOnly:
-        contentWidthPx = actualImageSizePx.width;
-        contentHeightPx = actualImageSizePx.height;
-        canvasWidthPx = contentWidthPx;
-        canvasHeightPx = contentHeightPx;
-        imageX = 0;
-        imageY = 0;
+      // unchanged
         break;
     }
 
@@ -426,14 +427,14 @@ class UnifiedMarkerCreator {
         switch (layout) {
           case MarkerLayout.horizontal:
           // center of image horizontally, bottom of canvas vertically
-            final double ax = (imageX + actualImageSizePx.width / 2) / canvasWidthPx;
-            final double ay = (imageY + actualImageSizePx.height) / canvasHeightPx;
+            final double ax = (imageX + actualImageSizePx.width / 2) / canvasWidthPx!;
+            final double ay = (imageY + actualImageSizePx.height) / canvasHeightPx!;
             initialAnchor = Offset(ax.clamp(0.0, 1.0), ay.clamp(0.0, 1.0));
             break;
           case MarkerLayout.vertical:
           // center horizontally, bottom of image vertically (so marker tip aligns)
-            final double ax2 = (imageX + actualImageSizePx.width / 2) / canvasWidthPx;
-            final double ay2 = (imageY + actualImageSizePx.height) / canvasHeightPx;
+            final double ax2 = (imageX + actualImageSizePx.width / 2) / canvasWidthPx!;
+            final double ay2 = (imageY + actualImageSizePx.height) / canvasHeightPx!;
             initialAnchor = Offset(ax2.clamp(0.0, 1.0), ay2.clamp(0.0, 1.0));
             break;
           case MarkerLayout.imageOnly:
@@ -453,8 +454,8 @@ class UnifiedMarkerCreator {
 
     if (expandCanvasForRotation) {
       // Calculate the pivot point in pixels
-      final double pivotX = canvasWidthPx * initialAnchor.dx;
-      final double pivotY = canvasHeightPx * initialAnchor.dy;
+      final double pivotX = canvasWidthPx! * initialAnchor.dx;
+      final double pivotY = canvasHeightPx! * initialAnchor.dy;
 
       // Calculate maximum distance from pivot to any corner
       final corners = [
@@ -499,8 +500,8 @@ class UnifiedMarkerCreator {
     }
 
     // Ensure integer pixel dimensions at least 1
-    final int canvasW = max(1, canvasWidthPx.ceil());
-    final int canvasH = max(1, canvasHeightPx.ceil());
+    final int canvasW = max(1, canvasWidthPx!.ceil());
+    final int canvasH = max(1, canvasHeightPx!.ceil());
 
     // Draw into picture recorder (working in pixel units)
     final ui.PictureRecorder recorder = ui.PictureRecorder();
@@ -532,29 +533,32 @@ class UnifiedMarkerCreator {
         layout != MarkerLayout.imageOnly) {
       final textOffset = Offset(textX, textY);
 
-      // Draw stroke in 8 directions only for better quality (instead of full grid)
-      if (strokeWidthPx > 0) {
-        final double offset = strokeWidthPx;
+      // Draw pill background
+        final double pillRadius = (textHeightPx + pillPaddingV * 1.2) / 2;
 
-        // Draw in 8 cardinal and diagonal directions
-        final directions = [
-          Offset(-offset, 0),
-          Offset(offset, 0),
-          Offset(0, -offset),
-          Offset(0, offset),
-          Offset(-offset, -offset),
-          Offset(offset, -offset),
-          Offset(-offset, offset),
-          Offset(offset, offset),
-        ];
+        final Rect pillRect = Rect.fromLTWH(
+          textX - pillPaddingH,
+          textY - pillPaddingV,
+          textWidthPx + pillPaddingH * 2,
+          textHeightPx + pillPaddingV * 2,
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
+          Paint()
+            ..color = Colors.white
+            ..isAntiAlias = true
+            ..style = PaintingStyle.fill,
+        );
 
-        for (final dir in directions) {
-          strokePainter.paint(
-              canvas, Offset(textOffset.dx + dir.dx, textOffset.dy + dir.dy));
-        }
-      }
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
+        Paint()
+          ..color = const Color(0xffcc1616) // your border color
+          ..isAntiAlias = true
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidthPx * 1, // or any fixed px value
+      );
 
-      // Draw main fill on top
       fillPainter.paint(canvas, textOffset);
     }
 

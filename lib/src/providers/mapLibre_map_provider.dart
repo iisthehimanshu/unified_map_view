@@ -941,14 +941,14 @@ class MaplibreMapProvider extends BaseMapProvider {
       MaplibreMapController controller, GeoJsonMarker marker) async {
     if (marker.assetPath == null) return false;
     try {
-      if (marker.customRendering) {
+      if (marker.customRendering || true) {
         MarkerIconWithAnchor markerIconWithAnchor =
         await creator.createUnifiedMarker(
-          imageSize: marker.imageSize ?? const Size(25, 25),
-          fontSize: 8.5,
-          text: "",
+          imageSize: marker.imageSize ?? const Size(65, 65),
+          fontSize: 18.5,
+          text: marker.title??"",
           imageSource: marker.assetPath,
-          layout: MarkerLayout.horizontal,
+          layout: MarkerLayout.vertical,
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
           customAnchor:
@@ -1060,7 +1060,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: "center",
-          textField: ["get", "title"],
+          // textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
