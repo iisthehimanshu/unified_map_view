@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:unified_map_view/src/database/cache/cache_controller.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import 'package:unified_map_view/src/models/selectedLocation.dart';
@@ -962,8 +963,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       } else {
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
-          final response = await http.get(Uri.parse(marker.assetPath!));
-          if (response.statusCode == 200) iconBytes = response.bodyBytes;
+          final response = await CacheController().fetchWithCache(marker.assetPath!);
+         iconBytes = response;
         } else {
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();

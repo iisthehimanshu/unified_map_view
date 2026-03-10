@@ -8,6 +8,7 @@ import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import 'package:unified_map_view/src/models/selectedLocation.dart';
+import '../database/cache/cache_controller.dart';
 import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
@@ -878,8 +879,8 @@ class MapplsMapProvider extends BaseMapProvider {
       }else{
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
-          final response = await http.get(Uri.parse(marker.assetPath!));
-          if (response.statusCode == 200) iconBytes = response.bodyBytes;
+          final response = await CacheController().fetchWithCache(marker.assetPath!);
+          iconBytes = response;
         } else {
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
