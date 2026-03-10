@@ -1,5 +1,4 @@
 import 'dart:ui';
-import 'dart:ui';
 
 enum LandmarkAssetType {
   lift,
@@ -33,7 +32,13 @@ enum LandmarkAssetType {
   unisexWashroom,
   smokingArea,
   gadgets,
-  garments
+  garments,
+  parking,
+  vendingMachine,
+  kiosk,
+  waitingArea,
+  tuckShop,
+  stationary
   ;
 
   String get assetPath {
@@ -80,7 +85,6 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/selected_pin_selection.png';
       case LandmarkAssetType.sofa:
         return 'packages/unified_map_view/assets/isometric_elements/sofa.png';
-
       case LandmarkAssetType.assemblyRoom:
         return 'packages/unified_map_view/assets/markers/assembly_Room.png';
       case LandmarkAssetType.conferenceRoom:
@@ -103,6 +107,18 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/gadgets.png';
       case LandmarkAssetType.garments:
         return 'packages/unified_map_view/assets/markers/garments.png';
+      case LandmarkAssetType.parking:
+        return 'packages/unified_map_view/assets/markers/parking.png';
+      case LandmarkAssetType.vendingMachine:
+        return 'packages/unified_map_view/assets/markers/vending_machine.png';
+      case LandmarkAssetType.kiosk:
+        return 'packages/unified_map_view/assets/markers/kiosk.png';
+      case LandmarkAssetType.waitingArea:
+        return 'packages/unified_map_view/assets/markers/waiting_area.png';
+      case LandmarkAssetType.tuckShop:
+        return 'packages/unified_map_view/assets/markers/tuck_shop.png';
+      case LandmarkAssetType.stationary:
+        return 'packages/unified_map_view/assets/markers/stationary.png';
     }
   }
 
@@ -134,6 +150,12 @@ enum LandmarkAssetType {
       case LandmarkAssetType.sofa:
       case LandmarkAssetType.gadgets:
       case LandmarkAssetType.garments:
+      case LandmarkAssetType.parking:
+      case LandmarkAssetType.vendingMachine:
+      case LandmarkAssetType.kiosk:
+      case LandmarkAssetType.waitingArea:
+      case LandmarkAssetType.tuckShop:
+      case LandmarkAssetType.stationary:
         return false;
 
       case LandmarkAssetType.cafeteria:
@@ -160,7 +182,8 @@ enum LandmarkAssetType {
       case LandmarkAssetType.sofa:
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:
-      case LandmarkAssetType.firstAid:
+      case LandmarkAssetType.kiosk:
+      case LandmarkAssetType.waitingArea:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.room:
@@ -180,8 +203,13 @@ enum LandmarkAssetType {
       case LandmarkAssetType.fireExtinguisher:
       case LandmarkAssetType.meetingRoom:
       case LandmarkAssetType.registrationDesk:
+      case LandmarkAssetType.firstAid:
       case LandmarkAssetType.gadgets:
       case LandmarkAssetType.garments:
+      case LandmarkAssetType.parking:
+      case LandmarkAssetType.vendingMachine:
+      case LandmarkAssetType.tuckShop:
+      case LandmarkAssetType.stationary:
         return const Offset(0.5, 1.0);
 
     }

@@ -1786,7 +1786,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       "minzoom": 0,
       "maxzoom": 23,
       "paint": {
-        "raster-saturation": -0.7,
+        "raster-saturation": -1.0,
         "raster-brightness-max": 0.85
       }
     }

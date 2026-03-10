@@ -113,6 +113,10 @@ class RenderingUtilities{
 
       final type = rawType.toLowerCase().trim();
 
+      if(landmarkProperties['landmarkId'] == "d535a87fb7a6e9bae6c91d477c841018"){
+        print("type for tuckshop ${type}");
+      }
+
       // ================= Washrooms =================
       if (type.contains('washroom') || type.contains('restroom')) {
         var washroomType = landmarkProperties['washroomType']??type;
@@ -128,10 +132,10 @@ class RenderingUtilities{
         }
         return LandmarkAssetType.washroom;
       }
-      if(type.toLowerCase().contains('smoking zone')){
+      if(type.toLowerCase().contains('smoking')){
         return LandmarkAssetType.smokingArea;
       }
-      if(type.contains("fire extinguisher")){
+      if(type.contains("fire")){
         return LandmarkAssetType.fireExtinguisher;
       }
 
@@ -148,6 +152,9 @@ class RenderingUtilities{
       }
       if (type.contains('emergency')) {
         return LandmarkAssetType.emergencyExit;
+      }
+      if (type.contains('ramp')) {
+        return LandmarkAssetType.ramp;
       }
       // ================= Other Types =================
       if (type.contains('gadget') || type.contains('mobile') || type.contains('phone')) {
@@ -168,16 +175,21 @@ class RenderingUtilities{
       if(type.contains('registration')){
         return LandmarkAssetType.registrationDesk;
       }
+      if(type.contains('sitting') || type.contains('waiting')){
+        return LandmarkAssetType.waitingArea;
+      }
       if (type.contains('room') || type.contains('office')) {
         String roomName = landmarkProperties['name'];
         if(roomName.contains("Meeting")){
           return LandmarkAssetType.meetingRoom;
         }
         return null;
-        return LandmarkAssetType.room;
       }
       if (type.contains('cafeteria') || type.contains('cafe')) {
         return LandmarkAssetType.cafeteria;
+      }
+      if (type.contains('vending')) {
+        return LandmarkAssetType.vendingMachine;
       }
       if (type.contains('water')) {
         return LandmarkAssetType.waterFountain;
@@ -194,6 +206,15 @@ class RenderingUtilities{
       }
       if(type.contains('first aid')){
         return LandmarkAssetType.firstAid;
+      }
+      if(type.contains('parking')){
+        return LandmarkAssetType.parking;
+      }
+      if(type.contains('tuckshop')){
+        return LandmarkAssetType.tuckShop;
+      }
+      if(type.contains('stationary')){
+        return LandmarkAssetType.stationary;
       }
 
       return null;

@@ -293,6 +293,12 @@ class GeoJsonMarker {
     return 'GeoJsonMarker{id: $id, position: $position}';
   }
 
+  static String? pick(dynamic v) {
+    if (v == null) return null;
+    final s = v.toString();
+    return s.isEmpty ? null : s;
+  }
+
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
@@ -348,11 +354,12 @@ class GeoJsonMarker {
       polyId = associatedPolygons.first;
     }
 
-    parsedTitle = feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"] ?? feature.properties?["sponsorRef"]?["name"] ?? feature.properties?["renderName"]??feature.properties?["name"] ?? "";
-
-    if(feature.id == "b2a3cf8bbd837a698381270f89f7e373"){
-      print("parsedTitle $parsedTitle");
-    }
+    parsedTitle =
+        pick(feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"]) ??
+            pick(feature.properties?["sponsorRef"]?["name"]) ??
+            pick(feature.properties?["renderName"]) ??
+            pick(feature.properties?["name"]) ??
+            "";
 
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),
