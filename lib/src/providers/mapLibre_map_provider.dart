@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:unified_map_view/src/database/cache/cache_controller.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import 'package:unified_map_view/src/models/selectedLocation.dart';
@@ -940,14 +941,14 @@ class MaplibreMapProvider extends BaseMapProvider {
       MaplibreMapController controller, GeoJsonMarker marker) async {
     if (marker.assetPath == null) return false;
     try {
-      if (marker.customRendering) {
+      if (marker.customRendering || true) {
         MarkerIconWithAnchor markerIconWithAnchor =
         await creator.createUnifiedMarker(
-          imageSize: marker.imageSize ?? const Size(25, 25),
-          fontSize: 8.5,
-          text: "",
+          imageSize: marker.imageSize ?? const Size(65, 65),
+          fontSize: 18.5,
+          text: marker.title??"",
           imageSource: marker.assetPath,
-          layout: MarkerLayout.horizontal,
+          layout: MarkerLayout.vertical,
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
           customAnchor:
@@ -962,8 +963,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       } else {
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
-          final response = await http.get(Uri.parse(marker.assetPath!));
-          if (response.statusCode == 200) iconBytes = response.bodyBytes;
+          final response = await CacheController().fetchWithCache(marker.assetPath!);
+         iconBytes = response;
         } else {
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
@@ -1059,7 +1060,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: "center",
-          textField: ["get", "title"],
+          // textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
