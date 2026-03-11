@@ -298,7 +298,7 @@ class UnifiedMarkerCreator {
     TextPainter? strokePainter;
     double textWidthPx = 0;
     double textHeightPx = 0;
-    final double pillPaddingH = fontSizePx * 0.4;
+    final double pillPaddingH = fontSizePx * 0.9;
     final double pillPaddingV = fontSizePx * 0.2;
 
     if (layout != MarkerLayout.imageOnly && formattedText.isNotEmpty) {
@@ -553,10 +553,10 @@ class UnifiedMarkerCreator {
       canvas.drawRRect(
         RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
         Paint()
-          ..color = const Color(0xffcc1616) // your border color
+          ..color = Colors.black // your border color
           ..isAntiAlias = true
           ..style = PaintingStyle.stroke
-          ..strokeWidth = strokeWidthPx * 1, // or any fixed px value
+          ..strokeWidth = strokeWidthPx * 0.8, // or any fixed px value
       );
 
       fillPainter.paint(canvas, textOffset);

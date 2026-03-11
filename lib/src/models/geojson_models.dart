@@ -335,9 +335,12 @@ class GeoJsonMarker {
     bool? textVisibility;
     Offset? anchor;
     String? parsedTitle;
+    bool? customRendering;
 
     if(feature.properties?["imageFile"] != null && feature.properties?["imageFile"].isNotEmpty){
       assetPath = "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
+      textVisibility=true;
+      customRendering=true;
     }
 
     if(asset != null){
@@ -372,6 +375,7 @@ class GeoJsonMarker {
       textVisibility: textVisibility??true,
       priority: false,
       anchor: anchor,
+      customRendering: customRendering??false
     );
   }
 }
