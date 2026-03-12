@@ -66,6 +66,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
           bearing: 0.0,
+          tilt: 40.0
         ),
       url: "https://dev.iwayplus.in",
     );

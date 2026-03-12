@@ -81,6 +81,8 @@ class MaplibreMapProvider extends BaseMapProvider {
               config.initialLocation.mapLocation.longitude,
             ),
             zoom: config.initialLocation.zoom,
+            tilt: config.initialLocation.tilt,
+            bearing: config.initialLocation.bearing
           ),
           styleString: osmRasterStyle,
           onMapCreated: (MaplibreMapController controller) async {
@@ -1061,7 +1063,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         const SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 0.8,
-          iconAnchor: "center",
+          iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1092,7 +1094,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         const SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 0.8,
-          iconAnchor: "center",
+          iconAnchor: ["get", "iconAnchor"],
           // textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1150,7 +1152,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         const SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 0.8,
-          iconAnchor: "center",
+          iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1784,6 +1786,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         right: 50,
         bottom: 50,
       ),
+      duration: const Duration(milliseconds: 2000), // slower animation
     );
   }
 

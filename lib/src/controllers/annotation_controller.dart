@@ -56,7 +56,7 @@ class AnnotationController{
         var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
         venueRenderData.addAll(floorData);
       });
-      await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
+      // await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
       await _unifiedMapController.fitBoundsToGeoJson();
       // List<MapLocation> circlePoints = RenderingUtilities.generateCirclePoints(center: _venueData.venueLatLng, radiusInMeters: 5000);
