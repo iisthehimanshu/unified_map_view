@@ -49,6 +49,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   final String _polygonSourceId = 'polygons-source';
   final String _normalPolygonLayerId = 'normal-polygons-layer';
+  final String _patternPolygonLayerId = 'pattern-polygons-layer';
   final String _selectedPolygonLayerId = 'selected-polygon-layer';
   final String _patchPolygonLayerId = 'patch-polygon-layer';
   final String _sectionPolygonLayerId = 'section-polygon-layer';
@@ -141,6 +142,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           },
           onStyleLoadedCallback: () async {
             if (_controller != null) {
+              await config.onStyleLoadedCallback(_controller);
               // Style reload wipes ALL sources, layers, and addImage() calls —
               // reset flags so enableXxxLayers() re-creates everything cleanly.
               _isClusteringEnabled = false;
@@ -672,6 +674,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MaplibreMapController) {
       try {
         _polygons.add(polygon);
+        await RenderingUtilities.registerLandmarkPattern(controller, polygon);
         await _updatePolygonSource(controller);
       } catch (e) {
         print('Error adding polygon: $e');
@@ -697,6 +700,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MaplibreMapController) {
       try {
         _polygons.addAll(polygons);
+        for(var polygon in polygons){
+          await RenderingUtilities.registerLandmarkPattern(controller, polygon);
+        }
         await _updatePolygonSource(controller);
       } catch (e) {
         print('Error adding polygons: $e');
@@ -740,6 +746,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       double? baseHeight;
       double? height;
+      bool pattern=false;
 
       if (polygon.properties?['baseHeight'] != null && polygon.properties?['baseHeight'].isNotEmpty && polygon.properties?['baseHeight'].toLowerCase() != "undefined") {
         baseHeight = double.tryParse(polygon.properties?['baseHeight']);
@@ -751,6 +758,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         if (baseHeight != null && height != null) {
           height = height + baseHeight;
         }
+      }
+
+      if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty){
+        pattern=true;
       }
 
       return {
@@ -774,6 +785,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           'subsection': polygon.properties?['type'] == "Sub Section",
           if (baseHeight != null) 'base_height': baseHeight,
           if (height != null) 'height': height,
+          'hasPattern':pattern,
+          'pattern':GeoJsonUtils.buildPatternKey(name:polygon.properties?['pattern'],size:polygon.properties?['patternSize'] ,gap: polygon.properties?['patternSpacing'],rotation:polygon.properties?['patternRotation'] ,color: polygon.properties?['patternColor']),
         }
       };
     }).toList();
@@ -1262,6 +1275,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "section"]],
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: false,
         maxzoom: 17.0,
@@ -1282,6 +1296,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["to-boolean", ["get", "subsection"]],
           ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: false,
         minzoom: 17.0,
@@ -1302,6 +1317,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           "all",
           ["to-boolean", ["get", "isSelected"]],
           ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: true,
         belowLayerId: _subSectionPolygonLayerId,
@@ -1317,7 +1333,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           fillExtrusionBase: ["get", "base_height"],
           fillExtrusionOpacity: 1.0,
         ),
-        filter: ['has', 'height'],
+        filter:[
+          "all",
+          ['has', 'height'],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+        ],
         belowLayerId: _selectedPolygonLayerId,
       );
 
@@ -1336,7 +1356,31 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
           ["!", ["has", "height"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _extrudedPolygonLayerId,
+      );
+
+      /// 6 NORMAL with texture
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _patternPolygonLayerId,
+        const FillLayerProperties(
+          fillColor: ["get", "fillColor"],
+          fillOpacity: ["get", "fillOpacity"],
+          fillOutlineColor: ["get", "strokeColor"],
+          fillPattern: ["get","pattern"]
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isSelected"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subsection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["has", "height"]],
+          ["to-boolean", ["get", "hasPattern"]],
         ],
         enableInteraction: true,
         belowLayerId: _extrudedPolygonLayerId,
@@ -1355,6 +1399,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           "all",
           ["to-boolean", ["get", "boundary"]],
           ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: true,
         belowLayerId: _normalPolygonLayerId,

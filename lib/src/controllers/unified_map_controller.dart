@@ -60,7 +60,7 @@ class UnifiedMapController extends ChangeNotifier {
       onCameraMove: onCameraMove,
       onMarkerTap: onMarker??onMarkerTap,
       onPolygonTap: onPolygon??onPolygonTap,
-      onPolylineTap: onPolyline??onPolylineTap
+      onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
@@ -121,6 +121,11 @@ class UnifiedMapController extends ChangeNotifier {
     _currentMapController = controller;
     _annotationController.renderVenue();
     // fitBoundsToGeoJson();
+  }
+
+  /// Called when style is created
+  Future<void> onStyleLoadedCallback(dynamic controller) async{
+
   }
 
   void onCameraMove(UnifiedCameraPosition position) async {

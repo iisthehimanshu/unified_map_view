@@ -38,4 +38,25 @@ class GeoJsonUtils{
         .map((e) => '${e.key}:${e.value}')
         .join(' | ');
   }
+
+  static String buildPatternKey({
+    String? name,
+    int? size,
+    int? gap,
+    int? rotation,
+    String? color,
+  }) {
+    final Map<String, String?> values = {
+      'pattern': name,
+      'size': size?.toString(),
+      'gap': gap.toString(),
+      'rotation': rotation.toString(),
+      'color': color,
+    };
+
+    return values.entries
+        .where((e) => e.value != null && e.value!.isNotEmpty)
+        .map((e) => '${e.key}:${e.value}')
+        .join(' | ');
+  }
 }

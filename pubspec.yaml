@@ -14,7 +14,7 @@ dependencies:
   google_maps_flutter:
   mapbox_maps_flutter:
   apple_maps_flutter:
-  mappls_gl: ^1.2.0
+  mappls_gl:
   maplibre_gl: ^0.21.0
   http:
   flutter_speed_dial: ^7.0.0

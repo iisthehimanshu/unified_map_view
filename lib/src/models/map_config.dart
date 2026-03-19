@@ -9,6 +9,7 @@ class MapConfig {
   final bool tiltGesturesEnabled;
 
   final void Function(dynamic controller) onMapCreated ;
+  final Future<void> Function(dynamic controller) onStyleLoadedCallback ;
   final void Function(UnifiedCameraPosition position) onCameraMove;
 
   final void Function({required MapLocation coordinates, required String markerId})? onMarkerTap;
@@ -18,6 +19,7 @@ class MapConfig {
   const MapConfig({
     required this.initialLocation,
     required this.onMapCreated,
+    required this.onStyleLoadedCallback,
     required this.onCameraMove,
     this.showUserLocation = true,
     this.zoomControlsEnabled = true,
@@ -27,10 +29,12 @@ class MapConfig {
     this.onMarkerTap,
     this.onPolygonTap,
     this.onPolylineTap,
+
   });
 
   MapConfig copyWith({
     void Function(dynamic controller)? onMapCreated,
+    Future<void> Function(dynamic controller)? onStyleLoadedCallback,
     void Function(UnifiedCameraPosition position)? onCameraMove,
     UnifiedCameraPosition? initialLocation,
     double? initialZoom,
@@ -54,7 +58,7 @@ class MapConfig {
       tiltGesturesEnabled: tiltGesturesEnabled ?? this.tiltGesturesEnabled,
       onMarkerTap: onMarkerTap ?? this.onMarkerTap,
       onPolygonTap: onPolygonTap ?? this.onPolygonTap,
-      onPolylineTap: onPolylineTap ?? this.onPolylineTap,
+      onPolylineTap: onPolylineTap ?? this.onPolylineTap, onStyleLoadedCallback:onStyleLoadedCallback??this.onStyleLoadedCallback
     );
   }
 }

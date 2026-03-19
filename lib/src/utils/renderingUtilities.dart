@@ -1,6 +1,11 @@
+import 'dart:typed_data';
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:unified_map_view/src/models/geojson_models.dart';
 import 'package:unified_map_view/src/models/map_location.dart';
 import 'dart:math';
+import '../../unified_map_view.dart';
+import '../enums/pattern_type.dart';
 import 'LandmarkAssetType.dart';
 
 class RenderingUtilities{
@@ -443,6 +448,483 @@ class RenderingUtilities{
 
     return points;
   }
+
+  static Future<void> registerLandmarkPattern(dynamic controller,GeoJsonPolygon geojsonpolygon)async{
+    PatternType? type=getPatternType(geojsonpolygon.properties?['pattern']);
+    if(type==null)return;
+
+    Color backgroundColor = Colors.transparent;
+    if(geojsonpolygon.properties?["fillColor"] != null && geojsonpolygon.properties?["fillColor"].isNotEmpty){
+      backgroundColor = hexToColor(geojsonpolygon.properties?["fillColor"]);
+    }
+   await _registerPattern(controller, patternId: GeoJsonUtils.buildPatternKey(name:geojsonpolygon.properties?['pattern'],size:geojsonpolygon.properties?['patternSize'] ,gap: geojsonpolygon.properties?['patternSpacing'],rotation:geojsonpolygon.properties?['patternRotation'] ,color: geojsonpolygon.properties?['patternColor']),
+        type: type,size:geojsonpolygon.properties?['patternSize'] ,gap:geojsonpolygon.properties?['patternSpacing'] ,angle:geojsonpolygon.properties?['patternRotation'] ,foreground: hexToColor(geojsonpolygon.properties?['patternColor']), background: backgroundColor);
+
+  }
+
+
+  static Future<void> _registerPattern(
+      dynamic controller, {
+        required String patternId,
+        required PatternType type,
+        Color foreground = const Color(0xFF7A5C1E),
+        Color background =  Colors.transparent,
+        int size = 32,
+        int strokeWidth = 2,
+        int gap = 8,
+        int angle = 45, // ✅ rotation in degrees
+      }) async {
+
+    final Uint8List pngBytes = await _generatePattern(
+      type: type,
+      foreground: foreground,
+      background: background,
+      size: size,
+      strokeWidth: strokeWidth,
+      gap: gap,
+      angle: angle,
+    );
+    print("pngBytes:${patternId}");
+    await controller.addImage(patternId, pngBytes);
+  }
+
+  static Future<Uint8List> _generatePattern({
+    required PatternType type,
+    required Color foreground,
+    required Color background,
+    required int size,       // symbol size
+    required int strokeWidth,
+    required int angle,
+    required int gap,        // tile/spacing size — canvas is drawn at this size
+  }) async {
+    final recorder = PictureRecorder();
+    final double dim = gap.toDouble();   // ← canvas = gap, not size
+    final canvas = Canvas(
+      recorder,
+      Rect.fromLTWH(0, 0, dim, dim),
+    );
+
+    // Background
+    if (background.alpha > 0) {
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, dim, dim),
+        Paint()..color = background..style = PaintingStyle.fill,
+      );
+    }
+
+    // Rotation around center
+    if (angle != 0) {
+      canvas.save();
+      canvas.translate(dim / 2, dim / 2);
+      canvas.rotate(angle * pi / 180.0);
+      canvas.translate(-dim / 2, -dim / 2);
+    }
+
+    final paint = Paint()
+      ..color = foreground
+      ..strokeWidth = strokeWidth.toDouble()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final fillPaint = Paint()
+      ..color = foreground
+      ..style = PaintingStyle.fill;
+
+    final double symbolSize = size.toDouble();   // actual symbol size inside tile
+
+    switch (type) {
+
+    // ── DOTS ──────────────────────────────────────────────────────────────
+      case PatternType.dots:
+        canvas.drawCircle(
+          Offset(dim / 2, dim / 2),
+          symbolSize / 2,       // radius = half of size
+          fillPaint,
+        );
+        break;
+
+    // ── STRIPES ───────────────────────────────────────────────────────────
+      case PatternType.stripes:
+        canvas.drawRect(
+          Rect.fromLTWH(0, 0, strokeWidth.toDouble(), dim),
+          fillPaint,
+        );
+        break;
+
+    // ── GRID ──────────────────────────────────────────────────────────────
+      case PatternType.grid:
+        canvas.drawLine(Offset(dim / 2, 0), Offset(dim / 2, dim), paint);
+        canvas.drawLine(Offset(0, dim / 2), Offset(dim, dim / 2), paint);
+        break;
+
+    // ── HATCH ─────────────────────────────────────────────────────────────
+      case PatternType.hatch:
+        canvas.drawLine(Offset(0, dim), Offset(dim, 0), paint);
+        break;
+
+    // ── RESTRICTED ────────────────────────────────────────────────────────
+      case PatternType.restricted:
+        canvas.drawLine(Offset(0, dim), Offset(dim, 0), paint);
+        canvas.drawLine(Offset(0, 0), Offset(dim, dim), paint);
+        break;
+
+    // ── BUSH ──────────────────────────────────────────────────────────────
+      case PatternType.bush:
+        const positions = [
+          [0.2, 0.3], [0.7, 0.2], [0.5, 0.6],
+          [0.1, 0.7], [0.8, 0.75], [0.4, 0.15],
+        ];
+        for (final pos in positions) {
+          canvas.drawCircle(
+            Offset(pos[0] * dim, pos[1] * dim),
+            symbolSize / 4,
+            Paint()..color = foreground.withOpacity(0.7)..style = PaintingStyle.fill,
+          );
+        }
+        break;
+
+    // ── TREES ─────────────────────────────────────────────────────────────
+      case PatternType.trees:
+        final paragraphBuilder = ParagraphBuilder(
+          ParagraphStyle(
+            fontSize: symbolSize,
+            textAlign: TextAlign.center,
+          ),
+        )..addText('🌳');
+        final paragraph = paragraphBuilder.build()
+          ..layout(ParagraphConstraints(width: dim));
+        canvas.drawParagraph(
+          paragraph,
+          Offset(0, (dim - paragraph.height) / 2),
+        );
+        break;
+
+    // ── WATER ─────────────────────────────────────────────────────────────
+      case PatternType.water:
+        final wavePath = Path()
+          ..moveTo(0, dim / 2)
+          ..quadraticBezierTo(dim / 4, dim / 4, dim / 2, dim / 2)
+          ..quadraticBezierTo(3 * dim / 4, 3 * dim / 4, dim, dim / 2);
+        canvas.drawPath(wavePath, paint);
+        break;
+
+    // ── SAND ──────────────────────────────────────────────────────────────
+      case PatternType.sand:
+        const sandPos = [
+          [0.1, 0.2], [0.4, 0.1], [0.7, 0.3], [0.9, 0.15],
+          [0.2, 0.55], [0.5, 0.45], [0.8, 0.6], [0.15, 0.8],
+          [0.45, 0.75], [0.75, 0.85], [0.6, 0.2], [0.3, 0.9],
+        ];
+        for (final pos in sandPos) {
+          canvas.drawCircle(
+            Offset(pos[0] * dim, pos[1] * dim),
+            strokeWidth * 0.5,
+            fillPaint,
+          );
+        }
+        break;
+
+    // ── ROCKS ─────────────────────────────────────────────────────────────
+      case PatternType.rocks:
+        const rockPos = [
+          [0.1, 0.1], [0.5, 0.2], [0.3, 0.55], [0.7, 0.6], [0.15, 0.75],
+        ];
+        final rockPaint = Paint()
+          ..color = foreground.withOpacity(0.6)
+          ..style = PaintingStyle.fill;
+        for (final pos in rockPos) {
+          canvas.drawRect(
+            Rect.fromLTWH(pos[0] * dim, pos[1] * dim, symbolSize / 3, symbolSize / 3),
+            rockPaint,
+          );
+        }
+        break;
+
+    // ── PARKING ───────────────────────────────────────────────────────────
+      case PatternType.parking:
+        final double w = symbolSize * 0.55;
+        final double h = symbolSize * 0.75;
+        final double lx = (dim - w) / 2;
+        final double ty = (dim - h) / 2;
+        final pPath = Path()
+          ..addRect(Rect.fromLTWH(lx, ty, w * 0.18, h))
+          ..addOval(Rect.fromLTWH(lx, ty, w * 0.85, h * 0.5));
+        canvas.drawPath(pPath, fillPaint);
+        canvas.drawOval(
+          Rect.fromLTWH(lx + w * 0.17, ty + h * 0.08, w * 0.52, h * 0.34),
+          Paint()..color = background..style = PaintingStyle.fill,
+        );
+        break;
+    }
+
+    if (angle != 0) canvas.restore();
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(gap, gap);   // ← toImage uses gap
+    final byteData = await img.toByteData(format: ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  // static Future<Uint8List> _generatePattern({
+  //   required PatternType type,
+  //   required Color foreground,
+  //   required Color background,
+  //   required int size,
+  //   required int strokeWidth,
+  //   required int gap,
+  //   required int angle,
+  // }) async {
+  //   final recorder = PictureRecorder();
+  //   final canvas = Canvas(
+  //     recorder,
+  //     Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble()),
+  //   );
+  //
+  //   // Background
+  //   canvas.drawRect(
+  //     Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble()),
+  //     Paint()
+  //       ..color = background
+  //       ..style = PaintingStyle.fill,
+  //   );
+  //
+  //   final paint = Paint()
+  //     ..color = foreground
+  //     ..strokeWidth = strokeWidth.toDouble()
+  //     ..style = PaintingStyle.stroke;
+  //
+  //   final fillPaint = Paint()
+  //     ..color = foreground
+  //     ..style = PaintingStyle.fill;
+  //
+  //   // Apply rotation around center
+  //   final center = Offset(size / 2, size / 2);
+  //   canvas.save();
+  //   canvas.translate(center.dx, center.dy);
+  //   canvas.rotate(angle * 3.1415926535 / 180.0);
+  //   canvas.translate(-center.dx, -center.dy);
+  //
+  //   final double s = size.toDouble();
+  //
+  //   switch (type) {
+  //   // ── DOTS ──────────────────────────────────────────────────────────────
+  //     case PatternType.dots:
+  //       for (double x = gap / 2; x < s; x += gap) {
+  //       for (double y = gap / 2; y < s; y += gap) {
+  //         // Skip dots too close to the edge to avoid tiling artifacts
+  //         if (x - strokeWidth < 0 || x + strokeWidth > s) continue;
+  //         if (y - strokeWidth < 0 || y + strokeWidth > s) continue;
+  //         canvas.drawCircle(Offset(x, y), strokeWidth.toDouble(), fillPaint);
+  //       }
+  //     }
+  //       break;
+  //
+  //   // ── STRIPES (diagonal) ────────────────────────────────────────────────
+  //     case PatternType.stripes:
+  //       for (double i = -s; i < s * 2; i += gap) {
+  //         canvas.drawLine(
+  //           Offset(i, -s),
+  //           Offset(i, s * 2),
+  //           paint,
+  //         );
+  //       }
+  //       break;
+  //
+  //   // ── GRID (horizontal + vertical lines) ────────────────────────────────
+  //     case PatternType.grid:
+  //       for (double i = -s; i < s * 2; i += gap) {
+  //         canvas.drawLine(Offset(i, -s), Offset(i, s * 2), paint);
+  //         canvas.drawLine(Offset(-s, i), Offset(s * 2, i), paint);
+  //       }
+  //       break;
+  //
+  //   // ── HATCH (45° cross-hatch) ────────────────────────────────────────────
+  //     case PatternType.hatch:
+  //       for (double i = -s; i < s * 2; i += gap) {
+  //         canvas.drawLine(
+  //           Offset(i - s, -s),       // start well outside tile
+  //           Offset(i + s * 2, s * 2), // end well outside tile
+  //           paint,
+  //         );
+  //       }
+  //       break;
+  //
+  //   // ── BUSH (small filled ellipse clusters) ──────────────────────────────
+  //     case PatternType.bush:
+  //       final bushPaint = Paint()
+  //         ..color = foreground
+  //         ..style = PaintingStyle.fill;
+  //       for (double x = gap / 2; x < s * 2; x += gap) {
+  //         for (double y = gap / 2; y < s * 2; y += gap) {
+  //           // offset every other row
+  //           final double ox = (((y / gap).floor()) % 2 == 0) ? 0 : gap / 2;
+  //           final double cx = x + ox;
+  //           // draw a small bush: two overlapping ovals
+  //           canvas.drawOval(
+  //             Rect.fromCenter(
+  //               center: Offset(cx - strokeWidth, y),
+  //               width: gap * 0.55,
+  //               height: gap * 0.38,
+  //             ),
+  //             bushPaint,
+  //           );
+  //           canvas.drawOval(
+  //             Rect.fromCenter(
+  //               center: Offset(cx + strokeWidth, y),
+  //               width: gap * 0.55,
+  //               height: gap * 0.38,
+  //             ),
+  //             bushPaint,
+  //           );
+  //         }
+  //       }
+  //       break;
+  //
+  //   // ── TREES (simple triangle "pine" symbols) ─────────────────────────────
+  //     case PatternType.trees:
+  //       final treePaint = Paint()
+  //         ..color = foreground
+  //         ..style = PaintingStyle.fill;
+  //       final double half = gap * 0.38;
+  //       final double treeH = gap * 0.65;
+  //       for (double x = gap / 2; x < s * 2; x += gap) {
+  //         for (double y = gap / 2; y < s * 2; y += gap) {
+  //           final double ox = (((y / gap).floor()) % 2 == 0) ? 0 : gap / 2;
+  //           final double cx = x + ox;
+  //           final path = Path()
+  //             ..moveTo(cx, y - treeH / 2)           // apex
+  //             ..lineTo(cx - half, y + treeH / 2)    // bottom-left
+  //             ..lineTo(cx + half, y + treeH / 2)    // bottom-right
+  //             ..close();
+  //           canvas.drawPath(path, treePaint);
+  //         }
+  //       }
+  //       break;
+  //
+  //   // ── WATER (horizontal sine-like waves) ────────────────────────────────
+  //     case PatternType.water:
+  //       for (double y = gap / 2; y < s * 2; y += gap) {
+  //         final path = Path();
+  //         path.moveTo(-s, y);
+  //         double x = -s;
+  //         bool up = true;
+  //         while (x < s * 2) {
+  //           final double waveW = gap * 0.9;
+  //           final double waveH = gap * 0.28;
+  //           path.relativeQuadraticBezierTo(
+  //             waveW / 2, up ? -waveH : waveH,
+  //             waveW, 0,
+  //           );
+  //           x += waveW;
+  //           up = !up;
+  //         }
+  //         canvas.drawPath(path, paint);
+  //       }
+  //       break;
+  //
+  //   // ── SAND (tiny scattered dots, denser) ────────────────────────────────
+  //     case PatternType.sand:
+  //       final sandPaint = Paint()
+  //         ..color = foreground
+  //         ..style = PaintingStyle.fill;
+  //       final double dotR = strokeWidth * 0.6;
+  //       final double sandGap = gap * 0.55;
+  //       for (double x = 0; x < s * 2; x += sandGap) {
+  //         for (double y = 0; y < s * 2; y += sandGap) {
+  //           // stagger rows slightly
+  //           final double ox = (((y / sandGap).floor()) % 2 == 0) ? 0 : sandGap / 2;
+  //           canvas.drawCircle(Offset(x + ox, y), dotR, sandPaint);
+  //         }
+  //       }
+  //       break;
+  //
+  //   // ── ROCKS (irregular filled polygons) ─────────────────────────────────
+  //     case PatternType.rocks:
+  //       final rockPaint = Paint()
+  //         ..color = foreground
+  //         ..style = PaintingStyle.stroke
+  //         ..strokeWidth = strokeWidth.toDouble();
+  //       final double r = gap * 0.38;
+  //       for (double x = gap / 2; x < s * 2; x += gap) {
+  //         for (double y = gap / 2; y < s * 2; y += gap) {
+  //           final double ox = (((y / gap).floor()) % 2 == 0) ? 0 : gap / 2;
+  //           final double cx = x + ox;
+  //           // irregular hexagon approximation
+  //           final path = Path();
+  //           final offsets = [
+  //             Offset(cx + r * 0.6,  y - r),
+  //             Offset(cx + r,        y - r * 0.3),
+  //             Offset(cx + r * 0.8,  y + r * 0.7),
+  //             Offset(cx - r * 0.4,  y + r),
+  //             Offset(cx - r,        y + r * 0.2),
+  //             Offset(cx - r * 0.7,  y - r * 0.8),
+  //           ];
+  //           path.moveTo(offsets[0].dx, offsets[0].dy);
+  //           for (int i = 1; i < offsets.length; i++) {
+  //             path.lineTo(offsets[i].dx, offsets[i].dy);
+  //           }
+  //           path.close();
+  //           canvas.drawPath(path, rockPaint);
+  //         }
+  //       }
+  //       break;
+  //
+  //   // ── PARKING (grid + "P" symbol hint via crossed lines) ────────────────
+  //     case PatternType.parking:
+  //     // Bold grid
+  //       final gridPaint = Paint()
+  //         ..color = foreground
+  //         ..strokeWidth = strokeWidth * 1.6
+  //         ..style = PaintingStyle.stroke;
+  //       for (double i = -s; i < s * 2; i += gap) {
+  //         canvas.drawLine(Offset(i, -s), Offset(i, s * 2), gridPaint);
+  //         canvas.drawLine(Offset(-s, i), Offset(s * 2, i), gridPaint);
+  //       }
+  //       // Small filled square at each intersection to emphasize parking cells
+  //       final dotP = Paint()
+  //         ..color = foreground
+  //         ..style = PaintingStyle.fill;
+  //       for (double x = 0; x < s * 2; x += gap) {
+  //         for (double y = 0; y < s * 2; y += gap) {
+  //           canvas.drawRect(
+  //             Rect.fromCenter(
+  //               center: Offset(x, y),
+  //               width: strokeWidth * 2.5,
+  //               height: strokeWidth * 2.5,
+  //             ),
+  //             dotP,
+  //           );
+  //         }
+  //       }
+  //       break;
+  //
+  //   // ── RESTRICTED (diagonal hazard stripes, alternating) ─────────────────
+  //     case PatternType.restricted:
+  //       final stripePaint = Paint()
+  //         ..color = foreground
+  //         ..strokeWidth = gap * 0.45
+  //         ..style = PaintingStyle.stroke;
+  //       bool drawStripe = true;
+  //       for (double i = -s * 2; i < s * 3; i += gap) {
+  //         if (drawStripe) {
+  //           canvas.drawLine(
+  //             Offset(i, -s),
+  //             Offset(i + s * 2, s * 2),
+  //             stripePaint,
+  //           );
+  //         }
+  //         drawStripe = !drawStripe;
+  //       }
+  //       break;
+  //   }
+  //
+  //   canvas.restore();
+  //
+  //   final picture = recorder.endRecording();
+  //   final img = await picture.toImage(size, size);
+  //   final byteData = await img.toByteData(format: ImageByteFormat.png);
+  //   return byteData!.buffer.asUint8List();
+  // }
 
 }
 
