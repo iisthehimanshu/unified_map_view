@@ -339,6 +339,10 @@ class GeoJsonMarker {
 
     if(feature.properties?["imageFile"] != null && feature.properties?["imageFile"].isNotEmpty){
       assetPath = "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
+    }
+
+    if(feature.properties?["animalRef"]?['icon'] != null && feature.properties?["animalRef"]?['icon'].isNotEmpty){
+      assetPath = feature.properties?["animalRef"]['icon'];
       textVisibility=true;
       customRendering=true;
     }

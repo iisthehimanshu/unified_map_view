@@ -38,6 +38,7 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _clusterSourceId = 'markers-source';
   final String _normalTextMarkerLayerId = 'normalText-markers-layer';
   final String _normalIconMarkerLayerId = 'normalIcon-markers-layer';
+  final String _customRenderingMarkerLayerId = 'customRendering-markers-layer';
   final String _normalFixedMarkerLayerId = 'normalFixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
@@ -144,7 +145,7 @@ class MapplsMapProvider extends BaseMapProvider {
                 final cameraPos = _controller!.cameraPosition;
                 // print("cameraPos tilt ${cameraPos?.tilt}");
                 // print("cameraPos bearing ${cameraPos?.bearing}");
-                // print("cameraPos zoom ${cameraPos?.zoom}");
+                print("cameraPos zoom ${cameraPos?.zoom}");
                 // print("cameraPos target ${cameraPos?.target}");
                 config.onCameraMove(UnifiedCameraPosition(
                   mapLocation: MapLocation(
@@ -494,6 +495,7 @@ class MapplsMapProvider extends BaseMapProvider {
 
       final features = symbols.map((marker) {
         final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)?"center":"bottom";
+        bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
         return {
           'type': 'Feature',
           'geometry': {
@@ -511,6 +513,8 @@ class MapplsMapProvider extends BaseMapProvider {
             'iconAnchor': anchor,
             'section': marker.properties?['type'] == "Section",
             'subSection': marker.properties?['type'] == "Sub Section",
+            'sectionId': hasSectionId,
+            'customRendering':marker.customRendering
           }
         };
       }).toList();
@@ -857,26 +861,41 @@ class MapplsMapProvider extends BaseMapProvider {
   final creator = UnifiedMarkerCreator();
 
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
-    if(marker.assetPath == null) return false;
+    if (marker.assetPath == null) return false;
     try {
-      if(marker.customRendering){
-        MarkerIconWithAnchor markerIconWithAnchor = await creator.createUnifiedMarker(
-            imageSize: marker.imageSize??const Size(25, 25),
-            fontSize: 8.5,
-            text: "",
-            imageSource: marker.assetPath,
-            layout: MarkerLayout.horizontal,
-            textFormat: TextFormat.smartWrap,
-            textColor: const Color(0xff000000),
-            customAnchor: marker.renderAnchor??marker.anchor??Offset(0.5, 0.5),
-            expandCanvasForRotation: true
+      if (marker.customRendering) {
+        MarkerIconWithAnchor markerIconWithAnchorWithText =
+        await creator.createUnifiedMarker(
+          imageSize: marker.imageSize ?? const Size(85, 85),
+          fontSize: 14.5,
+          text: marker.textVisibility? marker.title??"":"",
+          imageSource: marker.assetPath,
+          layout: MarkerLayout.vertical,
+          textFormat: TextFormat.smartWrap,
+          textColor: const Color(0xff000000),
+          customAnchor:
+          marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
+          expandCanvasForRotation: true,
         );
-        print("markerIconWithAnchor $markerIconWithAnchor");
-        final Uint8List iconBytes = markerIconWithAnchor.icon;
+
+        MarkerIconWithAnchor markerIconWithAnchorWithoutText =
+        await creator.createUnifiedMarker(
+          imageSize: marker.imageSize ?? const Size(85, 85),
+          fontSize: 14.5,
+          text: "",
+          imageSource: marker.assetPath,
+          layout: MarkerLayout.vertical,
+          textFormat: TextFormat.smartWrap,
+          textColor: const Color(0xff000000),
+          customAnchor: marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
+        );
+        final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
+        final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
         await controller.addImage(marker.id, iconBytes);
-        marker.anchor = markerIconWithAnchor.anchor;
+        await controller.addImage("${marker.id}-small", iconBytes2);
+        marker.anchor = markerIconWithAnchorWithText.anchor;
         return true;
-      }else{
+      } else {
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
           final response = await CacheController().fetchWithCache(marker.assetPath!);
@@ -885,7 +904,7 @@ class MapplsMapProvider extends BaseMapProvider {
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
         }
-        if(iconBytes != null){
+        if (iconBytes != null) {
           await controller.addImage(marker.id, iconBytes);
           return true;
         }
@@ -940,41 +959,40 @@ class MapplsMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      // Layer 1: Normal text markers (no icon, no bearing) - lowest priority
+      // Layer 1: Normal text markers (no icon, no bearing)
       await controller.addSymbolLayer(
-          _clusterSourceId,
-          _normalTextMarkerLayerId,
-          SymbolLayerProperties(
-            textField: ["get", "title"], // ✅ Just get, no case/has
-            textSize: 14,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 1.5,
-            textAnchor: "center",
-            textAllowOverlap: false,
-          ),
-          filter: [
-            "all",
-            ["!", ["to-boolean", ["get", "isPriority"]]],
-            ["!", ["to-boolean", ["get", "section"]]],
-            ["!", ["to-boolean", ["get", "subSection"]]],
-            ["!", ["to-boolean", ["get", "bearing"]]],
-            ["!", ["to-boolean", ["get", "icon"]]],
-          ],
-          enableInteraction: true,
-          belowLayerId: null,
-          // minzoom: 18.0
+        _clusterSourceId,
+        _normalTextMarkerLayerId,
+        const SymbolLayerProperties(
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "center",
+          textAllowOverlap: false,
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["!", ["to-boolean", ["get", "icon"]]],
+        ],
+        enableInteraction: true,
+        belowLayerId: null,
+          minzoom: 18.0
       );
 
       // Layer 2: Normal icon markers (has icon, no bearing)
       await controller.addSymbolLayer(
         _clusterSourceId,
-        _normalIconMarkerLayerId,
-        SymbolLayerProperties(
+        "$_normalIconMarkerLayerId-withSectionId",
+        const SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 0.8,
-          iconAnchor: "center",
-
+          iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -984,6 +1002,7 @@ class MapplsMapProvider extends BaseMapProvider {
           textOffset: ["literal", [0, 1.5]],
           textAllowOverlap: false,
           iconAllowOverlap: false,
+
         ),
         filter: [
           "all",
@@ -991,108 +1010,169 @@ class MapplsMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          ["to-boolean", ["get", "sectionId"]],
+          ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
         ],
         enableInteraction: true,
         belowLayerId: _normalTextMarkerLayerId,
-        // minzoom: 18.0,
+        minzoom: 18.0,
       );
 
-
-      // Layer 3: Normal fixed/rotated markers (has bearing) - show at zoom 17+
-      await controller.addSymbolLayer(
-          _clusterSourceId,
-          _normalFixedMarkerLayerId,
-          SymbolLayerProperties(
-            textRotate: ["get", "bearing"],
-            textRotationAlignment: "map",
-            textField: ["get", "title"],
-            textSize: 12,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
-            textAnchor: "left",
-            textAllowOverlap: false,
-          ),
-          filter: [
-            "all",
-            ["!", ["to-boolean", ["get", "isPriority"]]],
-            ["!", ["to-boolean", ["get", "section"]]],
-            ["!", ["to-boolean", ["get", "subSection"]]],
-            ["to-boolean", ["get", "bearing"]],
-          ],
-          enableInteraction: true,
-          belowLayerId: _normalIconMarkerLayerId,
-          // minzoom: 18.0
-      );
-
-      // Layer 4: Section markers (zoom < 17)
       await controller.addSymbolLayer(
         _clusterSourceId,
-        _sectionMarkerLayerId,
-        SymbolLayerProperties(
+        "$_normalIconMarkerLayerId-withoutSectionId",
+        const SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 0.8,
-          iconAnchor: "center",
-
+          iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
           textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: ["literal", [0, 1.5]],
+          textAllowOverlap: false,
+          iconAllowOverlap: false,
 
-          // 👇 Conditional anchor
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["!", ["to-boolean", ["get", "sectionId"]]],
+          ["!", ["to-boolean", ["get", "customRendering"]]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalTextMarkerLayerId,
+      );
+
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _customRenderingMarkerLayerId,
+        const SymbolLayerProperties(
+          iconImage: [
+            "step",
+            ["zoom"],
+            ["concat", ["get", "icon"], "-small"], // below zoom 16 → small icon
+            16,
+            ["get", "icon"],                       // zoom 16+ → full icon
+          ],
+          iconSize: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13,  0.2, // at zoom 8  → 30% size
+            18.3,  1.0,   // at zoom 8  → 30% size
+          ],
+          iconAnchor: ["get", "iconAnchor"],
+          iconAllowOverlap: false,
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["to-boolean", ["get", "customRendering"]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+      );
+
+      // Layer 3: Normal fixed/rotated markers (has bearing)
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _normalFixedMarkerLayerId,
+        const SymbolLayerProperties(
+          textRotate: ["get", "bearing"],
+          textRotationAlignment: "map",
+          textField: ["get", "title"],
+          textSize: 12,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 2,
+          textAnchor: "left",
+          textAllowOverlap: false,
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["to-boolean", ["get", "bearing"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalIconMarkerLayerId,
+          minzoom: 18.0
+      );
+
+      // Layer 4: Section markers
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _sectionMarkerLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 0.8,
+          iconAnchor: ["get", "iconAnchor"],
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
           textAnchor: [
             "case",
-            ["has", "icon"],     // if icon exists
-            "top",               // place text above icon
-            "center"             // else center text
+            ["has", "icon"],
+            "top",
+            "center"
           ],
-
           textOffset: [
             "case",
             ["has", "icon"],
-            ["literal", [0, 1.5]],   // offset only if icon exists
-            ["literal", [0, 0]]      // no offset if no icon
+            ["literal", [0, 0.2]],
+            ["literal", [0, 0]]
           ],
-
           textAllowOverlap: false,
           iconAllowOverlap: false,
         ),
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,
-        // maxzoom: 17.0,
+        maxzoom: 17.0,
       );
 
       // Layer 4b: SubSection markers
       await controller.addSymbolLayer(
-          _clusterSourceId,
-          _subSectionMarkerLayerId,
-          SymbolLayerProperties(
-            iconImage: ["get", "icon"],
-            iconSize: 1.5,
-            textField: ["get", "title"],
-            textSize: 12,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
-            textAnchor: "center",
-            iconAllowOverlap: true,
-            textAllowOverlap: true,
-          ),
-          filter: ["to-boolean", ["get", "subSection"]],
-          enableInteraction: true,
-          belowLayerId: _normalFixedMarkerLayerId,
-          // maxzoom: 18.0,
-          // minzoom: 17.0
+        _clusterSourceId,
+        _subSectionMarkerLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          textField: ["get", "title"],
+          textSize: 12,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 2,
+          textAnchor: "center",
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: ["to-boolean", ["get", "subSection"]],
+        enableInteraction: true,
+        belowLayerId: _normalFixedMarkerLayerId,
+        maxzoom: 18.0,
+        minzoom: 17.0
       );
 
       // Layer 5: Rotation markers (separate source)
       await controller.addSymbolLayer(
         _rotationSourceId,
         _rotationMarkerLayerId,
-        SymbolLayerProperties(
+        const SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 1.5,
           iconRotate: ["get", "bearing"],
@@ -1103,29 +1183,29 @@ class MapplsMapProvider extends BaseMapProvider {
         belowLayerId: _sectionMarkerLayerId,
       );
 
-      // Layer 6: Priority markers (rendered on top - always visible)
+      // Layer 6: Priority markers (always on top)
       await controller.addSymbolLayer(
-          _clusterSourceId,
-          _priorityMarkerLayerId,
-          SymbolLayerProperties(
-            iconImage: ["get", "icon"],
-            iconSize: 1.5,
-            iconAllowOverlap: true,
-            textAllowOverlap: true,
-          ),
-          filter: ["to-boolean", ["get", "isPriority"]],
-          enableInteraction: true,
-          belowLayerId: null
+        _clusterSourceId,
+        _priorityMarkerLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: ["to-boolean", ["get", "isPriority"]],
+        enableInteraction: true,
+        belowLayerId: null,
       );
 
       _isClusteringEnabled = true;
 
       if (_symbols.isNotEmpty) {
-        List<GeoJsonMarker> symbols = [..._symbols];
+        final symbols = [..._symbols];
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
     } catch (e, stack) {
-      print('Error enabling clustering: $e');
+      print('Error enabling marker layers: $e');
       print('Stack trace: $stack');
     }
   }
