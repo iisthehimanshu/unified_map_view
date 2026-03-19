@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:path_provider/path_provider.dart';
@@ -10,7 +11,7 @@ class CacheController {
   Future<Uint8List?> fetchWithCache(String url) async {
 
     final dir = await getApplicationCacheDirectory();
-    final fileName = base64Url.encode(utf8.encode(url));
+    final fileName = md5.convert(utf8.encode(url)).toString(); // 32 chars
     final file = File('${dir.path}/$fileName');
 
     // Always serve from disk if available (works offline forever)

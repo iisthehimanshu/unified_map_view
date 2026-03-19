@@ -77,13 +77,13 @@ class MaplibreMapProvider extends BaseMapProvider {
         MaplibreMap(
           trackCameraPosition: true,
           initialCameraPosition: CameraPosition(
-            target: LatLng(
-              config.initialLocation.mapLocation.latitude,
-              config.initialLocation.mapLocation.longitude,
-            ),
-            zoom: config.initialLocation.zoom,
-            tilt: config.initialLocation.tilt,
-            bearing: config.initialLocation.bearing
+              target: LatLng(
+                config.initialLocation.mapLocation.latitude,
+                config.initialLocation.mapLocation.longitude,
+              ),
+              zoom: config.initialLocation.zoom,
+              tilt: config.initialLocation.tilt,
+              bearing: config.initialLocation.bearing
           ),
           styleString: osmRasterStyle,
           onMapCreated: (MaplibreMapController controller) async {
@@ -107,6 +107,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                     _normalTextMarkerLayerId,
                     _normalIconMarkerLayerId,
                     _normalFixedMarkerLayerId,
+                    _customRenderingMarkerLayerId,
                     _priorityMarkerLayerId,
                     _rotationMarkerLayerId,
                   ],
@@ -547,6 +548,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
             ? "center"
             : "bottom";
+        bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
         return {
           'type': 'Feature',
           'geometry': {
@@ -571,6 +573,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             'iconAnchor': anchor,
             'section': marker.properties?['type'] == "Section",
             'subSection': marker.properties?['type'] == "Sub Section",
+            'sectionId': hasSectionId,
             'customRendering':marker.customRendering
           }
         };
@@ -954,12 +957,11 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   final creator = UnifiedMarkerCreator();
 
-  Future<bool> _loadMarkerIcon(
-      MaplibreMapController controller, GeoJsonMarker marker) async {
+  Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
-        MarkerIconWithAnchor markerIconWithAnchor =
+        MarkerIconWithAnchor markerIconWithAnchorWithText =
         await creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
           fontSize: 14.5,
@@ -972,16 +974,29 @@ class MaplibreMapProvider extends BaseMapProvider {
           marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
           expandCanvasForRotation: true,
         );
-        print("markerIconWithAnchor $markerIconWithAnchor");
-        final Uint8List iconBytes = markerIconWithAnchor.icon;
+
+        MarkerIconWithAnchor markerIconWithAnchorWithoutText =
+        await creator.createUnifiedMarker(
+          imageSize: marker.imageSize ?? const Size(85, 85),
+          fontSize: 14.5,
+          text: "",
+          imageSource: marker.assetPath,
+          layout: MarkerLayout.vertical,
+          textFormat: TextFormat.smartWrap,
+          textColor: const Color(0xff000000),
+          customAnchor: marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
+        );
+        final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
+        final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
         await controller.addImage(marker.id, iconBytes);
-        marker.anchor = markerIconWithAnchor.anchor;
+        await controller.addImage("${marker.id}-small", iconBytes2);
+        marker.anchor = markerIconWithAnchorWithText.anchor;
         return true;
       } else {
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
           final response = await CacheController().fetchWithCache(marker.assetPath!);
-         iconBytes = response;
+          iconBytes = response;
         } else {
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
@@ -1031,7 +1046,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> enableMarkerLayers(dynamic controller) async {
-    if (controller is! MaplibreMapController) return;
+    if (controller is! MapLibreMapController) return;
 
     try {
       await controller.addGeoJsonSource(_clusterSourceId, {
@@ -1046,33 +1061,34 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       // Layer 1: Normal text markers (no icon, no bearing)
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        _normalTextMarkerLayerId,
-        const SymbolLayerProperties(
-          textField: ["get", "title"],
-          textSize: 14,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: "center",
-          textAllowOverlap: false,
-        ),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "bearing"]]],
-          ["!", ["to-boolean", ["get", "icon"]]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
+          _clusterSourceId,
+          _normalTextMarkerLayerId,
+          const SymbolLayerProperties(
+            textField: ["get", "title"],
+            textSize: 14,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 1.5,
+            textAnchor: "center",
+            textAllowOverlap: false,
+          ),
+          filter: [
+            "all",
+            ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "section"]]],
+            ["!", ["to-boolean", ["get", "subSection"]]],
+            ["!", ["to-boolean", ["get", "bearing"]]],
+            ["!", ["to-boolean", ["get", "icon"]]],
+          ],
+          enableInteraction: true,
+          belowLayerId: null,
+          minzoom: 18.0
       );
 
       // Layer 2: Normal icon markers (has icon, no bearing)
       await controller.addSymbolLayer(
         _clusterSourceId,
-        _normalIconMarkerLayerId,
+        "$_normalIconMarkerLayerId-withSectionId",
         const SymbolLayerProperties(
           iconImage: ["get", "icon"],
           iconSize: 0.8,
@@ -1094,6 +1110,40 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          ["to-boolean", ["get", "sectionId"]],
+          ["!", ["to-boolean", ["get", "customRendering"]]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalTextMarkerLayerId,
+        minzoom: 18.0,
+      );
+
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        "$_normalIconMarkerLayerId-withoutSectionId",
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 0.8,
+          iconAnchor: ["get", "iconAnchor"],
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: ["literal", [0, 1.5]],
+          textAllowOverlap: false,
+          iconAllowOverlap: false,
+
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["!", ["to-boolean", ["get", "sectionId"]]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
         ],
@@ -1105,19 +1155,22 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         _customRenderingMarkerLayerId,
         const SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 0.8,
+          iconImage: [
+            "step",
+            ["zoom"],
+            ["concat", ["get", "icon"], "-small"],
+            16,
+            ["get", "icon"],
+          ],
+          iconSize: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13,  0.2, // at zoom 8  → 30% size
+            18.3,  1.0,   // at zoom 8  → 30% size
+          ],
           iconAnchor: ["get", "iconAnchor"],
-          // textField: ["get", "title"],
-          textSize: 14,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: "top",
-          textOffset: ["literal", [0, 1.5]],
-          textAllowOverlap: false,
           iconAllowOverlap: false,
-
         ),
         filter: [
           "all",
@@ -1129,33 +1182,33 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "icon"]],
         ],
         enableInteraction: true,
-        belowLayerId: _normalTextMarkerLayerId,
       );
 
       // Layer 3: Normal fixed/rotated markers (has bearing)
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        _normalFixedMarkerLayerId,
-        const SymbolLayerProperties(
-          textRotate: ["get", "bearing"],
-          textRotationAlignment: "map",
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "left",
-          textAllowOverlap: false,
-        ),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["to-boolean", ["get", "bearing"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: _normalIconMarkerLayerId,
+          _clusterSourceId,
+          _normalFixedMarkerLayerId,
+          const SymbolLayerProperties(
+            textRotate: ["get", "bearing"],
+            textRotationAlignment: "map",
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: "left",
+            textAllowOverlap: false,
+          ),
+          filter: [
+            "all",
+            ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "section"]]],
+            ["!", ["to-boolean", ["get", "subSection"]]],
+            ["to-boolean", ["get", "bearing"]],
+          ],
+          enableInteraction: true,
+          belowLayerId: _normalIconMarkerLayerId,
+          minzoom: 18.0
       );
 
       // Layer 4: Section markers
@@ -1180,7 +1233,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           textOffset: [
             "case",
             ["has", "icon"],
-            ["literal", [0, 1.5]],
+            ["literal", [0, 0.2]],
             ["literal", [0, 0]]
           ],
           textAllowOverlap: false,
@@ -1189,27 +1242,30 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,
+        maxzoom: 17.0,
       );
 
       // Layer 4b: SubSection markers
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        _subSectionMarkerLayerId,
-        const SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 1.5,
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "center",
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-        ),
-        filter: ["to-boolean", ["get", "subSection"]],
-        enableInteraction: true,
-        belowLayerId: _normalFixedMarkerLayerId,
+          _clusterSourceId,
+          _subSectionMarkerLayerId,
+          const SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: "center",
+            iconAllowOverlap: true,
+            textAllowOverlap: true,
+          ),
+          filter: ["to-boolean", ["get", "subSection"]],
+          enableInteraction: true,
+          belowLayerId: _normalFixedMarkerLayerId,
+          maxzoom: 18.0,
+          minzoom: 17.0
       );
 
       // Layer 5: Rotation markers (separate source)

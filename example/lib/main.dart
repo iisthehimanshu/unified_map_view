@@ -60,7 +60,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   void initState() {
     super.initState();
     _unifiedMapController = UnifiedMapController(
-        initialProvider: MapProvider.mapLibre,
+        initialProvider: MapProvider.mappls,
         venueName: 'NationalZoologicalPark',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
