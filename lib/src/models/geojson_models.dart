@@ -362,7 +362,7 @@ class GeoJsonMarker {
     }
 
     parsedTitle =
-        pick(feature.properties?["exhibitorRef"]?["organizationDetails"]?["organizationName"]) ??
+        pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
             pick(feature.properties?["sponsorRef"]?["name"]) ??
             pick(feature.properties?["renderName"]) ??
             pick(feature.properties?["name"]) ??
