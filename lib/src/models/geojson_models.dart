@@ -1,7 +1,6 @@
 // lib/src/models/geojson_models.dart
 
 import 'dart:ui';
-import 'dart:developer' as developer;
 import 'dart:convert';
 
 import '../../unified_map_view.dart';
@@ -362,7 +361,8 @@ class GeoJsonMarker {
     }
 
     parsedTitle =
-        pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
+            pick(feature.properties?["animalRef"]?["common_name"][AppConfig.languageCode]) ??
+            pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
             pick(feature.properties?["sponsorRef"]?["name"]) ??
             pick(feature.properties?["renderName"]) ??
             pick(feature.properties?["name"]) ??

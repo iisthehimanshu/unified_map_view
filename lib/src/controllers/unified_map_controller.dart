@@ -42,10 +42,13 @@ class UnifiedMapController extends ChangeNotifier {
 
     this.onReadyLandmarkSelectionID,
 
-    String? url
+    String? url,
 
-  }) {print("insideuified $initialProvider");
+    String languageCode = 'en'
+
+  }) {
     AppConfig.url = url;
+    AppConfig.setLanguage(value: languageCode);
 
     _currentProvider = initialProvider;
 

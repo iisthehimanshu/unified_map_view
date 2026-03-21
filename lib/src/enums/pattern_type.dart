@@ -12,8 +12,6 @@ enum PatternType {
   restricted;
 }
 
-
-
 PatternType? getPatternType(String? patternName) {
   switch (patternName) {
     case 'dots':
