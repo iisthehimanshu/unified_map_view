@@ -864,6 +864,7 @@ class MapplsMapProvider extends BaseMapProvider {
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
+        Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
         MarkerIconWithAnchor markerIconWithAnchorWithText =
         await creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
@@ -873,9 +874,8 @@ class MapplsMapProvider extends BaseMapProvider {
           layout: MarkerLayout.vertical,
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
-          customAnchor:
-          marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
-          expandCanvasForRotation: true,
+          customAnchor: customAnchor,
+          expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
         );
 
         MarkerIconWithAnchor markerIconWithAnchorWithoutText =
@@ -887,7 +887,7 @@ class MapplsMapProvider extends BaseMapProvider {
           layout: MarkerLayout.vertical,
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
-          customAnchor: marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
+          customAnchor: customAnchor
         );
         final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
         final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;

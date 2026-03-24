@@ -961,6 +961,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
+        Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
         MarkerIconWithAnchor markerIconWithAnchorWithText =
         await creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
@@ -970,9 +971,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           layout: MarkerLayout.vertical,
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
-          customAnchor:
-          marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
-          expandCanvasForRotation: true,
+          customAnchor: customAnchor,
+          expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
         );
 
         MarkerIconWithAnchor markerIconWithAnchorWithoutText =
@@ -984,7 +984,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           layout: MarkerLayout.vertical,
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
-          customAnchor: marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5),
+          customAnchor: customAnchor,
         );
         final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
         final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
@@ -1099,7 +1099,14 @@ class MaplibreMapProvider extends BaseMapProvider {
           textHaloColor: "#f8f9fa",
           textHaloWidth: 1.5,
           textAnchor: "top",
-          textOffset: ["literal", [0, 1.5]],
+          textOffset: [
+            "case",
+            ["==", ["get", "iconAnchor"], "bottom"],
+            ["literal", [0, 0.0]],   // closer when anchor is bottom
+            ["==", ["get", "iconAnchor"], "center"],
+            ["literal", [0, 1.5]],   // farther when anchor is center
+            ["literal", [0, 1.5]]    // default fallback
+          ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
 
@@ -1132,7 +1139,14 @@ class MaplibreMapProvider extends BaseMapProvider {
           textHaloColor: "#f8f9fa",
           textHaloWidth: 1.5,
           textAnchor: "top",
-          textOffset: ["literal", [0, 1.5]],
+          textOffset: [
+            "case",
+            ["==", ["get", "iconAnchor"], "bottom"],
+            ["literal", [0, 0.0]],   // closer when anchor is bottom
+            ["==", ["get", "iconAnchor"], "center"],
+            ["literal", [0, 1.5]],   // farther when anchor is center
+            ["literal", [0, 1.5]]    // default fallback
+          ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
 

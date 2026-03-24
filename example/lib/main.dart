@@ -61,7 +61,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'NationalZoologicalPark',
+        venueName: 'DelhiMetro',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
@@ -123,7 +123,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   }
 
   void localizeUser(){
-    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.54341202393808, longitude: 77.20446501199446), "696f514c1caa6fd666e58a74", -1));
+    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.544238796241345, longitude: 77.20697074957559), "696f514c1caa6fd666e58a74", -1));
   }
 
   void _stopMovingUser() {
