@@ -38,7 +38,8 @@ enum LandmarkAssetType {
   kiosk,
   waitingArea,
   tuckShop,
-  stationary
+  stationary,
+  buggyPoint
   ;
 
   String get assetPath {
@@ -119,6 +120,8 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/tuck_shop.png';
       case LandmarkAssetType.stationary:
         return 'packages/unified_map_view/assets/markers/stationary.png';
+      case LandmarkAssetType.buggyPoint:
+        return 'packages/unified_map_view/assets/markers/buggy_point.png';
     }
   }
 
@@ -156,6 +159,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.waitingArea:
       case LandmarkAssetType.tuckShop:
       case LandmarkAssetType.stationary:
+      case LandmarkAssetType.buggyPoint:
         return false;
 
       case LandmarkAssetType.cafeteria:
@@ -184,6 +188,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.selectedPinSelection:
       case LandmarkAssetType.kiosk:
       case LandmarkAssetType.waitingArea:
+      case LandmarkAssetType.buggyPoint:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.room:

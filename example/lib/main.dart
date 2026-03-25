@@ -61,12 +61,12 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'DelhiMetro',
+        venueName: 'NationalZoologicalPark',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
           bearing: 0.0,
-          tilt: 40.0
+          tilt: 0.0
         ),
       url: "https://dev.iwayplus.in",
     );
@@ -228,39 +228,14 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                   onPressed: _isLoading
                       ? null
                       : () async {
-                    _stopMovingUser();
                     await _unifiedMapController.deSelectLocation();
-                    await _unifiedMapController.clearMarkers();
-
-                    // Move user to a new random location
-                    final randomLat = 28.6139 + (0.01 * (DateTime.now().millisecond % 10));
-                    final randomLng = 77.2090 + (0.01 * (DateTime.now().second % 10));
-                    final newLocation = MapLocation(
-                      latitude: randomLat,
-                      longitude: randomLng,
-                    );
-
-                    // Re-add marker at new location
-                    // Future.delayed(const Duration(milliseconds: 500), () async {
-                    //   await _addUserMarker();
-                    //   await _unifiedMapController.moveMarker(_userMarkerId, newLocation);
-                    // });
-
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Moving user to random location with animation!'),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    }
                   },
                   icon: const Icon(Icons.refresh),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
                   ),
-                  label: const Text('Clear & Move User'),
+                  label: const Text('Clear'),
                 ),
               ],
             ),

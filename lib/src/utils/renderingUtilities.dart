@@ -221,6 +221,9 @@ class RenderingUtilities{
       if(type.contains('stationary')){
         return LandmarkAssetType.stationary;
       }
+      if(type.contains('pick')){
+        return LandmarkAssetType.buggyPoint;
+      }
 
       return null;
     } catch (e) {

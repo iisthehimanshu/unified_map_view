@@ -21,7 +21,7 @@ class FloorSpeedDial extends StatelessWidget {
     if(controller.focusedBuildingAvailableFloors == null || controller.focusBuildingSelectedFloor == null) return SizedBox.shrink();
     var  selectedFloor =  controller.focusBuildingSelectedFloor!;
     List<SpeedDialChild> floorsChildren = floorChildren();
-    if (floorsChildren.isEmpty) return const SizedBox.shrink();
+    if (floorsChildren.isEmpty || floorsChildren.length == 1) return const SizedBox.shrink();
 
     return SafeArea(
       child: SpeedDial(

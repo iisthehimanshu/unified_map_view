@@ -38,6 +38,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _customRenderingMarkerLayerId = 'customRendering-markers-layer';
   final String _normalFixedMarkerLayerId = 'normalFixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
+  final String _selectedMarkerLayerId = 'selected-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
 
@@ -51,7 +52,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _normalPolygonLayerId = 'normal-polygons-layer';
   final String _patternPolygonLayerId = 'pattern-polygons-layer';
   final String _selectedPolygonLayerId = 'selected-polygon-layer';
-  final String _patchPolygonLayerId = 'patch-polygon-layer';
+  final String _patchBelowPolygonLayerId = 'patch-below-polygon-layer';
+  final String _patchAbovePolygonLayerId = 'patch-above-polygon-layer';
   final String _sectionPolygonLayerId = 'section-polygon-layer';
   final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
@@ -128,6 +130,23 @@ class MaplibreMapProvider extends BaseMapProvider {
                   }
                 }
 
+                final tappedPolygon = _hitTestPolygons(
+                  coordinates.latitude,
+                  coordinates.longitude,
+                );
+
+                print("tappedPolygon.id ${tappedPolygon?.id}");
+
+                if (tappedPolygon != null &&
+                    !tappedPolygon.id.toLowerCase().contains("boundary")) {
+                  final polygonId = _extractPolygonIdFromTap(tappedPolygon.id);
+                  if (polygonId != null &&
+                      !polygonId.toLowerCase().contains("boundary")) {
+                    selectLocation(controller, polygonId);
+                  }
+                  return;
+                }
+
                 // Fall through to polygon tap
                 if (id.isNotEmpty) {
                   final polygonId = _extractPolygonIdFromTap(id);
@@ -184,6 +203,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           onCameraIdle: () async {
             if (_controller != null) {
               try {
+                print("zoom ${_controller?.cameraPosition?.zoom}");
                 final bounds = await _controller!.getVisibleRegion();
                 final centerLat =
                     (bounds.northeast.latitude + bounds.southwest.latitude) /
@@ -207,7 +227,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           },
           myLocationEnabled: config.showUserLocation,
           myLocationTrackingMode: MyLocationTrackingMode.none,
-          compassEnabled: true,
+          compassEnabled: false,
           rotateGesturesEnabled: config.rotateGesturesEnabled,
           scrollGesturesEnabled: config.scrollGesturesEnabled,
           tiltGesturesEnabled: config.tiltGesturesEnabled,
@@ -424,12 +444,12 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> addMarker(dynamic controller, GeoJsonMarker marker) async {
+  Future<void> addMarker(dynamic controller, GeoJsonMarker marker, {String? selectedMarkerId}) async {
     if (controller is MaplibreMapController) {
       await _loadMarkerIcon(controller, marker);
       _symbols.add(marker);
       try {
-        setGeoJsonSource(controller, _symbols, _clusterSourceId);
+        setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
       } catch (e) {
         print("error adding marker $e");
       }
@@ -537,6 +557,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       dynamic controller,
       List<GeoJsonMarker> symbols,
       String sourceID,
+      {String? selectedMarkerId}
       ) async {
     if (controller is MaplibreMapController) {
       if (!_isClusteringEnabled) {
@@ -574,6 +595,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             'section': marker.properties?['type'] == "Section",
             'subSection': marker.properties?['type'] == "Sub Section",
             'sectionId': hasSectionId,
+            'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering
           }
         };
@@ -1071,6 +1093,13 @@ class MaplibreMapProvider extends BaseMapProvider {
             textHaloWidth: 1.5,
             textAnchor: "center",
             textAllowOverlap: false,
+            textOpacity: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12.0, 0.0,
+              14.0, 1.0
+            ],
           ),
           filter: [
             "all",
@@ -1109,7 +1138,20 @@ class MaplibreMapProvider extends BaseMapProvider {
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
-
+          iconOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
+          textOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
         ),
         filter: [
           "all",
@@ -1149,7 +1191,20 @@ class MaplibreMapProvider extends BaseMapProvider {
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
-
+          iconOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
+          textOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
         ),
         filter: [
           "all",
@@ -1185,6 +1240,13 @@ class MaplibreMapProvider extends BaseMapProvider {
           ],
           iconAnchor: ["get", "iconAnchor"],
           iconAllowOverlap: false,
+          iconOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
         ),
         filter: [
           "all",
@@ -1252,6 +1314,20 @@ class MaplibreMapProvider extends BaseMapProvider {
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
+          iconOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
+          textOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
         ),
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
@@ -1274,6 +1350,20 @@ class MaplibreMapProvider extends BaseMapProvider {
             textAnchor: "center",
             iconAllowOverlap: true,
             textAllowOverlap: true,
+            iconOpacity: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12.0, 0.0,
+              14.0, 1.0
+            ],
+            textOpacity: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12.0, 0.0,
+              14.0, 1.0
+            ],
           ),
           filter: ["to-boolean", ["get", "subSection"]],
           enableInteraction: true,
@@ -1312,6 +1402,26 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: null,
       );
 
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _selectedMarkerLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13,  0.2, // at zoom 8  → 30% size
+            20,  1.5,   // at zoom 8  → 30% size
+          ],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: ["to-boolean", ["get", "isSelected"]],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+
       _isClusteringEnabled = true;
 
       if (_symbols.isNotEmpty) {
@@ -1331,7 +1441,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      /// 1️⃣ SECTION (TOP-MOST)
+      /// 1️⃣ SECTION (TOP-MOST among polygon layers)
       await controller.addFillLayer(
         _polygonSourceId,
         _sectionPolygonLayerId,
@@ -1346,6 +1456,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: false,
         maxzoom: 17.0,
@@ -1367,6 +1478,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "subsection"]],
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: false,
         minzoom: 17.0,
@@ -1386,8 +1498,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["to-boolean", ["get", "isSelected"]],
-          ["!", ["has", "height"]],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: true,
         belowLayerId: _subSectionPolygonLayerId,
@@ -1403,10 +1513,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           fillExtrusionBase: ["get", "base_height"],
           fillExtrusionOpacity: 1.0,
         ),
-        filter:[
+        filter: [
           "all",
           ['has', 'height'],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         belowLayerId: _selectedPolygonLayerId,
       );
@@ -1433,7 +1544,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _extrudedPolygonLayerId,
       );
 
-      /// 6 NORMAL with texture
+      /// 6️⃣ NORMAL with texture
       await controller.addFillLayer(
         _polygonSourceId,
         _patternPolygonLayerId,
@@ -1441,7 +1552,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           fillColor: ["get", "fillColor"],
           fillOpacity: ["get", "fillOpacity"],
           fillOutlineColor: ["get", "strokeColor"],
-          fillPattern: ["get","pattern"]
+          fillPattern: ["get", "pattern"],
         ),
         filter: [
           "all",
@@ -1456,10 +1567,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _extrudedPolygonLayerId,
       );
 
-      /// 6️⃣ PATCH (BOTTOM-MOST)
+      /// 7️⃣ PATCH BELOW (zoom >= 14 → bottom-most)
       await controller.addFillLayer(
         _polygonSourceId,
-        _patchPolygonLayerId,
+        _patchBelowPolygonLayerId,
         const FillLayerProperties(
           fillColor: ["get", "fillColor"],
           fillOpacity: ["get", "fillOpacity"],
@@ -1470,9 +1581,38 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "boundary"]],
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
-        belowLayerId: _normalPolygonLayerId,
+        minzoom: 13.5,                      // visible at zoom >= 14
+        belowLayerId: _normalPolygonLayerId, // sits below everything
+      );
+
+      /// 8️⃣ PATCH ABOVE (zoom < 14 → top-most, added last so it's above all polygon layers)
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _patchAbovePolygonLayerId,
+        const FillLayerProperties(
+          fillColor: ["get", "fillColor"],
+          fillOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12, 1.0,
+            14, 0.0    // fade out as you zoom in
+          ],
+          fillOutlineColor: ["get", "strokeColor"],
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "boundary"]],
+          ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
+        ],
+        enableInteraction: true,
+        maxzoom: 13.5,                       // visible at zoom < 14
+        belowLayerId: _polylineLayerId,      // sits just below polylines = above all polygon layers
       );
 
       _isPolygonLayersEnabled = true;
@@ -1541,6 +1681,39 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (keyMap["polyId"] != null) return keyMap["polyId"];
     if (keyMap["id"] != null) return keyMap["id"];
     return null;
+  }
+
+  bool _pointInPolygon(double lat, double lng, List<MapLocation> points) {
+    if (points.length < 3) return false;
+    bool inside = false;
+    int j = points.length - 1;
+    for (int i = 0; i < points.length; i++) {
+      final xi = points[i].longitude, yi = points[i].latitude;
+      final xj = points[j].longitude, yj = points[j].latitude;
+      final intersects =
+          ((yi > lat) != (yj > lat)) &&
+              (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+      if (intersects) inside = !inside;
+      j = i;
+    }
+    return inside;
+  }
+
+  GeoJsonPolygon? _hitTestPolygons(double lat, double lng) {
+    final hits = _polygons.where((p) =>
+    !p.id.toLowerCase().contains("boundary") &&
+    !p.properties?['type'].toLowerCase().contains("boundary") &&
+        _pointInPolygon(lat, lng, p.points),
+    ).toList();
+
+    if (hits.isEmpty) return null;
+
+    final flat = hits.where((p) {
+      final h = p.properties?['height'];
+      return h == null || h.toString().isEmpty || h.toString().toLowerCase() == 'undefined';
+    }).toList();
+
+    return flat.isNotEmpty ? flat.first : hits.first;
   }
 
   CameraBound? calculateBounds(
@@ -1701,13 +1874,10 @@ class MaplibreMapProvider extends BaseMapProvider {
             print('Warning: Failed to update marker styling: $e');
           }
         } else {
-          final copyMarker = marker.copyWith(
-              imageSize: const Size(50, 50),
-              textVisibility: true,
-              priority: true);
+          final copyMarker = marker.copyWith();
           print("copyMarker ${copyMarker.assetPath}");
           await removeMarker(controller, polyID);
-          await addMarker(controller, copyMarker);
+          await addMarker(controller, copyMarker, selectedMarkerId: copyMarker.id);
         }
       }
 
@@ -1920,7 +2090,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const String osmRasterStyle = '''
 {
   "version": 8,
-  "name": "OSM Raster Muted",
+  "name": "OSM Raster Slight Green",
   "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   "sources": {
     "osm-tiles": {
@@ -1939,8 +2109,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       "minzoom": 0,
       "maxzoom": 23,
       "paint": {
-        "raster-saturation": -1.0,
-        "raster-brightness-max": 0.85
+        "raster-saturation": -0.7,
+        "raster-contrast": 0.15,
+        "raster-brightness-min": 0.05,
+        "raster-brightness-max": 0.88,
+        "raster-hue-rotate": 20
       }
     }
   ]
