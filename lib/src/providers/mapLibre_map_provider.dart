@@ -786,7 +786,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
 
       if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty){
-        pattern=true;
+        pattern=false;
       }
 
       return {
