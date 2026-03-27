@@ -454,14 +454,13 @@ class RenderingUtilities{
 
   static Future<void> registerLandmarkPattern(dynamic controller,GeoJsonPolygon geojsonpolygon)async{
     PatternType? type=getPatternType(geojsonpolygon.properties?['pattern']);
-    if(type==null)return;
-
+    if(type==null || geojsonpolygon.properties?['patternSize']==null || geojsonpolygon.properties?['patternSpacing']==null || geojsonpolygon.properties?['patternRotation']==null)return;
     Color backgroundColor = Colors.transparent;
     if(geojsonpolygon.properties?["fillColor"] != null && geojsonpolygon.properties?["fillColor"].isNotEmpty){
       backgroundColor = hexToColor(geojsonpolygon.properties?["fillColor"]);
     }
    await _registerPattern(controller, patternId: GeoJsonUtils.buildPatternKey(name:geojsonpolygon.properties?['pattern'],size:geojsonpolygon.properties?['patternSize'] ,gap: geojsonpolygon.properties?['patternSpacing'],rotation:geojsonpolygon.properties?['patternRotation'] ,color: geojsonpolygon.properties?['patternColor']),
-        type: type,size:geojsonpolygon.properties?['patternSize'] ,gap:geojsonpolygon.properties?['patternSpacing'] ,angle:geojsonpolygon.properties?['patternRotation'] ,foreground: hexToColor(geojsonpolygon.properties?['patternColor']), background: backgroundColor);
+        type: type!,size:geojsonpolygon.properties?['patternSize'] ,gap:geojsonpolygon.properties?['patternSpacing'] ,angle:geojsonpolygon.properties?['patternRotation'] ,foreground: hexToColor(geojsonpolygon.properties?['patternColor']), background: backgroundColor);
 
   }
 

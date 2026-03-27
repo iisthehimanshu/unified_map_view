@@ -824,8 +824,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       }
 
-      if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty){
-        pattern=false;
+      if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty && polygon.properties?['patternSize']!=null && polygon.properties?['patternSpacing']!=null && polygon.properties?['patternRotation']!=null){
+        pattern=true;
       }
 
       return {
@@ -1797,10 +1797,15 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     try {
+      // Deselect any existing selection first
+      if (selectedLocation != null) {
+        await deSelectLocation(controller);
+      }
+
       GeoJsonPolygon? polygon;
       GeoJsonMarker? marker;
 
-      // Try to find marker
+      // Find marker
       try {
         if (_symbols.isNotEmpty) {
           marker = _symbols.firstWhere(
@@ -1813,35 +1818,21 @@ class MaplibreMapProvider extends BaseMapProvider {
         return;
       }
 
-      if (marker != null) {
-        if (selectedLocation != null) {
-          print("selectedLocation is ${selectedLocation.toString()}");
-          await deSelectLocation(controller);
-        }
-      }
-
       String polyIDInsideMarker = polyID;
-      print("markerid ${marker?.id}");
       if (marker?.id != null) {
-        polyIDInsideMarker =
-            _extractPolygonIdFromTap(marker!.id) ?? polyID;
+        polyIDInsideMarker = _extractPolygonIdFromTap(marker!.id) ?? polyID;
       }
       print("polyIDInsideMarker $polyIDInsideMarker");
 
-      // Try to find polygon
+      // Find polygon
       try {
         if (_polygons.isNotEmpty) {
           polygon = _polygons.firstWhere(
-                (p) =>
-            (p.id.contains(polyID) || p.id.contains(polyIDInsideMarker)),
+                (p) => p.id.contains(polyID) || p.id.contains(polyIDInsideMarker),
             orElse: () => throw Exception('Polygon not found'),
           );
-          if (polygon.points.isEmpty) {
-            print('Warning: No coordinates found for polygon: ${polygon.id}');
-            polygon = null;
-          } else if (polygon.points.length < 3) {
-            print(
-                'Warning: Polygon must have at least 3 points: ${polygon.id}');
+          if (polygon.points.length < 3) {
+            print('Warning: Polygon has fewer than 3 points: ${polygon.id}');
             polygon = null;
           }
         }
@@ -1854,9 +1845,32 @@ class MaplibreMapProvider extends BaseMapProvider {
         return;
       }
 
-      // Calculate bounds / center
+      // 1. Update polygon selection state first and await it fully
+      if (polygon != null) {
+        await _updatePolygonSource(controller, selectPolygonId: polygon.id);
+      }
+
+      // 2. Update marker selection state — NO remove/add, just update the source
+      if (marker != null) {
+        await setGeoJsonSource(
+          controller,
+          _symbols,
+          _clusterSourceId,
+          selectedMarkerId: marker.id,
+        );
+      }
+
+      // 3. Set selectedLocation AFTER both sources are updated
+      selectedLocation = SelectedLocation(
+        polyID: polyIDInsideMarker,
+        polygon: polygon,
+        marker: marker,
+      );
+
+      // 4. Camera
       MapLocation? center;
       double? targetZoom;
+      CameraBound? bounds;
 
       if (polygon != null && polygon.points.isNotEmpty) {
         double minLat = polygon.points.first.latitude;
@@ -1876,73 +1890,32 @@ class MaplibreMapProvider extends BaseMapProvider {
         final centerLat = (minLat + maxLat) / 2;
         final centerLng = (minLng + maxLng) / 2;
 
-        if (!centerLat.isNaN &&
-            !centerLng.isNaN &&
-            !centerLat.isInfinite &&
-            !centerLng.isInfinite) {
+        if (!centerLat.isNaN && !centerLng.isNaN &&
+            !centerLat.isInfinite && !centerLng.isInfinite) {
           center = MapLocation(latitude: centerLat, longitude: centerLng);
-          final latSpan = maxLat - minLat;
-          final lngSpan = maxLng - minLng;
-          final maxSpan = max(latSpan, lngSpan);
-          targetZoom = 20.0;
-          if (maxSpan > 0.01) targetZoom = 15.0;
-          if (maxSpan > 0.1) targetZoom = 12.0;
-          if (maxSpan > 1.0) targetZoom = 8.0;
+          final maxSpan = max(maxLat - minLat, maxLng - minLng);
+          targetZoom = maxSpan > 1.0 ? 8.0
+              : maxSpan > 0.1 ? 12.0
+              : maxSpan > 0.01 ? 15.0
+              : 20.0;
+          bounds = calculateBounds(controller, polygon.points);
         }
       } else if (marker != null) {
         center = marker.position;
         targetZoom = 19;
       }
 
-      // Update polygon selection state
-      if (polygon != null) {
-        await _updatePolygonSelectionState(controller, polygon.id, true);
-      }
-
-      print("marker $marker");
-
-      // Handle marker styling
-      if (marker != null) {
-        if (marker.assetPath == null) {
-          try {
-            final genericMarker = PredefinedMarkers.getGenericMarker(marker);
-            print("genericMarker id ${genericMarker.id}");
-            await removeMarker(controller, polyID);
-            await addMarker(controller, genericMarker);
-          } catch (e) {
-            print('Warning: Failed to update marker styling: $e');
-          }
-        } else {
-          final copyMarker = marker.copyWith();
-          print("copyMarker ${copyMarker.assetPath}");
-          await removeMarker(controller, polyID);
-          await addMarker(controller, copyMarker, selectedMarkerId: copyMarker.id);
+      try {
+        if (bounds != null) {
+          fitCameraToBounds(controller, bounds);
+        } else if (center != null && targetZoom != null) {
+          animateCamera(controller, center, targetZoom);
         }
+      } catch (e) {
+        print('Warning: Failed to animate camera: $e');
       }
 
-      selectedLocation = SelectedLocation(
-        polyID: polyIDInsideMarker ?? polyID,
-        polygon: polygon,
-        marker: marker,
-      );
-
-      CameraBound? bounds;
-      if (polygon != null && polygon.points.isNotEmpty) {
-        bounds = calculateBounds(controller, polygon.points);
-      }
-
-      if (bounds != null || (center != null && targetZoom != null)) {
-        try {
-          if (bounds != null) {
-            fitCameraToBounds(controller, bounds);
-          } else if (center != null && targetZoom != null) {
-            animateCamera(controller, center, targetZoom);
-          }
-        } catch (e) {
-          print('Warning: Failed to animate camera: $e');
-        }
-      }
-
+      // 5. Callbacks
       if (polygon != null) {
         _config.onPolygonTap?.call(
           coordinates: polygon.points,
@@ -1955,11 +1928,187 @@ class MaplibreMapProvider extends BaseMapProvider {
         );
       }
     } catch (e, stackTrace) {
-      print('Error selecting location: $e');
-      print('Stack trace: $stackTrace');
+      print('Error selecting location: $e\n$stackTrace');
       selectedLocation = null;
     }
   }
+
+  // @override
+  // Future<void> selectLocation(controller, String polyID) async {
+  //   if (selectedLocation?.polyID == polyID) return;
+  //   if (controller is! MaplibreMapController) {
+  //     print('Error: Invalid controller type');
+  //     return;
+  //   }
+  //   if (polyID.isEmpty) {
+  //     print('Error: polyID cannot be empty');
+  //     return;
+  //   }
+  //
+  //   try {
+  //     GeoJsonPolygon? polygon;
+  //     GeoJsonMarker? marker;
+  //
+  //     // Try to find marker
+  //     try {
+  //       if (_symbols.isNotEmpty) {
+  //         marker = _symbols.firstWhere(
+  //               (m) => m.id.contains(polyID),
+  //           orElse: () => throw Exception('Marker not found'),
+  //         );
+  //       }
+  //     } catch (e) {
+  //       print('No marker found for polyID: $polyID - $e');
+  //       return;
+  //     }
+  //
+  //     if (marker != null) {
+  //       if (selectedLocation != null) {
+  //         print("selectedLocation is ${selectedLocation.toString()}");
+  //         await deSelectLocation(controller);
+  //       }
+  //     }
+  //
+  //     String polyIDInsideMarker = polyID;
+  //     print("markerid ${marker?.id}");
+  //     if (marker?.id != null) {
+  //       polyIDInsideMarker =
+  //           _extractPolygonIdFromTap(marker!.id) ?? polyID;
+  //     }
+  //     print("polyIDInsideMarker $polyIDInsideMarker");
+  //
+  //     // Try to find polygon
+  //     try {
+  //       if (_polygons.isNotEmpty) {
+  //         polygon = _polygons.firstWhere(
+  //               (p) =>
+  //           (p.id.contains(polyID) || p.id.contains(polyIDInsideMarker)),
+  //           orElse: () => throw Exception('Polygon not found'),
+  //         );
+  //         if (polygon.points.isEmpty) {
+  //           print('Warning: No coordinates found for polygon: ${polygon.id}');
+  //           polygon = null;
+  //         } else if (polygon.points.length < 3) {
+  //           print(
+  //               'Warning: Polygon must have at least 3 points: ${polygon.id}');
+  //           polygon = null;
+  //         }
+  //       }
+  //     } catch (e) {
+  //       print('No polygon found for polyID: $polyID - $e');
+  //     }
+  //
+  //     if (polygon == null && marker == null) {
+  //       print('Error: Neither polygon nor marker found for polyID: $polyID');
+  //       return;
+  //     }
+  //
+  //     // Calculate bounds / center
+  //     MapLocation? center;
+  //     double? targetZoom;
+  //
+  //     if (polygon != null && polygon.points.isNotEmpty) {
+  //       double minLat = polygon.points.first.latitude;
+  //       double maxLat = polygon.points.first.latitude;
+  //       double minLng = polygon.points.first.longitude;
+  //       double maxLng = polygon.points.first.longitude;
+  //
+  //       for (final point in polygon.points) {
+  //         if (point.latitude < -90 || point.latitude > 90) continue;
+  //         if (point.longitude < -180 || point.longitude > 180) continue;
+  //         minLat = min(minLat, point.latitude);
+  //         maxLat = max(maxLat, point.latitude);
+  //         minLng = min(minLng, point.longitude);
+  //         maxLng = max(maxLng, point.longitude);
+  //       }
+  //
+  //       final centerLat = (minLat + maxLat) / 2;
+  //       final centerLng = (minLng + maxLng) / 2;
+  //
+  //       if (!centerLat.isNaN &&
+  //           !centerLng.isNaN &&
+  //           !centerLat.isInfinite &&
+  //           !centerLng.isInfinite) {
+  //         center = MapLocation(latitude: centerLat, longitude: centerLng);
+  //         final latSpan = maxLat - minLat;
+  //         final lngSpan = maxLng - minLng;
+  //         final maxSpan = max(latSpan, lngSpan);
+  //         targetZoom = 20.0;
+  //         if (maxSpan > 0.01) targetZoom = 15.0;
+  //         if (maxSpan > 0.1) targetZoom = 12.0;
+  //         if (maxSpan > 1.0) targetZoom = 8.0;
+  //       }
+  //     } else if (marker != null) {
+  //       center = marker.position;
+  //       targetZoom = 19;
+  //     }
+  //
+  //     // Update polygon selection state
+  //     if (polygon != null) {
+  //       await _updatePolygonSelectionState(controller, polygon.id, true);
+  //     }
+  //
+  //     print("marker $marker");
+  //
+  //     // Handle marker styling
+  //     if (marker != null) {
+  //       if (marker.assetPath == null) {
+  //         try {
+  //           final genericMarker = PredefinedMarkers.getGenericMarker(marker);
+  //           print("genericMarker id ${genericMarker.id}");
+  //           await removeMarker(controller, polyID);
+  //           await addMarker(controller, genericMarker);
+  //         } catch (e) {
+  //           print('Warning: Failed to update marker styling: $e');
+  //         }
+  //       } else {
+  //         final copyMarker = marker.copyWith();
+  //         print("copyMarker ${copyMarker.assetPath}");
+  //         await removeMarker(controller, polyID);
+  //         await addMarker(controller, copyMarker, selectedMarkerId: copyMarker.id);
+  //       }
+  //     }
+  //
+  //     selectedLocation = SelectedLocation(
+  //       polyID: polyIDInsideMarker ?? polyID,
+  //       polygon: polygon,
+  //       marker: marker,
+  //     );
+  //
+  //     CameraBound? bounds;
+  //     if (polygon != null && polygon.points.isNotEmpty) {
+  //       bounds = calculateBounds(controller, polygon.points);
+  //     }
+  //
+  //     if (bounds != null || (center != null && targetZoom != null)) {
+  //       try {
+  //         if (bounds != null) {
+  //           fitCameraToBounds(controller, bounds);
+  //         } else if (center != null && targetZoom != null) {
+  //           animateCamera(controller, center, targetZoom);
+  //         }
+  //       } catch (e) {
+  //         print('Warning: Failed to animate camera: $e');
+  //       }
+  //     }
+  //
+  //     if (polygon != null) {
+  //       _config.onPolygonTap?.call(
+  //         coordinates: polygon.points,
+  //         polygonId: polyID,
+  //       );
+  //     } else if (marker != null) {
+  //       _config.onMarkerTap?.call(
+  //         coordinates: marker.position,
+  //         markerId: polyID,
+  //       );
+  //     }
+  //   } catch (e, stackTrace) {
+  //     print('Error selecting location: $e');
+  //     print('Stack trace: $stackTrace');
+  //     selectedLocation = null;
+  //   }
+  // }
 
   Future<void> _updatePolygonSelectionState(
       MaplibreMapController controller,
@@ -1976,40 +2125,74 @@ class MaplibreMapProvider extends BaseMapProvider {
       return;
     }
 
-    print("selectedLocation $selectedLocation");
     if (selectedLocation == null) return;
 
     final polyID = selectedLocation!.polyID;
-
     if (polyID.isEmpty) {
-      print('Error: polyID is empty in selectedLocation');
       selectedLocation = null;
       return;
     }
 
     try {
-      await _updatePolygonSelectionState(controller, polyID, false);
+      // 1. Reset polygon selection first — await fully before touching markers
+      await _updatePolygonSource(controller, selectPolygonId: null);
 
-      try {
-        final marker = selectedLocation?.marker as GeoJsonMarker?;
-        print(
-            "marker in deselect $polyID ${_symbols.where((m) => m.id.toLowerCase().contains(polyID))}");
-
-        if (marker != null) {
-          await removeMarker(controller, polyID);
-          await addMarker(controller, marker);
-        }
-      } catch (e) {
-        print('Error handling marker during deselection: $e');
-      }
+      // 2. Reset marker selection — NO remove/add, just clear selectedMarkerId
+      await setGeoJsonSource(
+        controller,
+        _symbols,
+        _clusterSourceId,
+        selectedMarkerId: null,
+      );
 
       selectedLocation = null;
     } catch (e, stackTrace) {
-      print('Error deselecting location: $e');
-      print('Stack trace: $stackTrace');
+      print('Error deselecting location: $e\n$stackTrace');
       selectedLocation = null;
     }
   }
+
+  // @override
+  // Future<void> deSelectLocation(dynamic controller) async {
+  //   if (controller is! MaplibreMapController) {
+  //     print('Error: Invalid controller type in deSelectLocation');
+  //     return;
+  //   }
+  //
+  //   print("selectedLocation $selectedLocation");
+  //   if (selectedLocation == null) return;
+  //
+  //   final polyID = selectedLocation!.polyID;
+  //
+  //   if (polyID.isEmpty) {
+  //     print('Error: polyID is empty in selectedLocation');
+  //     selectedLocation = null;
+  //     return;
+  //   }
+  //
+  //   try {
+  //     await _updatePolygonSelectionState(controller, polyID, false);
+  //
+  //     try {
+  //       final marker = selectedLocation?.marker as GeoJsonMarker?;
+  //       print(
+  //           "marker in deselect $polyID ${_symbols.where((m) => m.id.toLowerCase().contains(polyID))}");
+  //
+  //       if (marker != null) {
+  //         await removeMarker(controller, polyID);
+  //         await addMarker(controller, marker);
+  //       }
+  //     } catch (e) {
+  //       print('Error handling marker during deselection: $e');
+  //     }
+  //
+  //     selectedLocation = null;
+  //   } catch (e, stackTrace) {
+  //     print('Error deselecting location: $e');
+  //     print('Stack trace: $stackTrace');
+  //     selectedLocation = null;
+  //   }
+  // }
 
   // ---------------------------------------------------------------------------
   // Zoom helpers
