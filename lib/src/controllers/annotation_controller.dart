@@ -5,8 +5,10 @@ import 'package:unified_map_view/src/utils/renderingUtilities.dart';
 
 import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
+import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import '../apis/BuildingByVenue.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
+import '../config.dart';
 import '../models/Cell.dart';
 import '../utils/geoJson/predefined_markers.dart';
 
@@ -319,7 +321,8 @@ class AnnotationController{
   void _annotatePathMarkers(List<Cell> path){
     for (var cell in path) {
       if(cell.isDestination){
-        _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        String? imageFile=_resolveImageUrlForCell(cell);
+        _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'),imageFile));
       }
       if(cell.isSource){
         _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
@@ -328,6 +331,70 @@ class AnnotationController{
         _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), cell.connectorType));
       }
     }
+  }
+
+  String? _resolveImageUrlForCell(Cell cell) {
+    try {
+      GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(_venueData.json);
+      if (model.data == null) return null;
+
+      // Only look at Point features on the same building and floor
+      final pointFeatures = model.data!.where((f) =>
+      f.buildingID == cell.bid &&
+          f.properties?["floor"] == cell.floor &&
+          f.geometry?.type == "Point"
+      ).toList();
+
+      if (pointFeatures.isEmpty) return null;
+
+      // Find nearest point feature to cell's lat/lng
+      GlobalAppGeoData? nearest;
+      double minDistance = double.infinity;
+
+      for (var feature in pointFeatures) {
+        final coords = feature.geometry?.coordinates;
+        if (coords == null || coords.isEmpty) continue;
+
+        // GeoJSON point coords are [lng, lat]
+        final featLng = coords[0][0]?.toDouble();
+        final featLat = coords[0][1]?.toDouble();
+        if (featLat == null || featLng == null) continue;
+
+        final distance = _distanceSq(cell.lat, cell.lng, featLat, featLng);
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearest = feature;
+        }
+      }
+
+      if (nearest == null) return null;
+      final props = nearest.properties;
+      if (props == null) return null;
+
+      // animalRef icon takes priority
+      final animalIcon = props['animalRef']?['icon'];
+      if (animalIcon != null && animalIcon.toString().isNotEmpty) {
+        return animalIcon.toString();
+      }
+
+      // fallback to imageFile
+      final imageFile = props['imageFile'];
+      if (imageFile != null && imageFile.toString().isNotEmpty) {
+        return "${AppConfig.baseUrl}/uploads/$imageFile";
+      }
+
+      return null;
+    } catch (e) {
+      print('_resolveImageUrlForCell error: $e');
+      return null;
+    }
+  }
+
+// Squared euclidean distance — good enough for nearby points, avoids sqrt
+  double _distanceSq(double lat1, double lng1, double lat2, double lng2) {
+    final dLat = lat1 - lat2;
+    final dLng = lng1 - lng2;
+    return dLat * dLat + dLng * dLng;
   }
 
   Future<void> annotatePinSelectionLandmarks(List<MapLocation> locations, String buildingID, int floor) async {

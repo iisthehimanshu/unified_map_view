@@ -116,6 +116,45 @@ class MaplibreMapProvider extends BaseMapProvider {
                   null,
                 );
 
+                print("queryRenderedFeatures count: ${markerFeatures.length}");
+
+                const markerLayers = [
+                  'normalText-markers-layer',
+                  'normalIcon-markers-layer-withSectionId',
+                  'normalIcon-markers-layer-withoutSectionId',
+                  'normalFixed-markers-layer',
+                  'customRendering-markers-layer',
+                  'priority-marker-layer',
+                  'rotation-marker-layer',
+                ];
+                try{
+                if (markerLayers.contains(layerId)) {
+                  // id from onFeatureTapped is the GeoJSON feature's 'id' field
+                  // but in your setGeoJsonSource you store marker id in properties.id, not as feature id
+                  // so we need to find by matching against _symbols directly using coordinates
+                  final tappedMarker = _symbols.firstWhere(
+                        (m) {
+                      final dLat = (m.position.latitude - coordinates.latitude).abs();
+                      final dLng = (m.position.longitude - coordinates.longitude).abs();
+                      return dLat < 0.0001 && dLng < 0.0001;
+                    },
+                    orElse: () => throw Exception('Marker not found by coords'),
+                  );
+
+                  print("Marker tapped: ${tappedMarker.id}");
+                  if (tappedMarker.id.toLowerCase().contains("path")) return;
+
+                  final markerId = _extractPolygonIdFromTap(tappedMarker.id);
+                  if (markerId != null) {
+                    selectLocation(controller, markerId);
+                    return;
+                  }
+                }}catch(e){
+                  print("error in highlighting marker");
+                }
+
+
+
                 if (markerFeatures.isNotEmpty) {
                   final feature = markerFeatures.first;
                   print(
@@ -1927,7 +1966,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       String selectPolygonId,
       bool isSelected,
       ) async {
-    _updatePolygonSource(controller, selectPolygonId: selectPolygonId);
+    _updatePolygonSource(controller, selectPolygonId: isSelected ? selectPolygonId : null);
   }
 
   @override
