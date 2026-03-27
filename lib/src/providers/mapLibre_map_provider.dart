@@ -825,7 +825,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
 
       if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty && polygon.properties?['patternSize']!=null && polygon.properties?['patternSpacing']!=null && polygon.properties?['patternRotation']!=null){
-        pattern=true;
+        pattern=false;
       }
 
       return {
