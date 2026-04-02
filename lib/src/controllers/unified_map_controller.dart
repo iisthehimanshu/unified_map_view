@@ -1,5 +1,7 @@
 // lib/src/controllers/unified_map_controller.dart
 
+import 'dart:developer';
+
 import 'package:flutter/foundation.dart';
 import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
 import '../../unified_map_view.dart';
@@ -178,14 +180,15 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   /// Animate camera to a specific location
-  Future<void> animateCamera(MapLocation location, {double? zoom, double? bearing, double? tilt}) async {
+  Future<void> animateCamera(MapLocation location, {double? zoom, double? bearing, double? tilt, Duration? duration}) async {
     if (_currentMapController == null) return;
     await currentProviderImplementation.animateCamera(
       _currentMapController,
       location,
       zoom ?? _config.initialLocation.zoom,
       bearing: bearing,
-      tilt: tilt
+      tilt: tilt,
+      duration: duration
     );
   }
 
@@ -417,6 +420,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Fit map bounds to show all GeoJSON features
   Future<void> fitBoundsToGeoJson({List<MapLocation>? allPoint, double padding = 0.1}) async {
+    print("fitBoundsToGeoJson");
     if (_currentMapController == null) return;
 
     var allPoints = <MapLocation>[];
@@ -457,8 +461,10 @@ class UnifiedMapController extends ChangeNotifier {
     // Move to center
     try{
       // Add padding to the bounds (adjust these values as needed)
-      final latPadding = (maxLat - minLat) * padding; // 10% padding
-      final lngPadding = (maxLng - minLng) * padding;
+      final latPadding = 0; // 10% padding
+      final lngPadding = 0;
+
+
 
       // Create bounds with padding
       final bounds = CameraBound(
@@ -501,15 +507,22 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> clearPath() async {
     _annotationController.clearPath();
+    await currentProviderImplementation.removeMapFade(_currentMapController);
     notifyListeners();
   }
 
   Future<void> annotatePath({required List<String> bids, required int sourceFloor}) async {
     deSelectLocation();
+    await currentProviderImplementation.addMapFade(_currentMapController);
     for (var bid in bids) {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }
     await _annotationController.annotatePath(sourceFloor);
+    notifyListeners();
+  }
+
+  Future<void> fitPathInScreen() async {
+    await _annotationController.fitPathInScreen();
     notifyListeners();
   }
 

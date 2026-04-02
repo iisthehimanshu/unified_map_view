@@ -1,6 +1,7 @@
 // lib/src/providers/base_map_provider.dart
 
 import 'package:flutter/widgets.dart';
+import '../../unified_map_view.dart';
 import '../models/CameraBound.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -12,7 +13,8 @@ abstract class BaseMapProvider {
   /// Build the map widget
   Widget buildMap({
     required MapConfig config,
-    required BuildContext context
+    required BuildContext context,
+    Function(UnifiedCameraPosition position)? onCameraMove
   });
 
   /// Move camera to a specific location
@@ -48,7 +50,7 @@ abstract class BaseMapProvider {
   Future<MapLocation?> getCurrentLocation(dynamic controller);
 
   /// Animate camera to location
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt});
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt, Duration? duration});
 
   /// Set map style (if supported)
   Future<void> setMapStyle(dynamic controller, String? styleJson);
@@ -79,6 +81,9 @@ abstract class BaseMapProvider {
   Future<void> selectLocation(dynamic controller, String polyID);
 
   Future<void> deSelectLocation(dynamic controller);
+
+  Future<void> addMapFade(dynamic controller);
+  Future<void> removeMapFade(dynamic controller);
 
   void dispose();
 

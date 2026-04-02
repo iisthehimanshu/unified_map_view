@@ -52,13 +52,13 @@ class PredefinedMarkers{
     );
   }
 
-  static GeoJsonMarker getDestinationMarker(MapLocation location, String id,String? imageFile){
+  static GeoJsonMarker getDestinationMarker(MapLocation location, String id){
     return GeoJsonMarker(
         id: id,
         position: location,
         title: "",
         snippet: "",
-        assetPath:imageFile??LandmarkAssetType.destination.assetPath,
+        assetPath:LandmarkAssetType.destination.assetPath,
         iconName: "Destination",
         priority: true,
         imageSize: Size(30, 30),
