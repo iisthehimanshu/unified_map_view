@@ -5,6 +5,7 @@ import 'dart:convert';
 class GlobalAppGeoJsonDataModel {
   String? message;
   List<GlobalAppGeoData>? data;
+  List<FloorConfigs>? floorConfigs;
 
   GlobalAppGeoJsonDataModel({this.message, this.data});
 
@@ -14,6 +15,12 @@ class GlobalAppGeoJsonDataModel {
       data = <GlobalAppGeoData>[];
       json['data'].forEach((v) { data!.add(new GlobalAppGeoData.fromJson(v)); });
     }
+    if (json['floorConfigs'] != null) {
+      floorConfigs = <FloorConfigs>[];
+      json['floorConfigs'].forEach((v) {
+        floorConfigs!.add(new FloorConfigs.fromJson(v));
+      });
+    }
   }
 
   Map<dynamic, dynamic> toJson() {
@@ -22,6 +29,35 @@ class GlobalAppGeoJsonDataModel {
     if (this.data != null) {
       data['data'] = this.data!.map((v) => v.toJson()).toList();
     }
+    if (this.floorConfigs != null) {
+      data['floorConfigs'] = this.floorConfigs!.map((v) => v.toJson()).toList();
+    }
+    return data;
+  }
+}
+
+class FloorConfigs {
+  String? sId;
+  int? floorNumber;
+  String? floorName;
+  double? initialOrientation;
+
+  FloorConfigs(
+      {this.sId, this.floorNumber, this.floorName, this.initialOrientation});
+
+  FloorConfigs.fromJson(Map<dynamic, dynamic> json) {
+    sId = json['_id'];
+    floorNumber = json['floorNumber'];
+    floorName = json['floorName'];
+    initialOrientation = json['initialOrientation'];
+  }
+
+  Map<dynamic, dynamic> toJson() {
+    final Map<dynamic, dynamic> data = new Map<dynamic, dynamic>();
+    data['_id'] = this.sId;
+    data['floorNumber'] = this.floorNumber;
+    data['floorName'] = this.floorName;
+    data['initialOrientation'] = this.initialOrientation;
     return data;
   }
 }

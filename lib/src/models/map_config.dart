@@ -12,6 +12,8 @@ class MapConfig {
   final Future<void> Function(dynamic controller) onStyleLoadedCallback ;
   final void Function(UnifiedCameraPosition position) onCameraMove;
 
+  final void Function(UnifiedCameraPosition position)? hostOnCameraMove;
+
   final void Function({required MapLocation coordinates, required String markerId})? onMarkerTap;
   final void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap;
   final void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap;
@@ -21,6 +23,7 @@ class MapConfig {
     required this.onMapCreated,
     required this.onStyleLoadedCallback,
     required this.onCameraMove,
+    this.hostOnCameraMove,
     this.showUserLocation = true,
     this.zoomControlsEnabled = true,
     this.rotateGesturesEnabled = true,
@@ -36,6 +39,7 @@ class MapConfig {
     void Function(dynamic controller)? onMapCreated,
     Future<void> Function(dynamic controller)? onStyleLoadedCallback,
     void Function(UnifiedCameraPosition position)? onCameraMove,
+    void Function(UnifiedCameraPosition position)? hostOnCameraMove,
     UnifiedCameraPosition? initialLocation,
     double? initialZoom,
     bool? showUserLocation,
@@ -50,6 +54,7 @@ class MapConfig {
     return MapConfig(
       onMapCreated: onMapCreated ?? this.onMapCreated,
       onCameraMove: onCameraMove ?? this.onCameraMove,
+      hostOnCameraMove: hostOnCameraMove ?? this.hostOnCameraMove,
       initialLocation: initialLocation ?? this.initialLocation,
       showUserLocation: showUserLocation ?? this.showUserLocation,
       zoomControlsEnabled: zoomControlsEnabled ?? this.zoomControlsEnabled,

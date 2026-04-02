@@ -51,7 +51,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _polygonSourceId = 'polygons-source';
   final String _normalPolygonLayerId = 'normal-polygons-layer';
   final String _patternPolygonLayerId = 'pattern-polygons-layer';
-  final String _selectedPolygonLayerId = 'selected-polygon-layer';
+  final String _selectedPlainPolygonLayerId = 'selected-plain-polygon-layer';
+  final String _selectedExtrudedPolygonLayerId = 'selected-extruded-polygon-layer';
   final String _patchBelowPolygonLayerId = 'patch-below-polygon-layer';
   final String _patchAbovePolygonLayerId = 'patch-above-polygon-layer';
   final String _sectionPolygonLayerId = 'section-polygon-layer';
@@ -72,7 +73,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   // ---------------------------------------------------------------------------
 
   @override
-  Widget buildMap({required MapConfig config, required BuildContext context}) {
+  Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
     final width = MediaQuery.of(context).size.width;
     return Stack(
       children: [
@@ -107,7 +108,8 @@ class MaplibreMapProvider extends BaseMapProvider {
                   point,
                   [
                     _normalTextMarkerLayerId,
-                    _normalIconMarkerLayerId,
+                    "$_normalIconMarkerLayerId-withSectionId",
+                    "$_normalIconMarkerLayerId-withoutSectionId",
                     _normalFixedMarkerLayerId,
                     _customRenderingMarkerLayerId,
                     _priorityMarkerLayerId,
@@ -117,43 +119,6 @@ class MaplibreMapProvider extends BaseMapProvider {
                 );
 
                 print("queryRenderedFeatures count: ${markerFeatures.length}");
-
-                const markerLayers = [
-                  'normalText-markers-layer',
-                  'normalIcon-markers-layer-withSectionId',
-                  'normalIcon-markers-layer-withoutSectionId',
-                  'normalFixed-markers-layer',
-                  'customRendering-markers-layer',
-                  'priority-marker-layer',
-                  'rotation-marker-layer',
-                ];
-                try{
-                if (markerLayers.contains(layerId)) {
-                  // id from onFeatureTapped is the GeoJSON feature's 'id' field
-                  // but in your setGeoJsonSource you store marker id in properties.id, not as feature id
-                  // so we need to find by matching against _symbols directly using coordinates
-                  final tappedMarker = _symbols.firstWhere(
-                        (m) {
-                      final dLat = (m.position.latitude - coordinates.latitude).abs();
-                      final dLng = (m.position.longitude - coordinates.longitude).abs();
-                      return dLat < 0.0001 && dLng < 0.0001;
-                    },
-                    orElse: () => throw Exception('Marker not found by coords'),
-                  );
-
-                  print("Marker tapped: ${tappedMarker.id}");
-                  if (tappedMarker.id.toLowerCase().contains("path")) return;
-
-                  final markerId = _extractPolygonIdFromTap(tappedMarker.id);
-                  if (markerId != null) {
-                    selectLocation(controller, markerId);
-                    return;
-                  }
-                }}catch(e){
-                  print("error in highlighting marker");
-                }
-
-
 
                 if (markerFeatures.isNotEmpty) {
                   final feature = markerFeatures.first;
@@ -242,23 +207,27 @@ class MaplibreMapProvider extends BaseMapProvider {
           onCameraIdle: () async {
             if (_controller != null) {
               try {
-                print("zoom ${_controller?.cameraPosition?.zoom}");
-                final bounds = await _controller!.getVisibleRegion();
-                final centerLat =
-                    (bounds.northeast.latitude + bounds.southwest.latitude) /
-                        2;
-                final centerLng =
-                    (bounds.northeast.longitude + bounds.southwest.longitude) /
-                        2;
                 final cameraPos = _controller!.cameraPosition;
-                config.onCameraMove(UnifiedCameraPosition(
-                  mapLocation: MapLocation(
-                    latitude: centerLat,
-                    longitude: centerLng,
-                  ),
-                  zoom: cameraPos?.zoom ?? 0.0,
-                  bearing: cameraPos?.bearing ?? 0.0,
-                ));
+                if(cameraPos == null) return;
+                final target = cameraPos.target;
+                final bearing = cameraPos.bearing;
+                final tilt = cameraPos.tilt;
+                final zoom = cameraPos.zoom;
+                print("tilt $tilt");
+                var unifiedCameraPosition = UnifiedCameraPosition(
+                    mapLocation: MapLocation(
+                      latitude: target.latitude,
+                      longitude: target.longitude,
+                    ),
+                    zoom: zoom,
+                    bearing: bearing,
+                    tilt: tilt
+                );
+                config.onCameraMove(unifiedCameraPosition);
+
+                if(onCameraMove != null){
+                  onCameraMove(unifiedCameraPosition);
+                }
               } catch (e) {
                 print("Error getting camera position: $e");
               }
@@ -302,6 +271,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       double zoom, {
         double? bearing,
         double? tilt,
+        Duration? duration
       }) async {
     if (controller is MaplibreMapController) {
       if (bearing != null && tilt != null) {
@@ -314,6 +284,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               tilt: tilt,
             ),
           ),
+          duration: duration
         );
       } else {
         await controller.animateCamera(
@@ -912,7 +883,6 @@ class MaplibreMapProvider extends BaseMapProvider {
             polyline.properties!["polygonType"].toLowerCase() == "waypoints";
       }
       if (isWaypoint) return;
-
       try {
         _lines.add(polyline);
         await _updatePolylineSource(controller);
@@ -957,6 +927,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       print("Polyline layers not enabled yet");
       return;
     }
+
+    print("poyline going to add");
 
     final features = _lines.map((line) {
       return {
@@ -1130,6 +1102,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalTextMarkerLayerId,
           const SymbolLayerProperties(
+            textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
             textField: ["get", "title"],
             textSize: 14,
             textColor: "#000000",
@@ -1163,6 +1136,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withSectionId",
         const SymbolLayerProperties(
+          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1219,6 +1193,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
+          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1309,6 +1284,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalFixedMarkerLayerId,
           const SymbolLayerProperties(
+            textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
             textRotate: ["get", "bearing"],
             textRotationAlignment: "map",
             textField: ["get", "title"],
@@ -1339,6 +1315,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
+          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1386,6 +1363,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           const SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
+            textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
@@ -1456,7 +1434,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["linear"],
             ["zoom"],
             13,  0.2, // at zoom 8  → 30% size
-            20,  1.5,   // at zoom 8  → 30% size
+            18,  1.5,   // at zoom 8  → 30% size
           ],
           iconAllowOverlap: true,
           textAllowOverlap: true,
@@ -1500,7 +1478,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: false,
         maxzoom: 17.0,
@@ -1522,7 +1499,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "subsection"]],
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: false,
         minzoom: 17.0,
@@ -1533,7 +1509,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       /// 3️⃣ SELECTED
       await controller.addFillLayer(
         _polygonSourceId,
-        _selectedPolygonLayerId,
+        _selectedPlainPolygonLayerId,
         const FillLayerProperties(
           fillColor: "#4CAF50",
           fillOpacity: 0.6,
@@ -1541,6 +1517,25 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
+          ["!", ["has", "height"]],
+          ["to-boolean", ["get", "isSelected"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _subSectionPolygonLayerId,
+      );
+
+      await controller.addFillExtrusionLayer(
+        _polygonSourceId,
+        _selectedExtrudedPolygonLayerId,
+        const FillExtrusionLayerProperties(
+          fillExtrusionColor: "#4CAF50",
+          fillExtrusionHeight: ["get", "height"],
+          fillExtrusionBase: ["get", "base_height"],
+          fillExtrusionOpacity: 1.0,
+        ),
+        filter: [
+          "all",
+          ['has', 'height'],
           ["to-boolean", ["get", "isSelected"]],
         ],
         enableInteraction: true,
@@ -1561,9 +1556,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           "all",
           ['has', 'height'],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
-        belowLayerId: _selectedPolygonLayerId,
+        belowLayerId: _selectedPlainPolygonLayerId,
       );
 
       /// 5️⃣ NORMAL
@@ -1577,7 +1571,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
-          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1600,7 +1593,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
-          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1624,7 +1616,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "boundary"]],
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
         minzoom: 13.5,                      // visible at zoom >= 14
@@ -1651,10 +1642,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "boundary"]],
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
-        maxzoom: 13.5,                       // visible at zoom < 14
         belowLayerId: _polylineLayerId,      // sits just below polylines = above all polygon layers
       );
 
@@ -2292,12 +2281,37 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.animateCamera(
       CameraUpdate.newLatLngBounds(
         bounds,
-        left: 50,
-        top: 50,
-        right: 50,
-        bottom: 50,
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
       ),
       duration: const Duration(milliseconds: 2000), // slower animation
+    );
+  }
+
+  Future<void> addMapFade(controller) async {
+    await controller.setLayerProperties(
+      _patchAbovePolygonLayerId,
+      FillLayerProperties(
+          fillOpacity: 0.5
+      ),
+    );
+  }
+
+  Future<void> removeMapFade(controller) async {
+    print("removeMapFade");
+    await controller.setLayerProperties(
+      _patchAbovePolygonLayerId,
+      FillLayerProperties(
+          fillOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12, 1.0,
+            14, 0.0    // fade out as you zoom in
+          ]
+      ),
     );
   }
 
@@ -2325,6 +2339,10 @@ class MaplibreMapProvider extends BaseMapProvider {
       "tileSize": 256,
       "attribution": "© OpenStreetMap contributors",
       "maxzoom": 19
+    },
+    "empty": {
+      "type": "geojson",
+      "data": { "type": "FeatureCollection", "features": [] }
     }
   },
   "layers": [
@@ -2340,6 +2358,15 @@ class MaplibreMapProvider extends BaseMapProvider {
         "raster-brightness-min": 0.05,
         "raster-brightness-max": 0.88,
         "raster-hue-rotate": 20
+      }
+    },
+    {
+      "id": "font-anchor",
+      "type": "symbol",
+      "source": "empty",
+      "layout": {
+        "text-field": "",
+        "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"]
       }
     }
   ]

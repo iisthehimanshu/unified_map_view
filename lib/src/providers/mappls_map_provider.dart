@@ -68,7 +68,7 @@ class MapplsMapProvider extends BaseMapProvider {
   bool _isCircleLayersEnabled = false;
 
   @override
-  Widget buildMap({required MapConfig config, required BuildContext context}) {
+  Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
     var width=MediaQuery.of(context).size.width;
     return Stack(
       children:[
@@ -208,7 +208,7 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt}) async {
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt, Duration? duration}) async {
     if (controller is MapplsMapController) {
       if(bearing != null && tilt != null){
         await controller.animateCamera(
@@ -1791,6 +1791,16 @@ class MapplsMapProvider extends BaseMapProvider {
   void dispose() {
     _compassSub?.cancel();
     _compassSub = null;
+  }
+
+  @override
+  Future<void> addMapFade(controller) async {
+
+  }
+
+  @override
+  Future<void> removeMapFade(controller) async {
+
   }
 
 }

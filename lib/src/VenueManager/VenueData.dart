@@ -129,6 +129,20 @@ class VenueData{
     return filteredData.map((f) => GeoJsonFeature.fromJson(f.toJson())).toList();
   }
 
+  double getFloorOrientation(int floor) {
+    final model = GlobalAppGeoJsonDataModel.fromJson(json);
+
+    final configs = model.floorConfigs;
+    if (configs == null || configs.isEmpty) return 0.0;
+
+    for (final f in configs) {
+      if (f.floorNumber == floor) {
+        return f.initialOrientation ?? 0.0;
+      }
+    }
+
+    return 0.0;
+  }
 
   List<GeoJsonFeature> setBuildingFloor({required String buildingId, required int floor}){
     _selectedFloor[buildingId] = floor;

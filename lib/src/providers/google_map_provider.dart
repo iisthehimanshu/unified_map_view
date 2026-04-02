@@ -32,7 +32,7 @@ class GoogleMapProvider extends BaseMapProvider {
 
 
   @override
-  Widget buildMap({required MapConfig config, required BuildContext context}) {
+  Widget buildMap({required MapConfig config, required BuildContext context,Function(UnifiedCameraPosition position)? onCameraMove}) {
     return GoogleMap(
       initialCameraPosition: CameraPosition(
         target: LatLng(
@@ -97,7 +97,7 @@ class GoogleMapProvider extends BaseMapProvider {
 
 
   @override
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt}) async {
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt, Duration? duration}) async {
     if (controller is GoogleMapController) {
       await controller.animateCamera(
         CameraUpdate.newLatLngZoom(
@@ -832,6 +832,16 @@ class GoogleMapProvider extends BaseMapProvider {
   Future<void> addSection(controller, GeoJsonPolygon polygon) {
     // TODO: implement addSection
     throw UnimplementedError();
+  }
+
+  @override
+  Future<void> addMapFade(controller) async {
+
+  }
+
+  @override
+  Future<void> removeMapFade(controller) async {
+
   }
 
 }

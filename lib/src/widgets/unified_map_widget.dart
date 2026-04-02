@@ -1,6 +1,7 @@
 // lib/src/widgets/unified_map_widget.dart
 
 import 'package:flutter/material.dart';
+import '../../unified_map_view.dart';
 import '../controllers/unified_map_controller.dart';
 import 'FloorSpeedDial.dart';
 
@@ -8,11 +9,13 @@ import 'FloorSpeedDial.dart';
 class UnifiedMapWidget extends StatelessWidget {
   final UnifiedMapController controller;
   final EdgeInsets padding;
+  final void Function(UnifiedCameraPosition position)? onCameraMove;
 
   const UnifiedMapWidget({
     Key? key,
     required this.controller,
     this.padding = EdgeInsets.zero,
+    this.onCameraMove,
   }) : super(key: key);
 
   @override
@@ -22,7 +25,7 @@ class UnifiedMapWidget extends StatelessWidget {
       builder: (context, child) {
         return Padding(
           padding: padding,
-          child : controller.currentProviderImplementation.buildMap(config: controller.config, context: context),
+          child : controller.currentProviderImplementation.buildMap(config: controller.config, context: context, onCameraMove: onCameraMove),
         );
       },
     );

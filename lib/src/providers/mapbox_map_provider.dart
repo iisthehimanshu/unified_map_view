@@ -50,7 +50,7 @@ class MapboxMapProvider extends BaseMapProvider {
 
   @override
   Widget buildMap({
-    required MapConfig config, required BuildContext context}) {
+    required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
     return MapWidget(
       onMapCreated: (mapboxMap) async {
         config.onMapCreated(mapboxMap);
@@ -264,7 +264,7 @@ class MapboxMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt}) async {
+  Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt, Duration? duration}) async {
     if (controller is MapboxMap) {
       await controller.flyTo(
         CameraOptions(
@@ -1230,6 +1230,16 @@ class MapboxMapProvider extends BaseMapProvider {
   @override
   void dispose() {
     // TODO: implement dispose
+  }
+
+  @override
+  Future<void> addMapFade(controller) async {
+
+  }
+
+  @override
+  Future<void> removeMapFade(controller) async {
+
   }
 
 }
