@@ -2281,10 +2281,10 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.animateCamera(
       CameraUpdate.newLatLngBounds(
         bounds,
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+        left: 50,
+        top: 50,
+        right: 50,
+        bottom: 50,
       ),
       duration: const Duration(milliseconds: 2000), // slower animation
     );
