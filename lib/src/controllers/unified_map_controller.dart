@@ -461,10 +461,8 @@ class UnifiedMapController extends ChangeNotifier {
     // Move to center
     try{
       // Add padding to the bounds (adjust these values as needed)
-      final latPadding = 0; // 10% padding
-      final lngPadding = 0;
-
-
+      final latPadding = (maxLat - minLat) * padding; // 10% padding
+      final lngPadding = (maxLng - minLng) * padding;
 
       // Create bounds with padding
       final bounds = CameraBound(

@@ -28,7 +28,7 @@ class GlobalGeoJSONVenueAPI{
       return globalGeoJSONVenueAPIModel?.responseBody;
     }
 
-    String baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/${venueName}?expand=-1&api_key=${AppConfig.apiKey}";
+    String baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/${venueName}?api_key=${AppConfig.apiKey}";
 
     final response = await http.get(
       Uri.parse(baseUrl),

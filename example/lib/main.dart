@@ -12,7 +12,7 @@ void main() async {
   MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
   MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
   MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
-  await UnifiedMapViewPackage.initialize();
+  await UnifiedMapViewPackage.initialize(venueName: 'NationalZoologicalPark');
   runApp(const GeoJsonExampleApp());
 }
 
