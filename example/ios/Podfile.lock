@@ -1,6 +1,4 @@
 PODS:
-  - apple_maps_flutter (0.0.1):
-    - Flutter
   - connectivity_plus (0.0.1):
     - Flutter
   - Flutter (1.0.0)
@@ -29,6 +27,10 @@ PODS:
     - MapboxCommon (= 24.17.0)
     - MapboxCoreMaps (= 11.17.0)
     - Turf (= 4.0.0)
+  - MapLibre (6.5.0)
+  - maplibre_gl (0.0.1):
+    - Flutter
+    - MapLibre (= 6.5.0)
   - mappls_gl (1.2.0):
     - Flutter
     - MapplsAnnotationExtension/Base (= 1.0.2)
@@ -49,12 +51,12 @@ PODS:
     - Flutter
 
 DEPENDENCIES:
-  - apple_maps_flutter (from `.symlinks/plugins/apple_maps_flutter/ios`)
   - connectivity_plus (from `.symlinks/plugins/connectivity_plus/ios`)
   - Flutter (from `Flutter`)
   - flutter_compass (from `.symlinks/plugins/flutter_compass/ios`)
   - google_maps_flutter_ios (from `.symlinks/plugins/google_maps_flutter_ios/ios`)
   - mapbox_maps_flutter (from `.symlinks/plugins/mapbox_maps_flutter/ios`)
+  - maplibre_gl (from `.symlinks/plugins/maplibre_gl/ios`)
   - mappls_gl (from `.symlinks/plugins/mappls_gl/ios`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
   - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
@@ -66,6 +68,7 @@ SPEC REPOS:
     - MapboxCommon
     - MapboxCoreMaps
     - MapboxMaps
+    - MapLibre
     - MapplsAnnotationExtension
     - MapplsAPICore
     - MapplsAPIKit
@@ -74,8 +77,6 @@ SPEC REPOS:
     - Turf
 
 EXTERNAL SOURCES:
-  apple_maps_flutter:
-    :path: ".symlinks/plugins/apple_maps_flutter/ios"
   connectivity_plus:
     :path: ".symlinks/plugins/connectivity_plus/ios"
   Flutter:
@@ -86,6 +87,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/google_maps_flutter_ios/ios"
   mapbox_maps_flutter:
     :path: ".symlinks/plugins/mapbox_maps_flutter/ios"
+  maplibre_gl:
+    :path: ".symlinks/plugins/maplibre_gl/ios"
   mappls_gl:
     :path: ".symlinks/plugins/mappls_gl/ios"
   path_provider_foundation:
@@ -94,7 +97,6 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/url_launcher_ios/ios"
 
 SPEC CHECKSUMS:
-  apple_maps_flutter: c59725efea39e13e703cde52a1d2b14866ad68a8
   connectivity_plus: 2a701ffec2c0ae28a48cf7540e279787e77c447d
   Flutter: e0871f40cf51350855a761d2e70bf5af5b9b5de7
   flutter_compass: cbbd285cea1584c7ac9c4e0c3e1f17cbea55e855
@@ -105,6 +107,8 @@ SPEC CHECKSUMS:
   MapboxCommon: 5cc0e77733478a7b2a3a28af7c38adc8485e07d8
   MapboxCoreMaps: b7b7703cd8af3ae9088f42c6d23b591947a1eb1f
   MapboxMaps: 10b01217e5634aa7b6fc1fb10d036598d9240ba6
+  MapLibre: 0ebfa9329d313cec8bf0a5ba5a336a1dc903785e
+  maplibre_gl: be7b98f1c3ed75bf77f321eec04df359d0ff6f62
   mappls_gl: d1026864c9c5d4542318a47fe5974369f97cfc13
   MapplsAnnotationExtension: 2e63c96e540cc3b2f383c2b8ab1d4839a82ed350
   MapplsAPICore: 922af98586ffbddb054822b302804f77f662fca5

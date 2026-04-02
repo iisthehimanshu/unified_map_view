@@ -7,6 +7,7 @@ import 'dart:math';
 import '../../unified_map_view.dart';
 import '../enums/pattern_type.dart';
 import 'LandmarkAssetType.dart';
+import 'dart:developer' as developer;
 
 class RenderingUtilities{
   static Color hexToColor(String hex, {double opacity = 1.0}) {
@@ -486,7 +487,7 @@ class RenderingUtilities{
       gap: gap,
       angle: angle,
     );
-    print("pngBytes:${patternId}");
+    developer.log("pngBytes:${patternId} ${pngBytes}");
     await controller.addImage(patternId, pngBytes);
   }
 

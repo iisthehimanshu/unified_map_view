@@ -825,7 +825,12 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
 
       if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty && polygon.properties?['patternSize']!=null && polygon.properties?['patternSpacing']!=null && polygon.properties?['patternRotation']!=null){
-        pattern=false;
+        pattern=true;
+        print('pattern: ${polygon.properties?['pattern']}');
+        print('patternSize: ${polygon.properties?['patternSize']}');
+        print('patternSpacing: ${polygon.properties?['patternSpacing']}');
+        print('patternRotation: ${polygon.properties?['patternRotation']}');
+        print('patternColor: ${polygon.properties?['patternColor']}');
       }
 
       return {
@@ -1599,7 +1604,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subsection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["has", "height"]],
           ["to-boolean", ["get", "hasPattern"]],
         ],
         enableInteraction: true,

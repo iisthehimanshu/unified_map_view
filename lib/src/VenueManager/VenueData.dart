@@ -1,4 +1,3 @@
-import 'package:apple_maps_flutter/apple_maps_flutter.dart';
 import 'package:unified_map_view/src/apimodels/BuildingData.dart';
 import 'package:unified_map_view/src/apimodels/GlobalAppGeoJsonDataModel.dart';
 

@@ -4,6 +4,9 @@ library unified_map_view;
 
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/adapters.dart';
+import 'package:unified_map_view/src/apis/BuildingByVenue.dart';
+import 'package:unified_map_view/src/apis/GlobalGeoJSONVenueAPI.dart';
+import 'package:unified_map_view/src/config.dart';
 import 'package:unified_map_view/src/database/model/BuildingByVenueAPIModel.dart';
 import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
 
@@ -37,7 +40,8 @@ export 'src/utils/geoJson/predefined_markers.dart';
 class UnifiedMapViewPackage {
   static bool _initialized = false;
 
-  static Future<void> initialize() async {
+  static Future<void> initialize({required String venueName,String? url}) async {
+    AppConfig.url = url;
     if (_initialized) return;
 
     // Initialize Hive
@@ -50,6 +54,9 @@ class UnifiedMapViewPackage {
     Hive.registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
     await Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile');
     _initialized = true;
+
+   await BuildingByVenue().fetchBuildingIDS(venueName);
+   await GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
   }
 
   static bool get isInitialized => _initialized;
