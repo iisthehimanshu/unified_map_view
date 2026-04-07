@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import 'package:path_provider/path_provider.dart';
@@ -13,6 +14,7 @@ class CacheController {
   Future<Uint8List?> fetchWithCache(String url) async {
     final dir = await getApplicationCacheDirectory();
     final fileName = md5.convert(utf8.encode(url)).toString(); // 32 chars
+    print("checking for $fileName");
     final file = File('${dir.path}/$fileName');
 
     // Always serve from disk if available (works offline forever)
@@ -24,6 +26,18 @@ class CacheController {
       return bytes;
     }
 
+    try {
+      final assetPath = 'assets/icons/$fileName'; // 👈 define your folder
+      final data = await rootBundle.load(assetPath);
+      final bytes = data.buffer.asUint8List();
+      print("$fileName found in assets");
+      // Optional: save to cache for next time
+      await file.writeAsBytes(bytes);
+
+      return bytes;
+    } catch (_) {
+      print("$fileName not found in assets");
+    }
 
     if (AppConfig.internetSpeedInMbps < 1) {
       return null;

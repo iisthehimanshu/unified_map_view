@@ -111,8 +111,8 @@ class ApiDataFetcher {
 void main() async {
   // Configuration - REPLACE WITH YOUR ACTUAL VALUES
   final fetcher = ApiDataFetcher(
-    accessToken: "63a0a740-cc23-11f0-b58c-17043284b6b2",
-    baseUrl: "https://maps.iwayplus.in",
+    accessToken: "7cc62870-d67e-11f0-91ed-2f0eb903e7db",
+    baseUrl: "https://dev.iwayplus.in",
   );
   var buildingData = await fetcher.fetchBuildingIDS("NationalZoologicalPark");
 
