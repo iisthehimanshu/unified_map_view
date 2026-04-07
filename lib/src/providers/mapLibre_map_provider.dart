@@ -995,7 +995,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
     if (marker.assetPath == null) return false;
-    // try {
+    try {
       if (marker.customRendering) {
         Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
         MarkerIconWithAnchor markerIconWithAnchorWithText =
@@ -1046,10 +1046,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       }
       return false;
-    // } catch (e) {
-    //   print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
-    //   return false;
-    // }
+    } catch (e) {
+      print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
+      return false;
+    }
   }
 
   // ---------------------------------------------------------------------------
