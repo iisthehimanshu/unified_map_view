@@ -337,6 +337,11 @@ class AnnotationController{
     }
   }
 
+  void addDebugMarker(MapLocation location){
+    GeoJsonMarker marker = PredefinedMarkers.getDestinationMarker(location, "debugmarker");
+    _unifiedMapController.addMarker(marker);
+  }
+
   Future<void> annotatePinSelectionLandmarks(List<MapLocation> locations, String buildingID, int floor) async {
     _pinSelectionLocation = locations;
     await changeBuildingFloor(buildingID, floor);
