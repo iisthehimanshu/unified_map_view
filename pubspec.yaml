@@ -52,6 +52,7 @@ flutter:
     - assets/markers/
     - assets/isometric_elements/
     - assets/logos/
+    - assets/api_data/
   # To add assets to your package, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

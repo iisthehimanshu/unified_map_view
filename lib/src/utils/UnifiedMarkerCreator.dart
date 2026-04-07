@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:unified_map_view/src/config.dart';
 import 'dart:math';
 
 import '../database/cache/cache_controller.dart';
