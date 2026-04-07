@@ -226,6 +226,10 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void addDebugMarker(MapLocation location){
+    _annotationController.addDebugMarker(location);
+  }
+
   Future<void> addUserMarker(GeoJsonMarker marker) async {
     _markers.add(marker);
     if (_currentMapController != null) {

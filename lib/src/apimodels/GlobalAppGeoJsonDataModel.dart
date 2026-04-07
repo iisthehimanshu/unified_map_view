@@ -49,7 +49,7 @@ class FloorConfigs {
     sId = json['_id'];
     floorNumber = json['floorNumber'];
     floorName = json['floorName'];
-    initialOrientation = json['initialOrientation'];
+    initialOrientation = json['initialOrientation'] != null ? (json['initialOrientation'].toDouble()): null;
   }
 
   Map<dynamic, dynamic> toJson() {

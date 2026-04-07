@@ -883,7 +883,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         isWaypoint =
             polyline.properties!["polygonType"].toLowerCase() == "waypoints";
       }
-      if (isWaypoint) return;
+      // if (isWaypoint) return;
       try {
         _lines.add(polyline);
         await _updatePolylineSource(controller);
@@ -907,7 +907,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           isWaypoint = polyline.properties!["polygonType"].toLowerCase() ==
               "waypoints";
         }
-        if (isWaypoint) continue;
+        // if (isWaypoint) continue;
 
         try {
           _lines.add(polyline);

@@ -79,7 +79,7 @@ class Building {
   final String? deeplinkUrl;
   final bool globalAnnotation;
   final bool locked;
-  final List<List<double>> boundary;
+  final List<List<double>>? boundary;
 
   Building({
     required this.id,
@@ -135,9 +135,9 @@ class Building {
       deeplinkUrl: json['deeplinkUrl'] == "null" ? null : json['deeplinkUrl'],
       globalAnnotation: json['globalAnnotation'],
       locked: json['locked'],
-      boundary: (json['boundary'] as List<dynamic>)
+      boundary: json['boundary'] != null ?(json['boundary'] as List<dynamic>)
           .map((e) => List<double>.from(e))
-          .toList(),
+          .toList():null,
     );
   }
 
