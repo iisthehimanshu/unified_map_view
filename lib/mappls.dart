@@ -1,0 +1,1 @@
+export 'src/providers/mappls_map_provider.dart';

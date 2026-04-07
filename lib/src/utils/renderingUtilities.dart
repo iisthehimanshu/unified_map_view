@@ -487,7 +487,6 @@ class RenderingUtilities{
       gap: gap,
       angle: angle,
     );
-    developer.log("pngBytes:${patternId} ${pngBytes}");
     await controller.addImage(patternId, pngBytes);
   }
 

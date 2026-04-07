@@ -1,0 +1,1 @@
+export 'src/providers/google_map_provider.dart';

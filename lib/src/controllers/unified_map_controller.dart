@@ -1,15 +1,9 @@
 // lib/src/controllers/unified_map_controller.dart
 
-import 'dart:developer';
-
 import 'package:flutter/foundation.dart';
-import 'package:unified_map_view/src/providers/mappls_map_provider.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
-import '../providers/google_map_provider.dart';
-import '../providers/mapLibre_map_provider.dart';
-import '../providers/mapbox_map_provider.dart';
 
 /// Main controller for managing map providers and operations
 class UnifiedMapController extends ChangeNotifier {
@@ -28,6 +22,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   UnifiedMapController({
     required MapProvider initialProvider,
+    required Map<MapProvider, BaseMapProvider> providers,
     required String venueName,
     bool enableClustering = true,
 
@@ -51,7 +46,7 @@ class UnifiedMapController extends ChangeNotifier {
   }) {
     AppConfig.url = url;
     AppConfig.setLanguage(value: languageCode);
-
+    _providers.addAll(providers);
     _currentProvider = initialProvider;
 
     _config = MapConfig(
@@ -71,20 +66,10 @@ class UnifiedMapController extends ChangeNotifier {
     _annotationController = AnnotationController(this, venueName: venueName);
 
     _cameraPosition = initialLocation;
-
-    _initializeProviders();
   }
 
 
   bool get controllerIsInitialized => (_currentMapController != null);
-
-  /// Initialize all map providers
-  void _initializeProviders() {
-    _providers[MapProvider.google] = GoogleMapProvider();
-    _providers[MapProvider.mapbox] = MapboxMapProvider();
-    _providers[MapProvider.mappls] = MapplsMapProvider();
-    _providers[MapProvider.mapLibre] = MaplibreMapProvider();
-  }
 
   /// Register a custom map provider
   /// This allows adding new map providers without modifying the package

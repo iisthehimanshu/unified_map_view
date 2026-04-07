@@ -1,0 +1,1 @@
+export 'src/providers/mapbox_map_provider.dart';

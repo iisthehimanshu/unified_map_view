@@ -3,15 +3,16 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:unified_map_view/maplibre.dart';
 import 'package:unified_map_view/unified_map_view.dart';
-import 'package:mappls_gl/mappls_gl.dart';
+// import 'package:mappls_gl/mappls_gl.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  MapplsAccountManager.setMapSDKKey("6889110931e58e2b999fb9131f78cc2e");
-  MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
-  MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
-  MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
+  // MapplsAccountManager.setMapSDKKey("6889110931e58e2b999fb9131f78cc2e");
+  // MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
+  // MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
+  // MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
   await UnifiedMapViewPackage.initialize(venueName: 'NationalZoologicalPark');
   runApp(const GeoJsonExampleApp());
 }
@@ -68,8 +69,9 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           bearing: 0.0,
           tilt: 0.0
         ),
-      url: "https://dev.iwayplus.in",
-      languageCode: "hi"
+      url: "https://maps.iwayplus.in",
+      languageCode: "hi",
+        providers: {MapProvider.mapLibre: MaplibreMapProvider()}
     );
     
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
@@ -124,7 +126,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     {"node": 3028798, "x": 958, "y": 830, "lat": 28.60650576680044, "lng": 77.24311811460171, "ttsEnabled": false, "bid": "6998011da89f89231fabc59f", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
     {"node": 3014177, "x": 929, "y": 826, "lat": 28.60651329211713, "lng": 77.24302568647795, "ttsEnabled": false, "bid": "6998011da89f89231fabc59f", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
     {"node": 3017796, "x": 900, "y": 827, "lat": 28.606507093917813, "lng": 77.24293672552818, "ttsEnabled": false, "bid": "6998011da89f89231fabc59f", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
-    {"node": 3036008, "x": 872, "y": 832, "lat": 28.606490411898534, "lng": 77.24284912080952, "ttsEnabled": true, "bid": "6998011da89f89231fabc59f", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null}
+    {"node": 3036008, "x": 872, "y": 832, "lat": 28.606490411898534, "lng": 77.24284912080952, "ttsEnabled": true, "bid": "6998011da89f89231fabc59f", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null, "destinationLat":28.606396, "destinationLng":77.242819}
   ];
 
   @override

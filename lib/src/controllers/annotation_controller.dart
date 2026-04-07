@@ -2,7 +2,7 @@ import 'package:turn_highlighter/turn_highlighter.dart';
 import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
 import 'package:unified_map_view/src/utils/renderingUtilities.dart';
-
+import 'dart:math' as math;
 import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
@@ -291,6 +291,61 @@ class AnnotationController{
     return true;
   }
 
+  Future<void> _annotateCurvedPath(MapLocation p1, MapLocation p2, String bid, int floor)async{
+    List<MapLocation> curvedPoints = _generateCurvedPoints(p1, p2);
+    final polyline = GeoJsonPolyline(
+      id: GeoJsonUtils.buildKey(
+        buildingID: bid,
+        floor: floor.toString(),
+        path: 'curved_mainLine_${DateTime.now().microsecondsSinceEpoch}',
+      ),
+      points: curvedPoints,
+      properties: {
+        "width": 5.0,
+        "fillOpacity": 1.0,
+        'style':'dashed'
+      },
+    );
+    _unifiedMapController.addPolyline(polyline);
+  }
+
+  List<MapLocation> _generateCurvedPoints(MapLocation start, MapLocation end, {int segments = 50}) {
+    List<MapLocation> points = [];
+
+    // Calculate the control point for the curve (midpoint with offset)
+    double midLat = (start.latitude + end.latitude) / 2;
+    double midLng = (start.longitude + end.longitude) / 2;
+
+    // Calculate perpendicular offset for curve height
+    double dx = end.longitude - start.longitude;
+    double dy = end.latitude - start.latitude;
+    double distance = math.sqrt(dx * dx + dy * dy);
+
+    // Adjust curve height based on distance (20% of distance)
+    double curveHeight = distance * 0.4;
+
+    // Create control point perpendicular to the line
+    MapLocation controlPoint = MapLocation(
+      latitude: midLat + curveHeight * (dx / distance),
+      longitude: midLng - curveHeight * (dy / distance),
+    );
+
+    // Generate points along the quadratic Bezier curve
+    for (int i = 0; i <= segments; i++) {
+      double t = i / segments;
+      double lat = math.pow(1 - t, 2) * start.latitude +
+          2 * (1 - t) * t * controlPoint.latitude +
+          math.pow(t, 2) * end.latitude;
+      double lng = math.pow(1 - t, 2) * start.longitude +
+          2 * (1 - t) * t * controlPoint.longitude +
+          math.pow(t, 2) * end.longitude;
+
+      points.add(MapLocation(latitude: lat, longitude: lng));
+    }
+
+    return points;
+  }
+
   Future<void> fitPathInScreen() async {
     await _unifiedMapController.fitBoundsToGeoJson(
       allPoint: _pathPoints,
@@ -317,16 +372,22 @@ class AnnotationController{
         "fillColor": color,
         "width": 8.0,
         "fillOpacity": 1.0,
+        'style':"solid"
       },
     );
 
     await _unifiedMapController.addPolyline(polyline);
   }
 
-  void _annotatePathMarkers(List<Cell> path){
+  Future<void> _annotatePathMarkers(List<Cell> path) async {
     for (var cell in path) {
       if(cell.isDestination){
-        _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        if(cell.destinationLat != null && cell.destinationLng != null){
+          await _annotateCurvedPath(MapLocation(latitude: cell.lat, longitude: cell.lng), MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), cell.bid!, cell.floor);
+          _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        }else{
+          _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        }
       }
       if(cell.isSource){
         _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));

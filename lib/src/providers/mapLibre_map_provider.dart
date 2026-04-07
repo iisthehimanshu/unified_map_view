@@ -60,7 +60,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
   final String _polylineSourceId = 'polylines-source';
-  final String _pathLayerId = 'path-polyline-layer';
+  final String _pathSolidLayerId = 'path-solid-polyline-layer';
+  final String _pathDashedLayerId = 'path-dashed-polyline-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
 
   bool _isClusteringEnabled = false;
@@ -797,11 +798,6 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty && polygon.properties?['patternSize']!=null && polygon.properties?['patternSpacing']!=null && polygon.properties?['patternRotation']!=null){
         pattern=true;
-        print('pattern: ${polygon.properties?['pattern']}');
-        print('patternSize: ${polygon.properties?['patternSize']}');
-        print('patternSpacing: ${polygon.properties?['patternSpacing']}');
-        print('patternRotation: ${polygon.properties?['patternRotation']}');
-        print('patternColor: ${polygon.properties?['patternColor']}');
       }
 
       return {
@@ -949,6 +945,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           'lineWidth': line.properties?['width']?.toDouble() ?? 4.0,
           'path': line.properties?['path'] ??
               line.id.toLowerCase().contains("path"),
+          'style':line.properties?['style']
         }
       };
     }).toList();
@@ -1682,13 +1679,36 @@ class MaplibreMapProvider extends BaseMapProvider {
       /// Path polylines (highlighted route)
       await controller.addLineLayer(
         _polylineSourceId,
-        _pathLayerId,
+        _pathSolidLayerId,
         const LineLayerProperties(
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
           lineOpacity: ["get", "lineOpacity"],
         ),
-        filter: ["to-boolean", ["get", "path"]],
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"]
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalIconMarkerLayerId,
+      );
+
+      await controller.addLineLayer(
+        _polylineSourceId,
+        _pathDashedLayerId,
+        const LineLayerProperties(
+          lineColor: ["get", "lineColor"],
+          lineWidth: ["get", "lineWidth"],
+          lineOpacity: ["get", "lineOpacity"],
+          lineDasharray: ["literal", [0.1, 2.0]], // ✅ FIX
+          lineCap: "round",
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "dashed"]
+        ],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
       );

@@ -12,9 +12,6 @@ dependencies:
     sdk: flutter
 
   google_maps_flutter:
-  mapbox_maps_flutter:
-  mappls_gl: ^1.2.0
-  maplibre_gl: ^0.21.0
   http:
   flutter_speed_dial: ^7.0.0
   flutter_compass: ^0.8.1
@@ -36,6 +33,9 @@ dependencies:
 dev_dependencies:
   hive_generator: ^2.0.0
   build_runner: ^2.3.2
+  mapbox_maps_flutter:
+  mappls_gl: ^1.2.0
+  maplibre_gl: ^0.21.0
 
   flutter_test:
     sdk: flutter
