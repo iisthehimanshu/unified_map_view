@@ -6,10 +6,11 @@ import 'package:http/http.dart' as http;
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../config.dart';
+
 class CacheController {
 
   Future<Uint8List?> fetchWithCache(String url) async {
-
     final dir = await getApplicationCacheDirectory();
     final fileName = md5.convert(utf8.encode(url)).toString(); // 32 chars
     final file = File('${dir.path}/$fileName');
@@ -17,8 +18,15 @@ class CacheController {
     // Always serve from disk if available (works offline forever)
     if (await file.exists()) {
       final bytes=await file.readAsBytes();
-      _refreshCacheInBackground(url, file);
+      if (AppConfig.internetSpeedInMbps >= 1) {
+        _refreshCacheInBackground(url, file);
+      }
       return bytes;
+    }
+
+
+    if (AppConfig.internetSpeedInMbps < 1) {
+      return null;
     }
 
     // First time — fetch from network AND cache it

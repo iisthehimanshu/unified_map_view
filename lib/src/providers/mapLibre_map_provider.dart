@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:unified_map_view/src/config.dart';
 import 'package:unified_map_view/src/database/cache/cache_controller.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
@@ -994,7 +995,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
     if (marker.assetPath == null) return false;
-    try {
+    // try {
       if (marker.customRendering) {
         Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
         MarkerIconWithAnchor markerIconWithAnchorWithText =
@@ -1030,6 +1031,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       } else {
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
+          if(AppConfig.internetSpeedInMbps<1){
+            return false;
+          }
           final response = await CacheController().fetchWithCache(marker.assetPath!);
           iconBytes = response;
         } else {
@@ -1042,10 +1046,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       }
       return false;
-    } catch (e) {
-      print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
-      return false;
-    }
+    // } catch (e) {
+    //   print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
+    //   return false;
+    // }
   }
 
   // ---------------------------------------------------------------------------
@@ -2345,6 +2349,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     _compassSub = null;
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
+    AppConfig.dispose();
   }
 
   static const String osmRasterStyle = '''
