@@ -69,7 +69,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           bearing: 0.0,
           tilt: 0.0
         ),
-      url: "https://maps.iwayplus.in",
+      url: "https://dev.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider()}
     );

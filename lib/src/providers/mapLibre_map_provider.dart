@@ -1028,14 +1028,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
         await controller.addImage(marker.id, iconBytes);
         await controller.addImage("${marker.id}-small", iconBytes2);
+        print("marker.id ${marker.id} $iconBytes");
         marker.anchor = markerIconWithAnchorWithText.anchor;
         return true;
       } else {
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {
-          if(AppConfig.internetSpeedInMbps<1){
-            return false;
-          }
           final response = await CacheController().fetchWithCache(marker.assetPath!);
           iconBytes = response;
         } else {
@@ -1049,7 +1047,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
       return false;
     } catch (e) {
-      print('Icon ${marker.iconName}.png not found in ${marker.assetPath!}');
+      print("_loadMarkerIcon $e");
       return false;
     }
   }

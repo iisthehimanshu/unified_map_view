@@ -19,10 +19,11 @@ class CacheController {
 
     // Always serve from disk if available (works offline forever)
     if (await file.exists()) {
+      print("found $fileName");
       final bytes=await file.readAsBytes();
-      if (AppConfig.internetSpeedInMbps >= 1) {
-        _refreshCacheInBackground(url, file);
-      }
+      // if (AppConfig.internetSpeedInMbps >= 1) {
+      //   _refreshCacheInBackground(url, file);
+      // }
       return bytes;
     }
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/services.dart';
 import '../apimodels/BuildingData.dart';
@@ -10,29 +11,29 @@ import '../database/model/BuildingByVenueAPIModel.dart';
 class BuildingByVenue {
   final String baseUrl = "${AppConfig.baseUrl}/secured/building/get/venue?api_key=${AppConfig.apiKey}";
 
-  Future<BuildingData> fetchBuildingIDS(String id, {bool fromDB = true}) async {
+  Future<BuildingData> fetchBuildingIDS(String id) async {
     final buildingByVenueBox = BuildingByVenueAPIBOX.getData();
 
     // ── FIRST RUN: Seed from asset if DB is empty ──
     if (!buildingByVenueBox.containsKey(id)) {
       final seeded = await _seedFromAssetIfNeeded(id, buildingByVenueBox);
+      final internetAvailable = await checkInternetConnectivity();
       if (seeded) {
         // Asset seeded — also trigger background API sync if internet available
         _backgroundSync(id, buildingByVenueBox);
         final responseBody = buildingByVenueBox.get(id)!.responseBody;
         return BuildingData.fromJson(responseBody);
+      }else if(internetAvailable){
+        return await _fetchFromApi(id, buildingByVenueBox);
+      }else{
+        throw("no preload & no DB data & no internet");
       }
-      // No asset, no DB — fall through to API call
-      return _fetchFromApi(id, buildingByVenueBox);
-    }
-    // ── SUBSEQUENT RUNS: DB has data ──
-    if (fromDB) {
-      _backgroundSync(id, buildingByVenueBox); // refresh in background if internet
+    }else{
+      _backgroundSync(id, buildingByVenueBox);
       final responseBody = buildingByVenueBox.get(id)!.responseBody;
       print("UNIFIED MAP BUILDINGBYVENUE DATA FROM DATABASE");
       return BuildingData.fromJson(responseBody);
     }
-    return _fetchFromApi(id, buildingByVenueBox);
   }
 
   /// Seeds DB from bundled asset. Returns true if successful.
@@ -85,8 +86,20 @@ class BuildingByVenue {
   }
 
   static Future<bool> checkInternetConnectivity() async {
-    var result = await Connectivity().checkConnectivity();
-    return result.contains(ConnectivityResult.mobile) ||
-        result.contains(ConnectivityResult.wifi);
+    var connectivityResult = await Connectivity().checkConnectivity();
+
+    if (!connectivityResult.contains(ConnectivityResult.mobile) &&
+        !connectivityResult.contains(ConnectivityResult.wifi)) {
+      return false;
+    }
+
+    try {
+      final result = await InternetAddress.lookup('google.com')
+          .timeout(const Duration(seconds: 3));
+
+      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 }
