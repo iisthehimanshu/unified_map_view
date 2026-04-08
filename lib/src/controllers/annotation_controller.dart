@@ -301,6 +301,7 @@ class AnnotationController{
       ),
       points: curvedPoints,
       properties: {
+        "fillColor": "#448AFF",
         "width": 5.0,
         "fillOpacity": 1.0,
         'style':'dashed'
