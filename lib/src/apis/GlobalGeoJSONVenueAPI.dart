@@ -40,7 +40,7 @@ class GlobalGeoJSONVenueAPI {
   Future<bool> _seedFromAssetIfNeeded(String venueName, GlobalGeoJSONVenueStorageService service) async {
     try {
       final raw = await rootBundle.loadString(
-        'packages/unified_map_view/assets/api_data/GeoJsonDataNationalZoologicalPark.json',
+        'assets/api_data/GeoJsonDataNationalZoologicalPark.json',
       );
       final Map<String, dynamic> responseBody = json.decode(raw);
       final model = GlobalGeoJSONVenueAPIModel(responseBody: responseBody);

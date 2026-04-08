@@ -74,6 +74,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   // Styles
   // ---------------------------------------------------------------------------
 
+
+
+
   @override
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
     final width = MediaQuery.of(context).size.width;
@@ -904,7 +907,6 @@ class MaplibreMapProvider extends BaseMapProvider {
               "waypoints";
         }
         if (isWaypoint) continue;
-
         try {
           _lines.add(polyline);
         } catch (e) {
@@ -2349,7 +2351,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     _compassSub = null;
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
-    AppConfig.dispose();
   }
 
   static const String osmRasterStyle = '''

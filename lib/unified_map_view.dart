@@ -41,7 +41,6 @@ class UnifiedMapViewPackage {
   static bool _initialized = false;
 
   static Future<void> initialize({required String venueName,String? url}) async {
-    AppConfig.instance;
     AppConfig.url = url;
     if (_initialized) return;
 

@@ -64,8 +64,8 @@ class UnifiedMapController extends ChangeNotifier {
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
-
     _cameraPosition = initialLocation;
+    AppConfig.instance;
   }
 
 
@@ -547,6 +547,7 @@ class UnifiedMapController extends ChangeNotifier {
   void dispose() {
     currentProviderImplementation.dispose();
     _currentMapController = null;
+    AppConfig.dispose();
     super.dispose();
   }
 }

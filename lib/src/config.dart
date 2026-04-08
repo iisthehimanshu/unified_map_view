@@ -24,22 +24,24 @@ class AppConfig {
 
   // A small public test file (~200KB) from a reliable CDN
   static const String _speedTestUrl =
-      'https://speed.cloudflare.com/__down?bytes=10000000';
+      'https://speed.cloudflare.com/__down?bytes=1000000';
 
   // Auto-starts when the class is first loaded
   static final _init = _startSpeedMonitor();
 
   static void _startSpeedMonitor() {
+    print("_measureSpeed");
     // Run immediately on startup, then every 30 seconds
     _measureSpeed();
     _speedCheckTimer = Timer.periodic(
-      const Duration(seconds: 30),
+      const Duration(minutes: 2),
           (_) => _measureSpeed(),
     );
   }
 
   static Future<void> _measureSpeed() async {
     try {
+      print("_measureSpeed1");
       final stopwatch = Stopwatch()..start();
 
       final response = await http
@@ -47,8 +49,9 @@ class AppConfig {
           .timeout(const Duration(seconds: 10));
 
       stopwatch.stop();
-
+      print("_measureSpeed2 ${response.statusCode}");
       if (response.statusCode == 200) {
+        print("_measureSpeed3");
         final int actualBytes = response.bodyBytes.length;
         final double elapsedSeconds =
             stopwatch.elapsedMilliseconds / 1000.0;
