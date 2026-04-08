@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1661,6 +1662,67 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  // Future<void> enablePolylineLayers(MaplibreMapController controller) async {
+  //   try {
+  //     await controller.addGeoJsonSource(_polylineSourceId, {
+  //       'type': 'FeatureCollection',
+  //       'features': [],
+  //     });
+  //
+  //     // TEST: Add ONLY this first, no filter, no expressions
+  //     await controller.addLineLayer(
+  //       _polylineSourceId,
+  //       _polylineLayerId,
+  //       const LineLayerProperties(
+  //         lineColor: ["get", "lineColor"],
+  //         lineWidth: ["get", "lineWidth"], // hardcoded
+  //         lineOpacity: ["get", "lineOpacity"],     // hardcoded
+  //       ),
+  //       // NO filter
+  //       filter: ["!", ["to-boolean", ["get", "path"]]],
+  //     );
+  //
+  //     // ← add second layer
+  //     await controller.addLineLayer(
+  //       _polylineSourceId,
+  //       _pathSolidLayerId,
+  //       const LineLayerProperties(
+  //         lineColor: ["get", "lineColor"],
+  //         lineWidth: ["get", "lineWidth"],
+  //         lineOpacity: ["get", "lineOpacity"],
+  //       ),
+  //       filter: [
+  //         "all",
+  //         ["to-boolean", ["get", "path"]],
+  //         ["==", ["get", "style"], "solid"]
+  //       ],
+  //     );
+  //
+  //
+  //     await controller.addLineLayer(
+  //       _polylineSourceId,
+  //       _pathDashedLayerId,
+  //       const LineLayerProperties(
+  //         lineColor: ["get", "lineColor"],
+  //         lineWidth: ["get", "lineWidth"],
+  //         lineOpacity: ["get", "lineOpacity"],
+  //         lineDasharray: [0.1, 2.0],  // hardcoded
+  //         lineCap: "round",
+  //       ),
+  //       filter: [
+  //         "all",
+  //         ["to-boolean", ["get", "path"]],
+  //         ["==", ["get", "style"], "dashed"]
+  //       ],
+  //     );
+  //
+  //   _isPolylineLayersEnabled = true;
+  //   } catch (e, stack) {
+  //     print('Error enabling polyline layers: $e');
+  //     print('Stack trace: $stack');
+  //   }
+  // }
+
   Future<void> enablePolylineLayers(MaplibreMapController controller) async {
     try {
       await controller.addGeoJsonSource(_polylineSourceId, {
@@ -1703,11 +1765,13 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addLineLayer(
         _polylineSourceId,
         _pathDashedLayerId,
-        const LineLayerProperties(
+         LineLayerProperties(
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
           lineOpacity: ["get", "lineOpacity"],
-          lineDasharray: ["literal", [0.1, 2.0]], // ✅ FIX
+           lineDasharray: Platform.isAndroid
+               ? ["literal", [0.1, 2.0]]
+               : null, // ✅ FIX
           lineCap: "round",
         ),
         filter: [
