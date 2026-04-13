@@ -14,16 +14,11 @@ class CacheController {
   Future<Uint8List?> fetchWithCache(String url) async {
     final dir = await getApplicationCacheDirectory();
     final fileName = md5.convert(utf8.encode(url)).toString(); // 32 chars
-    print("checking for $fileName");
     final file = File('${dir.path}/$fileName');
 
     // Always serve from disk if available (works offline forever)
     if (await file.exists()) {
-      print("found $fileName");
       final bytes=await file.readAsBytes();
-      // if (AppConfig.internetSpeedInMbps >= 1) {
-      //   _refreshCacheInBackground(url, file);
-      // }
       return bytes;
     }
 

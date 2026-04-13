@@ -477,7 +477,22 @@ class MaplibreMapProvider extends BaseMapProvider {
     print("markers $markers");
     if (controller is MaplibreMapController) {
       for (var marker in markers) {
-        await _loadMarkerIcon(controller, marker);
+        try{
+          Uint8List? iconBytes;
+          if (marker.assetPath!.startsWith('http')) {
+            final response = await CacheController().fetchWithCache(marker.assetPath!);
+            iconBytes = response;
+          } else {
+            final bd = await rootBundle.load(marker.assetPath!);
+            iconBytes = bd.buffer.asUint8List();
+          }
+          if (iconBytes != null) {
+            await controller.addImage(marker.id, iconBytes);
+          }
+        }catch(e){
+          print("error in addMarkers $e");
+        }
+        // _loadMarkerIcon(controller, marker);
         _symbols.add(marker);
       }
       try {
@@ -1029,7 +1044,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
         await controller.addImage(marker.id, iconBytes);
         await controller.addImage("${marker.id}-small", iconBytes2);
-        print("marker.id ${marker.id} $iconBytes");
         marker.anchor = markerIconWithAnchorWithText.anchor;
         return true;
       } else {
