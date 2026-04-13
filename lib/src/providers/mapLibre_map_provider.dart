@@ -493,7 +493,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         }catch(e){
           print("error in addMarkers $e");
         }
-        // _loadMarkerIcon(controller, marker);
+        _loadMarkerIcon(controller, marker);
         _symbols.add(marker);
       }
       try {
