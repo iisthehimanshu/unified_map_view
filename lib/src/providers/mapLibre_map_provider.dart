@@ -42,6 +42,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
+  final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
 
   final String _rotationSourceId = 'rotation-markers-source';
@@ -626,6 +627,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             'section': marker.properties?['type'] == "Section",
             'subSection': marker.properties?['type'] == "Sub Section",
             'sectionId': hasSectionId,
+            'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering
           }
@@ -782,6 +784,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       final String? fillColorHex = polygon.properties?["fillColor"];
       final String? strokeColorHex = polygon.properties?["strokeColor"];
+      final String? fillColorSecondaryHex=polygon.properties?["fillColorSecondary"];
 
       final Color fillColor = (fillColorHex != null &&
           fillColorHex != "undefined" &&
@@ -795,6 +798,14 @@ class MaplibreMapProvider extends BaseMapProvider {
           strokeColorHex.isNotEmpty)
           ? RenderingUtilities.hexToColor(strokeColorHex)
           : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ??
+          const Color(0xffD3D3D3);
+
+
+      final Color fillColorSecondary = (fillColorSecondaryHex != null &&
+          fillColorSecondaryHex != "undefined" &&
+          fillColorSecondaryHex.isNotEmpty)
+          ? RenderingUtilities.hexToColor(fillColorSecondaryHex)
+          : RenderingUtilities.polygonColorMap[type]?["fillColorSecondary"] ??
           const Color(0xffD3D3D3);
 
       final coordinates =
@@ -834,6 +845,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
           'strokeColor':
           '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
+          'fillColorSecondary':'#${RenderingUtilities.colorToMapplsHex(fillColorSecondary)}',
           'fillOpacity': fillColor.a,
           'isSelected': polygon.id == selectPolygonId,
           'boundary': polygon.properties?['type'] == "Boundary",
@@ -1028,7 +1040,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           customAnchor: customAnchor,
           expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
         );
-
         MarkerIconWithAnchor markerIconWithAnchorWithoutText =
         await creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
@@ -1139,6 +1150,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["!", ["to-boolean", ["get", "isPriority"]]],
             ["!", ["to-boolean", ["get", "section"]]],
             ["!", ["to-boolean", ["get", "subSection"]]],
+            ["!", ["to-boolean", ["get", "boundary"]]],
             ["!", ["to-boolean", ["get", "bearing"]]],
             ["!", ["to-boolean", ["get", "icon"]]],
           ],
@@ -1192,6 +1204,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "isPriority"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
           ["to-boolean", ["get", "sectionId"]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
@@ -1246,6 +1259,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "isPriority"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
           ["!", ["to-boolean", ["get", "sectionId"]]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
@@ -1288,6 +1302,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "isPriority"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
           ["to-boolean", ["get", "customRendering"]],
           ["to-boolean", ["get", "icon"]],
@@ -1316,11 +1331,66 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["!", ["to-boolean", ["get", "isPriority"]]],
             ["!", ["to-boolean", ["get", "section"]]],
             ["!", ["to-boolean", ["get", "subSection"]]],
+            ["!", ["to-boolean", ["get", "boundary"]]],
             ["to-boolean", ["get", "bearing"]],
           ],
           enableInteraction: true,
           belowLayerId: _normalIconMarkerLayerId,
           minzoom: 18.0
+      );
+
+      // Layer 4: Section markers
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _patchAboveMarkerLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13,  0.2, // at zoom 8  → 30% size
+            18.3,  1.0,   // at zoom 8  → 30% size
+          ],
+          iconAnchor: ["get", "iconAnchor"],
+          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: [
+            "case",
+            ["has", "icon"],
+            "top",
+            "center"
+          ],
+          textOffset: [
+            "case",
+            ["has", "icon"],
+            ["literal", [0, 0.2]],
+            ["literal", [0, 0]]
+          ],
+          textAllowOverlap: false,
+          iconAllowOverlap: false,
+          iconOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12, 1.0,
+            14, 0.0
+          ],
+          textOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12, 1.0,
+            14, 0.0
+          ],
+        ),
+        filter: ["to-boolean", ["get", "boundary"]],
+        enableInteraction: true,
+        belowLayerId: _normalFixedMarkerLayerId,
       );
 
       // Layer 4: Section markers
@@ -1643,7 +1713,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _polygonSourceId,
         _patchAbovePolygonLayerId,
         const FillLayerProperties(
-          fillColor: ["get", "fillColor"],
+          fillColor: ["get", "fillColorSecondary"],
           fillOpacity: [
             "interpolate",
             ["linear"],
@@ -2396,7 +2466,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.setLayerProperties(
       _patchAbovePolygonLayerId,
       FillLayerProperties(
-          fillOpacity: 0.5
+          fillOpacity: 0.5,
+        fillColor: "#FFFFFF",
       ),
     );
   }
@@ -2412,7 +2483,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["zoom"],
             12, 1.0,
             14, 0.0    // fade out as you zoom in
-          ]
+          ],
+        fillColor: ["get", "fillColorSecondary"],
       ),
     );
   }
