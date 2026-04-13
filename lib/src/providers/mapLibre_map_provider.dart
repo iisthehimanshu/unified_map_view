@@ -2452,7 +2452,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.setLayerProperties(
       _patchAbovePolygonLayerId,
       FillLayerProperties(
-          fillOpacity: 0.5
+          fillOpacity: 0.5,
+        fillColor: "#FFFFFF",
       ),
     );
   }
@@ -2468,7 +2469,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["zoom"],
             12, 1.0,
             14, 0.0    // fade out as you zoom in
-          ]
+          ],
+        fillColor: ["get", "fillColorSecondary"],
       ),
     );
   }
