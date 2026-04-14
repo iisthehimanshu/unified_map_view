@@ -95,7 +95,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               tilt: config.initialLocation.tilt,
               bearing: config.initialLocation.bearing
           ),
-          styleString: osmRasterStyle,
+          // styleString: osmRasterStyle,
           onMapCreated: (MaplibreMapController controller) async {
             _config = config;
             _controller = controller;
