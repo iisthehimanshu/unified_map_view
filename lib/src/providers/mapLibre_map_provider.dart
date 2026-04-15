@@ -1284,11 +1284,17 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            13,  0.2, // at zoom 8  → 30% size
+            14,  0.2, // at zoom 8  → 30% size
             18.3,  1.0,   // at zoom 8  → 30% size
           ],
           iconAnchor: ["get", "iconAnchor"],
-          iconAllowOverlap: false,
+          iconAllowOverlap: [
+            "step",
+            ["zoom"],
+            true,   // below zoom 16 → allow overlap (all markers visible)
+            16,
+            false,  // zoom 16+ → collision detection kicks in
+          ],
           iconOpacity: [
             "interpolate",
             ["linear"],
