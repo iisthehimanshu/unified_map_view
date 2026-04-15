@@ -1129,7 +1129,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalTextMarkerLayerId,
           const SymbolLayerProperties(
-            textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textField: ["get", "title"],
             textSize: 14,
             textColor: "#000000",
@@ -1164,7 +1164,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withSectionId",
         const SymbolLayerProperties(
-          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1222,7 +1222,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
-          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1315,7 +1315,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalFixedMarkerLayerId,
           const SymbolLayerProperties(
-            textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textRotate: ["get", "bearing"],
             textRotationAlignment: "map",
             textField: ["get", "title"],
@@ -1353,7 +1353,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             18.3,  1.0,   // at zoom 8  → 30% size
           ],
           iconAnchor: ["get", "iconAnchor"],
-          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1401,7 +1401,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
-          textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1449,7 +1449,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           const SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
-            textFont: ["literal", ["Open Sans Regular", "Arial Unicode MS Regular"]],
+            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
