@@ -1,6 +1,7 @@
 // lib/src/controllers/unified_map_controller.dart
 
 import 'package:flutter/foundation.dart';
+import 'package:unified_map_view/src/enums/Theme.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
@@ -494,13 +495,13 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> clearPath() async {
     _annotationController.clearPath();
-    await currentProviderImplementation.removeMapFade(_currentMapController);
+    if(RenderingTheme.current.isZoo)await currentProviderImplementation.removeMapFade(_currentMapController);
     notifyListeners();
   }
 
   Future<void> annotatePath({required List<String> bids, required int sourceFloor}) async {
     deSelectLocation();
-    await currentProviderImplementation.addMapFade(_currentMapController);
+    if(RenderingTheme.current.isZoo)await currentProviderImplementation.addMapFade(_currentMapController);
     for (var bid in bids) {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }

@@ -94,10 +94,11 @@ class BuildingByVenue {
     }
 
     try {
-      final result = await InternetAddress.lookup('google.com')
+      final response = await http
+          .get(Uri.parse('https://clients3.google.com/generate_204'))
           .timeout(const Duration(seconds: 3));
 
-      return result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      return response.statusCode == 204;
     } catch (_) {
       return false;
     }

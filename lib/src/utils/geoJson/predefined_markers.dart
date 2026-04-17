@@ -80,6 +80,7 @@ class PredefinedMarkers{
             iconName: "Floor Connection",
             priority: true,
             anchor: LandmarkAssetType.lift.anchor,
+            imageSize: Size(30, 30),
             customRendering: true
         );
       case "Stair":
