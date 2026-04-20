@@ -93,6 +93,7 @@ class PredefinedMarkers{
             iconName: "Floor Connection",
             priority: true,
             anchor: LandmarkAssetType.stairs.anchor,
+            imageSize: Size(30, 30),
             customRendering: true
         );
       case "Escalator":
@@ -104,6 +105,7 @@ class PredefinedMarkers{
             assetPath: LandmarkAssetType.escalator.assetPath,
             iconName: "Floor Connection",
             priority: true,
+            imageSize: Size(30, 30),
             anchor: LandmarkAssetType.escalator.anchor,
             customRendering: true
         );
@@ -116,6 +118,7 @@ class PredefinedMarkers{
             assetPath: LandmarkAssetType.ramp.assetPath,
             iconName: "Floor Connection",
             priority: true,
+            imageSize: Size(30, 30),
             anchor: LandmarkAssetType.ramp.anchor,
             customRendering: true
         );
@@ -128,6 +131,7 @@ class PredefinedMarkers{
               assetPath: LandmarkAssetType.lift.assetPath,
               iconName: "Floor Connection",
               priority: true,
+              imageSize: Size(30, 30),
               anchor: LandmarkAssetType.lift.anchor,
               customRendering: true
           );

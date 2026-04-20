@@ -94,7 +94,7 @@ class MapplsMapProvider extends BaseMapProvider {
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
-                    point, [_normalTextMarkerLayerId, _normalIconMarkerLayerId, _normalFixedMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
+                    point, [_normalTextMarkerLayerId, "$_normalIconMarkerLayerId-withSectionId", "$_normalIconMarkerLayerId-withoutSectionId", _normalFixedMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
                 );
 
                 if (markerFeatures.isNotEmpty) {
@@ -1149,18 +1149,30 @@ class MapplsMapProvider extends BaseMapProvider {
       await controller.addSymbolLayer(
         _clusterSourceId,
         _subSectionMarkerLayerId,
-        const SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 1.5,
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "center",
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-        ),
+          const SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 0.8,
+            iconAnchor: ["get", "iconAnchor"],
+            textField: ["get", "title"],
+            textSize: 14,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 1.5,
+            textAnchor: [
+              "case",
+              ["has", "icon"],
+              "top",
+              "center"
+            ],
+            textOffset: [
+              "case",
+              ["has", "icon"],
+              ["literal", [0, 0.2]],
+              ["literal", [0, 0]]
+            ],
+            textAllowOverlap: true,
+            iconAllowOverlap: true,
+          ),
         filter: ["to-boolean", ["get", "subSection"]],
         enableInteraction: true,
         belowLayerId: _normalFixedMarkerLayerId,

@@ -480,7 +480,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       for (var marker in markers) {
         try{
           Uint8List? iconBytes;
-          if (marker.assetPath!.startsWith('http')) {
+          if (marker.assetPath?.startsWith('http')??false) {
             final response = await CacheController().fetchWithCache(marker.assetPath!);
             iconBytes = response;
           } else {
