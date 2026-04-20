@@ -480,15 +480,17 @@ class MaplibreMapProvider extends BaseMapProvider {
       for (var marker in markers) {
         try{
           Uint8List? iconBytes;
-          if (marker.assetPath?.startsWith('http')??false) {
-            final response = await CacheController().fetchWithCache(marker.assetPath!);
-            iconBytes = response;
-          } else {
-            final bd = await rootBundle.load(marker.assetPath!);
-            iconBytes = bd.buffer.asUint8List();
-          }
-          if (iconBytes != null) {
-            await controller.addImage(marker.id, iconBytes);
+          if(marker.assetPath != null){
+            if (marker.assetPath!.startsWith('http')) {
+              final response = await CacheController().fetchWithCache(marker.assetPath!);
+              iconBytes = response;
+            } else {
+              final bd = await rootBundle.load(marker.assetPath!);
+              iconBytes = bd.buffer.asUint8List();
+            }
+            if (iconBytes != null) {
+              await controller.addImage(marker.id, iconBytes);
+            }
           }
         }catch(e){
           print("error in addMarkers $e");
