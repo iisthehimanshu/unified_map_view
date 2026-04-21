@@ -247,7 +247,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           scrollGesturesEnabled: config.scrollGesturesEnabled,
           tiltGesturesEnabled: config.tiltGesturesEnabled,
           zoomGesturesEnabled: config.zoomControlsEnabled,
-          minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
+          minMaxZoomPreference: const MinMaxZoomPreference(14.0, 23.0),
           logoViewMargins: const Point(50, 5),
         ),
       ],
