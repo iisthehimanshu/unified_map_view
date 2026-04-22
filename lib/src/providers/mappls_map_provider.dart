@@ -680,11 +680,11 @@ class MapplsMapProvider extends BaseMapProvider {
       double? baseHeight;
       double? height;
 
-      if (polygon.properties?['baseHeight'] != null && polygon.properties?['baseHeight'].isNotEmpty) {
+      if (polygon.properties?['baseHeight'] != null && polygon.properties?['baseHeight'].isNotEmpty && polygon.properties?['baseHeight'] != "undefined") {
         baseHeight = double.parse(polygon.properties?['baseHeight']);
       }
 
-      if (polygon.properties?['height'] != null && polygon.properties?['height'].isNotEmpty) {
+      if (polygon.properties?['height'] != null && polygon.properties?['height'].isNotEmpty && polygon.properties?['height'] != "undefined") {
         height = double.parse(polygon.properties?['height']);
         // If baseHeight exists, add it to height
         if (baseHeight != null) {
