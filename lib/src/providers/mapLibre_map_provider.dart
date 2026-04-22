@@ -1711,7 +1711,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
-        enableInteraction: true,
+        enableInteraction: false,
         minzoom: 13.5,                      // visible at zoom >= 14
         belowLayerId: _normalPolygonLayerId, // sits below everything
       );
@@ -1737,7 +1737,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["has", "height"]],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
-        enableInteraction: true,
+        enableInteraction: false,
         belowLayerId: _polylineLayerId,      // sits just below polylines = above all polygon layers
       );
 
