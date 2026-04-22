@@ -294,17 +294,21 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
           ),
 
           // Center crosshair pin (visual only, map scrolls under it)
-          const Positioned.fill(
+           Positioned.fill(
             child: IgnorePointer(
               child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.location_on, color: Colors.red, size: 50,
-                        shadows: [Shadow(color: Colors.black45, blurRadius: 8)]),
-                    SizedBox(height: 2),
-                    CircleAvatar(radius: 3, backgroundColor: Colors.black38),
-                  ],
+                child: Transform.translate(
+                  // Shift UP by: half icon height (25) + SizedBox (2) + dot radius (3) = 30
+                  offset: Offset(0, -30),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.location_on, color: Colors.red, size: 50,
+                          shadows: [Shadow(color: Colors.black45, blurRadius: 8)]),
+                      SizedBox(height: 2),
+                      CircleAvatar(radius: 3, backgroundColor: Colors.black38),
+                    ],
+                  ),
                 ),
               ),
             ),
