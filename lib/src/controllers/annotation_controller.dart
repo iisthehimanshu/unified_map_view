@@ -1,16 +1,11 @@
-import 'package:turn_highlighter/turn_highlighter.dart';
 import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
-import 'package:unified_map_view/src/utils/renderingUtilities.dart';
 import 'dart:math' as math;
 import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
-import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import '../apis/BuildingByVenue.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
-import '../config.dart';
 import '../models/Cell.dart';
-import '../utils/geoJson/predefined_markers.dart';
 
 class AnnotationController{
   final UnifiedMapController _unifiedMapController;
@@ -32,6 +27,16 @@ class AnnotationController{
   User? _user;
 
   List<MapLocation>? _pinSelectionLocation;
+  Map<TurnDirection, String> _turnImages = {};
+  List<_PathTurn> _upcomingTurns = [];
+  TurnImageCue? _activeTurnImageCue;
+  double _approachDistanceMeters = 10.0;
+  double _hideDistanceMeters = 2.0;
+  double _turnThresholdDegrees = 20.0;
+  final Set<int> _passedTurnIndices = {};
+  final Set<int> _enteredTurnZoneIndices = {};
+
+  TurnImageCue? get activeTurnImageCue => _activeTurnImageCue;
 
 
   AnnotationController(this._unifiedMapController, {required String venueName}){
@@ -59,7 +64,6 @@ class AnnotationController{
         var floorData = _venueData.setBuildingFloor(buildingId: buildingId, floor: 0);
         venueRenderData.addAll(floorData);
       });
-      double orientation = _venueData.getFloorOrientation(0);
       // await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
       await _unifiedMapController.fitBoundsToGeoJson();
@@ -145,7 +149,23 @@ class AnnotationController{
     _path = null;
     _multiPath = null;
     _pathPoints.clear();
+    _upcomingTurns.clear();
+    _activeTurnImageCue = null;
+    _passedTurnIndices.clear();
+    _enteredTurnZoneIndices.clear();
     return true;
+  }
+
+  void configureTurnImages({
+    required Map<TurnDirection, String> imageByDirection,
+    double approachDistanceMeters = 10.0,
+    double hideDistanceMeters = 2.0,
+    double turnThresholdDegrees = 20.0,
+  }) {
+    _turnImages = imageByDirection;
+    _approachDistanceMeters = approachDistanceMeters;
+    _hideDistanceMeters = hideDistanceMeters;
+    _turnThresholdDegrees = turnThresholdDegrees;
   }
 
   bool addPath(List<Cell> path) {
@@ -158,7 +178,6 @@ class AnnotationController{
 
     for (var cell in path) {
       final bid = cell.bid ?? "";
-      final floor = cell.floor;
 
       // If building changes, store previous segment
       if (lastBid != null && bid != lastBid) {
@@ -183,7 +202,6 @@ class AnnotationController{
 
     final bid = segment.first.bid!;
     final floor = segment.first.floor;
-
     _path!.putIfAbsent(bid, () => <int, List<List<Cell>>>{});
     _path![bid]!.putIfAbsent(floor, () => <List<Cell>>[]);
 
@@ -208,6 +226,10 @@ class AnnotationController{
     if (_path == null) return false;
 
     _pathPoints.clear();
+    _upcomingTurns.clear();
+    _passedTurnIndices.clear();
+    _enteredTurnZoneIndices.clear();
+    _activeTurnImageCue = null;
     _unifiedMapController.removePolyline("path");
 
     for (var entry in _path!.entries) {
@@ -221,6 +243,7 @@ class AnnotationController{
         if (floor != sourceFloor) continue;
 
         for (var path in paths) {
+          _buildUpcomingTurns(path);
           List<MapLocation> segmentPoints = [];
           String? currentColor;
 
@@ -472,6 +495,114 @@ class AnnotationController{
     if(_user == null) return;
     _user?.location = location;
     await _unifiedMapController.moveMarker("user", location);
+    _evaluateTurnImageCue(location);
+  }
+
+  void _buildUpcomingTurns(List<Cell> path) {
+    if (path.length < 3) return;
+
+    for (int i = 1; i < path.length - 1; i++) {
+      final previous = path[i - 1];
+      final current = path[i];
+      final next = path[i + 1];
+      final delta = _signedTurnDeltaDegrees(
+        MapLocation(latitude: previous.lat, longitude: previous.lng),
+        MapLocation(latitude: current.lat, longitude: current.lng),
+        MapLocation(latitude: next.lat, longitude: next.lng),
+      );
+      if (delta.abs() < _turnThresholdDegrees) continue;
+      final direction = _directionFromDelta(delta);
+      _upcomingTurns.add(
+        _PathTurn(
+          index: i,
+          direction: direction,
+          location: MapLocation(latitude: current.lat, longitude: current.lng),
+        ),
+      );
+    }
+  }
+
+  void _evaluateTurnImageCue(MapLocation userLocation) {
+    if (_upcomingTurns.isEmpty || _turnImages.isEmpty) {
+      _activeTurnImageCue = null;
+      return;
+    }
+
+    for (final turn in _upcomingTurns) {
+      if (_passedTurnIndices.contains(turn.index)) continue;
+      final distance = MapCalculations.distanceInMeters(userLocation, turn.location);
+      if (distance <= _hideDistanceMeters) {
+        _enteredTurnZoneIndices.add(turn.index);
+      } else if (_enteredTurnZoneIndices.contains(turn.index)) {
+        // User already reached the turn and is now moving away from it.
+        _passedTurnIndices.add(turn.index);
+        _enteredTurnZoneIndices.remove(turn.index);
+      }
+    }
+
+    _PathTurn? nearestTurn;
+    double nearestDistance = double.infinity;
+    for (final turn in _upcomingTurns) {
+      if (_passedTurnIndices.contains(turn.index)) continue;
+      final distance = MapCalculations.distanceInMeters(userLocation, turn.location);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestTurn = turn;
+      }
+    }
+
+    if (nearestTurn == null || nearestDistance > _approachDistanceMeters) {
+      _activeTurnImageCue = null;
+      return;
+    }
+
+    final imagePath = _turnImages[nearestTurn.direction];
+    if (imagePath == null || imagePath.isEmpty) {
+      _activeTurnImageCue = null;
+      return;
+    }
+
+    _activeTurnImageCue = TurnImageCue(
+      direction: nearestTurn.direction,
+      imagePath: imagePath,
+      distanceToTurnMeters: nearestDistance,
+    );
+  }
+
+  double _bearingDegrees(MapLocation from, MapLocation to) {
+    final lat1 = from.latitude * math.pi / 180.0;
+    final lat2 = to.latitude * math.pi / 180.0;
+    final dLon = (to.longitude - from.longitude) * math.pi / 180.0;
+    final y = math.sin(dLon) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLon);
+    final bearing = math.atan2(y, x) * 180.0 / math.pi;
+    return (bearing + 360.0) % 360.0;
+  }
+
+  double _signedTurnDeltaDegrees(
+      MapLocation previous,
+      MapLocation current,
+      MapLocation next,
+      ) {
+    final inBearing = _bearingDegrees(previous, current);
+    final outBearing = _bearingDegrees(current, next);
+    var delta = outBearing - inBearing;
+    if (delta > 180.0) delta -= 360.0;
+    if (delta < -180.0) delta += 360.0;
+    return delta;
+  }
+
+  TurnDirection _directionFromDelta(double delta) {
+    final absDelta = delta.abs();
+    if (delta < 0) {
+      if (absDelta >= 120) return TurnDirection.sharpLeft;
+      if (absDelta >= 60) return TurnDirection.left;
+      return TurnDirection.slightLeft;
+    }
+    if (absDelta >= 120) return TurnDirection.sharpRight;
+    if (absDelta >= 60) return TurnDirection.right;
+    return TurnDirection.slightRight;
   }
 
   Set<int> extractFloorsContainingPath(Map<String, Map<int, List<List<Cell>>>>? path) {
@@ -484,4 +615,16 @@ class AnnotationController{
     return floors;
   }
 
+}
+
+class _PathTurn {
+  final int index;
+  final TurnDirection direction;
+  final MapLocation location;
+
+  const _PathTurn({
+    required this.index,
+    required this.direction,
+    required this.location,
+  });
 }

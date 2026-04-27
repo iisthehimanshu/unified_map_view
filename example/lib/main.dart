@@ -75,6 +75,25 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     );
     
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
+    _unifiedMapController.configureTurnImages(
+      imageByDirection: {
+        // Replace these placeholder image paths with your turn photos.
+        TurnDirection.slightLeft:
+        'packages/unified_map_view/assets/markers/slightLeft.png',
+        TurnDirection.left: 'packages/unified_map_view/assets/markers/Left.png',
+        TurnDirection.sharpLeft:
+        'packages/unified_map_view/assets/markers/slightLeft.png',
+        TurnDirection.slightRight:
+        'packages/unified_map_view/assets/markers/slightRight.png',
+        TurnDirection.right:
+        'packages/unified_map_view/assets/markers/Right.png',
+        TurnDirection.sharpRight:
+        'packages/unified_map_view/assets/markers/slightRight.png',
+      },
+      approachDistanceMeters: 14.0,
+      hideDistanceMeters: 3.0,
+      turnThresholdDegrees: 18.0,
+    );
     // Future.delayed(const Duration(seconds: 2), () {
     //   _addUserMarker();
     // });
@@ -224,6 +243,41 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
             child: Stack(
               children: [
                 UnifiedMapWidget(controller: _unifiedMapController),
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 88,
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 300),
+                    opacity: _unifiedMapController.activeTurnImageCue == null
+                        ? 0.0
+                        : 1.0,
+                    child: _unifiedMapController.activeTurnImageCue == null
+                        ? const SizedBox.shrink()
+                        : Container(
+                            height: 120,
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.95),
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 8,
+                                  offset: Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.asset(
+                                _unifiedMapController.activeTurnImageCue!.imagePath,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
                 Positioned(bottom: 150,
                 right: 16,
                 child: FloorSpeedDial(controller: _unifiedMapController),)

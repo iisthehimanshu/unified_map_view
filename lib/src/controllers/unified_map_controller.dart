@@ -478,6 +478,22 @@ class UnifiedMapController extends ChangeNotifier {
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
   List<int> get floorsContainingPath => _annotationController.floorsContainingPath;
+  TurnImageCue? get activeTurnImageCue => _annotationController.activeTurnImageCue;
+
+  void configureTurnImages({
+    required Map<TurnDirection, String> imageByDirection,
+    double approachDistanceMeters = 10.0,
+    double hideDistanceMeters = 2.0,
+    double turnThresholdDegrees = 20.0,
+  }) {
+    _annotationController.configureTurnImages(
+      imageByDirection: imageByDirection,
+      approachDistanceMeters: approachDistanceMeters,
+      hideDistanceMeters: hideDistanceMeters,
+      turnThresholdDegrees: turnThresholdDegrees,
+    );
+    notifyListeners();
+  }
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);

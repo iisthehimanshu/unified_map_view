@@ -20,6 +20,7 @@ export 'src/models/camera_position.dart';
 export 'src/models/geojson_models.dart';
 export 'src/models/user.dart';
 export 'src/models/CameraBound.dart';
+export 'src/models/turn_image_cue.dart';
 
 // Controllers
 export 'src/controllers/unified_map_controller.dart';
