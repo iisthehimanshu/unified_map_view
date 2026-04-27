@@ -377,6 +377,7 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   /// Add a polyline to the map
+  /// Add a polyline to the map
   Future<void> addPolyline(GeoJsonPolyline polyline) async {
     _polylines.add(polyline);
     if (_currentMapController != null) {
@@ -567,6 +568,8 @@ class UnifiedMapController extends ChangeNotifier {
     for (int i = 0; i < locations.length; i++) {
       final location = locations[i];
       try {
+        var split =location.id?.split(',');
+        title='${split?[0]},${split?[1]}';
         final marker = GeoJsonMarker(
           id: 'Fingerprinted-marker-$i-${DateTime.now().millisecondsSinceEpoch}',
           position: location,

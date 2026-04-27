@@ -1308,6 +1308,7 @@ class MapplsMapProvider extends BaseMapProvider {
     var keyMap = GeoJsonUtils.extractKeyValueMap(key);
     if(keyMap["polyId"] != null) return keyMap["polyId"];
     if(keyMap["id"] != null) return keyMap["id"];
+    if (key.isNotEmpty) return key;
     return null;
   }
 

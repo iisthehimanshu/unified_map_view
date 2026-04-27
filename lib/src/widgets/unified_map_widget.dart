@@ -35,7 +35,7 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
   void initState() {
     super.initState();
     // Set up the map tap callback handler
-    widget.controller.setOnMapTapCallback(_handleMapTap);
+    widget.controller.setOnMapTapCallback(handleMapTap);
   }
 
   @override
@@ -46,11 +46,11 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
   }
 
   /// Handle map tap - this gets called by the map provider
-  void _handleMapTap(MapLocation location) {
+  void handleMapTap(MapLocation location) {
     print("tapped on map ${_isPinDropMode}");
-    if (_isPinDropMode) {
+    // if (_isPinDropMode) {
       _onMapTap(location);
-    }
+    // }
   }
 
   /// Toggle pin drop mode
@@ -59,6 +59,11 @@ class _UnifiedMapWidgetState extends State<UnifiedMapWidget> {
   void _onMapTap(MapLocation location) {
     setState(() {
       _pendingPinLocation = location;
+    });
+    widget.onPinDropped?.call(location);
+    // Exit pin drop mode
+    setState(() {
+      _pendingPinLocation = null;
     });
     // _showPinConfirmationDialog(location);
   }
