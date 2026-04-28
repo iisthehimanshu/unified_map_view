@@ -359,17 +359,17 @@ class GeoJsonMarker {
     if (associatedPolygons is List && associatedPolygons.isNotEmpty) {
       polyId = associatedPolygons.first;
     }
-    if(feature.id!.contains("8a55e0b7421c73d0a342601127d79a26")){
-      print("renderNamefor snake ${feature.properties?["animalRef"]?["renderName"]}");
+
+    if(feature.properties?["textLive"]??(assetPath==null?true:false)){
+      parsedTitle =
+          pick(feature.properties?["animalRef"]?["render_name"]?[AppConfig.languageCode]) ??
+              pick(feature.properties?["animalRef"]?["common_name"]?[AppConfig.languageCode]) ??
+              pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
+              pick(feature.properties?["sponsorRef"]?["name"]) ??
+              pick(feature.properties?["renderName"]) ??
+              pick(feature.properties?["name"]) ??
+              "";
     }
-    parsedTitle =
-            pick(feature.properties?["animalRef"]?["render_name"]?[AppConfig.languageCode]) ??
-            pick(feature.properties?["animalRef"]?["common_name"]?[AppConfig.languageCode]) ??
-            pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
-            pick(feature.properties?["sponsorRef"]?["name"]) ??
-            pick(feature.properties?["renderName"]) ??
-            pick(feature.properties?["name"]) ??
-            "";
 
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),

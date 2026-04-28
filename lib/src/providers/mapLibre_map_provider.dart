@@ -247,7 +247,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           scrollGesturesEnabled: config.scrollGesturesEnabled,
           tiltGesturesEnabled: config.tiltGesturesEnabled,
           zoomGesturesEnabled: config.zoomControlsEnabled,
-          minMaxZoomPreference: const MinMaxZoomPreference(14.0, 23.0),
+          minMaxZoomPreference: const MinMaxZoomPreference(12.0, 23.0),
           logoViewMargins: const Point(50, 5),
         ),
       ],
@@ -1726,8 +1726,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            12, 1.0,
-            14, 0.0    // fade out as you zoom in
+            14, 1.0,
+            15, 0.0    // fade out as you zoom in
           ],
           fillOutlineColor: ["get", "strokeColor"],
         ),
@@ -2489,8 +2489,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            12, 1.0,
-            14, 0.0    // fade out as you zoom in
+            14, 1.0,
+            15, 0.0    // fade out as you zoom in
           ],
         fillColor: ["get", "fillColorSecondary"],
       ),
