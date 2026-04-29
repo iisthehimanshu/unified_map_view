@@ -72,16 +72,15 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isPolylineLayersEnabled = false;
   bool _isCircleLayersEnabled = false;
 
+  Size? _screenSize;
+  double? _fadeOutZoom;
+
   // ---------------------------------------------------------------------------
   // Styles
   // ---------------------------------------------------------------------------
 
-
-
-
   @override
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
-    final width = MediaQuery.of(context).size.width;
     return Stack(
       children: [
         MaplibreMap(
@@ -209,6 +208,8 @@ class MaplibreMapProvider extends BaseMapProvider {
               if (_circles.isNotEmpty) {
                 await _setGeoJsonCircle(_controller!);
               }
+              _screenSize = MediaQuery.of(context).size;
+              await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
             }
           },
           onCameraIdle: () async {
@@ -1762,6 +1763,183 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  Future<void> _refreshPatchAboveOpacity(
+      MaplibreMapController controller, {
+        Size? screenSize,
+      }) async {
+    final boundaryPolygons = _polygons.where((p) =>
+    p.properties?['type']?.toString().toLowerCase() == 'boundary'
+    ).toList();
+
+    final fitZoom = _calculateFitZoom(
+      boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons,
+      screenSize: screenSize,
+    ) - 1.7;
+
+    final fadeOutZoom = fitZoom;
+    final fadeInZoom  = fitZoom - 1.0;
+
+    // Cache so removeMapFade and style-reload can reuse it
+    _fadeOutZoom = fadeOutZoom;
+
+    // 1. Boundary polygon fade layer
+    await controller.setLayerProperties(
+      _patchAbovePolygonLayerId,
+      FillLayerProperties(
+        fillColor: ["get", "fillColorSecondary"],
+        fillOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeInZoom, 1.0,
+          fadeOutZoom, 0.0,
+        ],
+      ),
+    );
+
+    // 2. Boundary marker fade layer
+    await controller.setLayerProperties(
+      _patchAboveMarkerLayerId,
+      SymbolLayerProperties(
+        iconOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeInZoom, 1.0,
+          fadeOutZoom, 0.0,
+        ],
+        textOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeInZoom, 1.0,
+          fadeOutZoom, 0.0,
+        ],
+      ),
+    );
+
+    // 3. All other marker layers: fade IN starting at fadeOutZoom
+    await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
+  }
+
+  /// Updates the opacity-based "minzoom" of every non-boundary marker layer
+  /// so they only appear at zoom >= fadeOutZoom (i.e. when patch-above fades out).
+  Future<void> _refreshMarkerLayerMinZooms(
+      MaplibreMapController controller,
+      double fadeOutZoom,
+      ) async {
+    // Fade in over 1 zoom level after fadeOutZoom
+    final fadeInEnd = fadeOutZoom;
+    fadeOutZoom --;
+
+    final opacityExpression = [
+      "interpolate", ["linear"], ["zoom"],
+      fadeOutZoom, 0.0,
+      fadeInEnd,   1.0,
+    ];
+
+    // normalText: only text, no icon
+    await controller.setLayerProperties(
+      _normalTextMarkerLayerId,
+      SymbolLayerProperties(
+        textOpacity: opacityExpression,
+      ),
+    );
+
+    // normalIcon-withSectionId
+    await controller.setLayerProperties(
+      "$_normalIconMarkerLayerId-withSectionId",
+      SymbolLayerProperties(
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
+    );
+
+    // normalIcon-withoutSectionId
+    await controller.setLayerProperties(
+      "$_normalIconMarkerLayerId-withoutSectionId",
+      SymbolLayerProperties(
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
+    );
+
+    // customRendering
+    await controller.setLayerProperties(
+      _customRenderingMarkerLayerId,
+      SymbolLayerProperties(
+        iconOpacity: opacityExpression,
+      ),
+    );
+
+    // normalFixed (bearing-based text markers)
+    await controller.setLayerProperties(
+      _normalFixedMarkerLayerId,
+      SymbolLayerProperties(
+        textOpacity: opacityExpression,
+      ),
+    );
+
+    // section markers
+    await controller.setLayerProperties(
+      _sectionMarkerLayerId,
+      SymbolLayerProperties(
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
+    );
+
+    // subSection markers
+    await controller.setLayerProperties(
+      _subSectionMarkerLayerId,
+      SymbolLayerProperties(
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
+    );
+  }
+
+  double _calculateFitZoom(List<GeoJsonPolygon> polygons, {Size? screenSize}) {
+    if (polygons.isEmpty) return 13.0;
+
+    double minLat = double.infinity, maxLat = -double.infinity;
+    double minLng = double.infinity, maxLng = -double.infinity;
+
+    for (final polygon in polygons) {
+      for (final point in polygon.points) {
+        if (point.latitude < minLat) minLat = point.latitude;
+        if (point.latitude > maxLat) maxLat = point.latitude;
+        if (point.longitude < minLng) minLng = point.longitude;
+        if (point.longitude > maxLng) maxLng = point.longitude;
+      }
+    }
+
+    // Tile size in pixels (standard Web Mercator)
+    const double tileSize = 256.0;
+
+    // Use actual screen size or fall back to a sensible default
+    final double mapWidthPx  = screenSize?.width  ?? 400.0;
+    final double mapHeightPx = screenSize?.height ?? 800.0;
+
+    // Convert lat span to Mercator fraction (0..1)
+    double _latToMercatorFraction(double latDeg) {
+      final sinLat = sin(latDeg * pi / 180.0);
+      return (0.5 - log((1 + sinLat) / (1 - sinLat)) / (4 * pi));
+    }
+
+    final double lngFraction = (maxLng - minLng) / 360.0;
+    final double latFraction = (_latToMercatorFraction(minLat) - _latToMercatorFraction(maxLat)).abs();
+
+    // Zoom at which the bounding box exactly fills the screen
+    double zoomForLng = double.infinity;
+    double zoomForLat = double.infinity;
+
+    if (lngFraction > 0) {
+      zoomForLng = log(mapWidthPx  / tileSize / lngFraction) / ln2;
+    }
+    if (latFraction > 0) {
+      zoomForLat = log(mapHeightPx / tileSize / latFraction) / ln2;
+    }
+
+    // Take the more restrictive axis, then clamp to sane map limits
+    final double fitZoom = min(zoomForLng, zoomForLat);
+    return fitZoom.clamp(1.0, 22.0);
+  }
+
   // Future<void> enablePolylineLayers(MaplibreMapController controller) async {
   //   try {
   //     await controller.addGeoJsonSource(_polylineSourceId, {
@@ -2492,19 +2670,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Future<void> removeMapFade(controller) async {
     print("removeMapFade");
-    await controller.setLayerProperties(
-      _patchAbovePolygonLayerId,
-      FillLayerProperties(
-          fillOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            13, 1.0,
-            14, 0.0    // fade out as you zoom in
-          ],
-        fillColor: ["get", "fillColorSecondary"],
-      ),
-    );
+    await _refreshPatchAboveOpacity(controller, screenSize: _screenSize);
   }
 
   // ---------------------------------------------------------------------------

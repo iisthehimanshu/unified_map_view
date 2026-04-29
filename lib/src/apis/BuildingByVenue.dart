@@ -73,7 +73,7 @@ class BuildingByVenue {
 
     if (response.statusCode == 200) {
       final responseBody = json.decode(response.body);
-      print("UNIFIED MAP BUILDINGBYVENUE DATA FROM API");
+      print("UNIFIED MAP BUILDINGBYVENUE DATA FROM API $responseBody");
       final model = BuildingByVenueAPIModel(responseBody: responseBody);
       box.put(id, model);
       await model.save();

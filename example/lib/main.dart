@@ -3,16 +3,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/maplibre.dart';
+import 'package:unified_map_view/mappls.dart';
 import 'package:unified_map_view/unified_map_view.dart';
 // import 'package:mappls_gl/mappls_gl.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // MapplsAccountManager.setMapSDKKey("6889110931e58e2b999fb9131f78cc2e");
-  // MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
-  // MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
-  // MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
+  MapplsAccountManager.setMapSDKKey("6889110931e58e2b999fb9131f78cc2e");
+  MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
+  MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
+  MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
   await UnifiedMapViewPackage.initialize(venueName: 'NationalZoologicalPark');
   runApp(const GeoJsonExampleApp());
 }
@@ -62,16 +64,17 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'NationalZoologicalPark',
+        venueName: 'AIGHospital',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
           bearing: 0.0,
           tilt: 0.0
         ),
-      url: "https://maps.iwayplus.in",
+      url: "https://dev.iwayplus.in",
       languageCode: "hi",
-        providers: {MapProvider.mapLibre: MaplibreMapProvider()}
+        providers: {MapProvider.mapLibre: MaplibreMapProvider(),
+          MapProvider.mappls: MapplsMapProvider()}
     );
     
     _unifiedMapController.setMapStyle("assets/mapstyle.json");

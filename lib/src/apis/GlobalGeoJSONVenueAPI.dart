@@ -62,7 +62,7 @@ class GlobalGeoJSONVenueAPI {
   }
 
   Future<Map<String, dynamic>?> _fetchFromApi(String venueName, GlobalGeoJSONVenueStorageService service) async {
-    final baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/$venueName?api_key=${AppConfig.apiKey}";
+    final baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/$venueName?expand=-1&api_key=${AppConfig.apiKey}";
     final response = await http.get(
       Uri.parse(baseUrl),
       headers: {'Content-Type': 'application/json'},
@@ -71,12 +71,12 @@ class GlobalGeoJSONVenueAPI {
     if (response.statusCode == 200) {
       final body = json.decode(response.body);
       service.saveGeoData(GlobalGeoJSONVenueAPIModel(responseBody: body), venueName);
-      print("GlobalGeoJSONVenueAPI from API");
+      print("GlobalGeoJSONVenueAPI from API $body");
       return body;
     } else if (response.statusCode == 403) {
       return _fetchFromApi(venueName, service);
     } else {
-      print("getGeoJSONData failed: ${response.statusCode}");
+      print("getGeoJSONData failed: ${response.statusCode} ${response.body}");
       return null;
     }
   }
