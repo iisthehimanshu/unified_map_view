@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:turn_highlighter/turn_highlighter.dart';
 import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
@@ -57,6 +59,13 @@ class AnnotationController{
       });
       await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+      final grid = generateGridAroundPoint(
+        lat: 28.543019388477934,
+        lng: 77.19315622901917,
+        radiusMeters: 100,
+        cellType: "Grids", // routes through your sectionPolygons path
+      );
+      await _unifiedMapController.addGeoJsonFeatures(grid);
       await _unifiedMapController.fitBoundsToGeoJson();
       if(_user != null){
         localizeUser(_user!);
@@ -68,6 +77,76 @@ class AnnotationController{
     }catch(e){
       print("e ${e}");
     }
+  }
+
+  GeoJsonFeatureCollection generateGridAroundPoint({
+    required double lat,
+    required double lng,
+    required double radiusMeters,
+    String cellType = "Section",
+  }) {
+    final List<GeoJsonFeature> features = [];
+
+    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 1.0, color: "#e0e0e0", width: 0.5, cellType: cellType));
+    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 3.0, color: "#888888", width: 1.5, cellType: cellType));
+
+    return GeoJsonFeatureCollection(features: features);
+  }
+
+  List<GeoJsonFeature> _generateGrid({
+    required double lat,
+    required double lng,
+    required double radiusMeters,
+    required double cellSizeMeters,
+    required String color,
+    required double width,
+    required String cellType,
+  }) {
+    const double metersPerDegLat = 111320.0;
+    final double metersPerDegLng = metersPerDegLat * cos(lat * pi / 180.0);
+
+    final double dLat = cellSizeMeters / metersPerDegLat;
+    final double dLng = cellSizeMeters / metersPerDegLng;
+
+    final int steps = (radiusMeters / cellSizeMeters).ceil();
+    final List<GeoJsonFeature> features = [];
+
+    for (int i = -steps; i < steps; i++) {
+      for (int j = -steps; j < steps; j++) {
+        final double dx = (j + 0.5) * cellSizeMeters;
+        final double dy = (i + 0.5) * cellSizeMeters;
+        if (sqrt(dx * dx + dy * dy) > radiusMeters) continue;
+
+        final double minLat = lat + i * dLat;
+        final double maxLat = lat + (i + 1) * dLat;
+        final double minLng = lng + j * dLng;
+        final double maxLng = lng + (j + 1) * dLng;
+
+        features.add(GeoJsonFeature(
+          geometry: GeoJsonGeometry(
+            type: GeoJsonGeometryType.lineString,
+            coordinates: [
+              [minLng, minLat],
+              [maxLng, minLat],
+              [maxLng, maxLat],
+              [minLng, maxLat],
+              [minLng, minLat],
+            ],
+          ),
+          properties: {
+            "fillColor": color,
+            "width": width,
+            "fillOpacity": 1.0,
+            "type": cellType,
+            "row": i,
+            "col": j,
+            "gridSize": cellSizeMeters,
+          },
+        ));
+      }
+    }
+
+    return features;
   }
 
   Future<void> changeBuildingFloor(String buildingID, int floor) async {
