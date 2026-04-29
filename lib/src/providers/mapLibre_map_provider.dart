@@ -221,6 +221,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                 final tilt = cameraPos.tilt;
                 final zoom = cameraPos.zoom;
                 print("tilt $tilt");
+                print("zoom $zoom");
                 var unifiedCameraPosition = UnifiedCameraPosition(
                     mapLocation: MapLocation(
                       latitude: target.latitude,
@@ -1360,7 +1361,16 @@ class MaplibreMapProvider extends BaseMapProvider {
             13,  0.2, // at zoom 8  → 30% size
             18.3,  1.0,   // at zoom 8  → 30% size
           ],
-          iconAnchor: ["get", "iconAnchor"],
+          iconAnchor: [
+            "case",
+            [
+              "all",
+              ["has", "title"],
+              ["!=", ["get", "title"], ""]
+            ],
+            "bottom", // rotate around bottom when text exists
+            "center"  // rotate around center when no text
+          ],
           textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
@@ -1726,8 +1736,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            14, 1.0,
-            15, 0.0    // fade out as you zoom in
+            13, 1.0,
+            14, 0.0    // fade out as you zoom in
           ],
           fillOutlineColor: ["get", "strokeColor"],
         ),
@@ -2489,8 +2499,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            14, 1.0,
-            15, 0.0    // fade out as you zoom in
+            13, 1.0,
+            14, 0.0    // fade out as you zoom in
           ],
         fillColor: ["get", "fillColorSecondary"],
       ),

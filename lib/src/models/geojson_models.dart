@@ -360,15 +360,19 @@ class GeoJsonMarker {
       polyId = associatedPolygons.first;
     }
 
-    if(feature.properties?["textLive"]??(assetPath==null?true:false)){
-      parsedTitle =
-          pick(feature.properties?["animalRef"]?["render_name"]?[AppConfig.languageCode]) ??
-              pick(feature.properties?["animalRef"]?["common_name"]?[AppConfig.languageCode]) ??
-              pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
-              pick(feature.properties?["sponsorRef"]?["name"]) ??
-              pick(feature.properties?["renderName"]) ??
-              pick(feature.properties?["name"]) ??
-              "";
+    parsedTitle =
+        pick(feature.properties?["animalRef"]?["render_name"]?[AppConfig.languageCode]) ??
+            pick(feature.properties?["animalRef"]?["common_name"]?[AppConfig.languageCode]) ??
+            pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
+            pick(feature.properties?["sponsorRef"]?["name"]);
+
+    if (parsedTitle == null || parsedTitle.isEmpty) {
+      if (feature.properties?["textLive"] ?? (assetPath == null ? true : false)) {
+        parsedTitle =
+            pick(feature.properties?["renderName"]) ??
+                pick(feature.properties?["name"]) ??
+                "";
+      }
     }
 
     return GeoJsonMarker(

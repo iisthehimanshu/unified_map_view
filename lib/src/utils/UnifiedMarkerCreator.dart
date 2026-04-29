@@ -299,8 +299,8 @@ class UnifiedMarkerCreator {
     TextPainter? strokePainter;
     double textWidthPx = 0;
     double textHeightPx = 0;
-    final double pillPaddingH = fontSizePx * 0.0;
-    final double pillPaddingV = fontSizePx * 0.0;
+    final double pillPaddingH = fontSizePx * 0.9;
+    final double pillPaddingV = fontSizePx * 0.2;
 
     if (layout != MarkerLayout.imageOnly && formattedText.isNotEmpty) {
       final fillStyle = TextStyle(
