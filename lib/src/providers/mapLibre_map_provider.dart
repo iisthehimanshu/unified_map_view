@@ -38,7 +38,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _normalTextMarkerLayerId = 'normalText-markers-layer';
   final String _normalIconMarkerLayerId = 'normalIcon-markers-layer';
   final String _customRenderingMarkerLayerId = 'customRendering-markers-layer';
-  final String _normalFixedMarkerLayerId = 'normalFixed-markers-layer';
+  final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
@@ -116,7 +116,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                     _normalTextMarkerLayerId,
                     "$_normalIconMarkerLayerId-withSectionId",
                     "$_normalIconMarkerLayerId-withoutSectionId",
-                    _normalFixedMarkerLayerId,
+                    _fixedMarkerLayerId,
                     _customRenderingMarkerLayerId,
                     _priorityMarkerLayerId,
                     _rotationMarkerLayerId,
@@ -309,6 +309,67 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       }
     }
+  }
+
+  Future<void> set3DViewEnabled(
+    dynamic controller, {
+    required bool isEnabled,
+    double? tiltWhen3D,
+  }) async {
+    if (controller is! MaplibreMapController) return;
+    if (_config.immersive == isEnabled) return;
+
+    _config = _config.copyWith(immersive: isEnabled);
+
+    // Keep map perspective in sync with 2D/3D state.
+    final targetTilt = isEnabled ? (tiltWhen3D ?? (_config.initialLocation.tilt > 0 ? _config.initialLocation.tilt : 45.0)) : 0.0;
+    await controller.animateCamera(CameraUpdate.tiltTo(targetTilt));
+
+    // Explicitly disable extrusion rendering in 2D to avoid any residual shading.
+    try {
+      await controller.setLayerProperties(
+        _selectedExtrudedPolygonLayerId,
+        FillExtrusionLayerProperties(
+          fillExtrusionColor: "#4CAF50",
+          fillExtrusionHeight: ["get", "height"],
+          fillExtrusionBase: ["get", "base_height"],
+          fillExtrusionOpacity: isEnabled ? 1.0 : 0.0,
+        ),
+      );
+    } catch (_) {}
+    try {
+      await controller.setLayerProperties(
+        _extrudedPolygonLayerId,
+        FillExtrusionLayerProperties(
+          fillExtrusionColor: ["get", "fillColor"],
+          fillExtrusionHeight: ["get", "height"],
+          fillExtrusionBase: ["get", "base_height"],
+          fillExtrusionOpacity: isEnabled ? 1.0 : 0.0,
+        ),
+      );
+    } catch (_) {}
+    try {
+      await controller.setLayerProperties(
+        _fixedMarkerLayerId,
+        SymbolLayerProperties(
+          visibility: isEnabled ? "none" : "visible",
+        ),
+      );
+    } catch (_) {}
+
+    // Rebuild polygon source so height/base_height are removed in 2D.
+    await _updatePolygonSource(
+      controller,
+      selectPolygonId: selectedLocation?.polygon?.id,
+    );
+  }
+
+  Future<void> toggle3DView(dynamic controller, {double? tiltWhen3D}) async {
+    await set3DViewEnabled(
+      controller,
+      isEnabled: !_config.immersive,
+      tiltWhen3D: tiltWhen3D,
+    );
   }
 
   @override
@@ -633,10 +694,12 @@ class MaplibreMapProvider extends BaseMapProvider {
             'sectionId': hasSectionId,
             'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
-            'customRendering':marker.customRendering
+            'customRendering':marker.customRendering,
+            if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null)'bearing':marker.properties?['entryDirection']
           }
         };
       }).toList();
+
 
       await controller.setGeoJsonSource(
         sourceID,
@@ -855,8 +918,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           'boundary': polygon.properties?['type'] == "Boundary",
           'section': polygon.properties?['type'] == "Section",
           'subsection': polygon.properties?['type'] == "Sub Section",
-          if (baseHeight != null) 'base_height': baseHeight,
-          if (height != null) 'height': height,
+          if (_config.immersive && baseHeight != null) 'base_height': baseHeight,
+          if (_config.immersive && height != null) 'height': height,
           'hasPattern':pattern,
           'pattern':GeoJsonUtils.buildPatternKey(name:polygon.properties?['pattern'],size:polygon.properties?['patternSize'] ,gap: polygon.properties?['patternSpacing'],rotation:polygon.properties?['patternRotation'] ,color: polygon.properties?['patternColor']),
         }
@@ -914,7 +977,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         isWaypoint =
             polyline.properties!["polygonType"].toLowerCase() == "waypoints";
       }
-      if (isWaypoint) return;
+      // if (isWaypoint) return;
       try {
         _lines.add(polyline);
         await _updatePolylineSource(controller);
@@ -1323,7 +1386,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       // Layer 3: Normal fixed/rotated markers (has bearing)
       await controller.addSymbolLayer(
           _clusterSourceId,
-          _normalFixedMarkerLayerId,
+          _fixedMarkerLayerId,
           const SymbolLayerProperties(
             textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textRotate: ["get", "bearing"],
@@ -1333,8 +1396,27 @@ class MaplibreMapProvider extends BaseMapProvider {
             textColor: "#000000",
             textHaloColor: "#f8f9fa",
             textHaloWidth: 2,
-            textAnchor: "left",
+            textAnchor: "center",
             textAllowOverlap: false,
+            iconImage: ["get", "icon"],
+            iconSize: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              18, 0.0,
+              22.0, 1.0,
+            ],
+            iconAnchor: ["get", "iconAnchor"],
+            iconOpacity: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12.0, 0.0,
+              14.0, 1.0
+            ],
+            iconRotate: ["get", "bearing"],
+            iconRotationAlignment: "map",
+            iconAllowOverlap: true
           ),
           filter: [
             "all",
@@ -1346,7 +1428,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ],
           enableInteraction: true,
           belowLayerId: _normalIconMarkerLayerId,
-          minzoom: 18.0
       );
 
       // Layer 4: Section markers
@@ -1409,7 +1490,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: ["to-boolean", ["get", "boundary"]],
         enableInteraction: true,
-        belowLayerId: _normalFixedMarkerLayerId,
+        belowLayerId: _fixedMarkerLayerId,
       );
 
       // Layer 4: Section markers
@@ -1457,7 +1538,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
-        belowLayerId: _normalFixedMarkerLayerId,
+        belowLayerId: _fixedMarkerLayerId,
         maxzoom: 17.0,
       );
 
@@ -1494,7 +1575,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ),
           filter: ["to-boolean", ["get", "subSection"]],
           enableInteraction: true,
-          belowLayerId: _normalFixedMarkerLayerId,
+          belowLayerId: _fixedMarkerLayerId,
           maxzoom: 18.0,
           minzoom: 17.0
       );
@@ -1868,7 +1949,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // normalFixed (bearing-based text markers)
     await controller.setLayerProperties(
-      _normalFixedMarkerLayerId,
+      _fixedMarkerLayerId,
       SymbolLayerProperties(
         textOpacity: opacityExpression,
       ),

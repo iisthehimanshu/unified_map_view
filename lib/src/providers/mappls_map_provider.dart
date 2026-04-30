@@ -2265,4 +2265,9 @@ class MapplsMapProvider extends BaseMapProvider {
 
   }
 
+  @override
+  Future<void> toggle3DView(controller, {double? tiltWhen3D}) async {
+
+  }
+
 }

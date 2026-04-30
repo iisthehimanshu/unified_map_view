@@ -24,7 +24,7 @@ dependencies:
     git:
       url: https://github.com/iisthehimanshu/turn_highlighter.git
       ref: main
-#    path: ../StudioProjects/turn_highlighter
+#    path: ../turn_highlighter
 
   hive: ^2.2.3
   hive_flutter: ^1.1.0

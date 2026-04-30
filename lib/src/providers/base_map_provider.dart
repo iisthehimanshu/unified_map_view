@@ -85,6 +85,8 @@ abstract class BaseMapProvider {
   Future<void> addMapFade(dynamic controller);
   Future<void> removeMapFade(dynamic controller);
 
+  Future<void> toggle3DView(dynamic controller, {double? tiltWhen3D});
+
   void dispose();
 
 }

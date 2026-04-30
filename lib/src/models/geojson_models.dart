@@ -3,6 +3,8 @@
 import 'dart:ui';
 import 'dart:convert';
 
+import 'package:unified_map_view/src/utils/LandmarkAssetType.dart';
+
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../utils/renderingUtilities.dart';
@@ -388,6 +390,53 @@ class GeoJsonMarker {
       anchor: anchor,
       customRendering: customRendering??false
     );
+  }
+
+  /// Create one or more markers from a GeoJSON Feature.
+  /// Keeps existing marker behavior and conditionally adds a second marker for
+  /// global Room Door features that have an entryDirection.
+  static List<GeoJsonMarker> fromFeatureList(GeoJsonFeature feature) {
+    final marker = fromFeature(feature);
+    if (marker == null) return const [];
+
+    final markers = <GeoJsonMarker>[marker];
+    final shouldAddEntryDirectionMarker =
+        feature.properties?["global"] == true &&
+            feature.properties?["type"] == "Room Door" &&
+            feature.properties?["entryDirection"] != null &&
+            feature.properties?["openingDirection"] != null;
+
+    if (shouldAddEntryDirectionMarker) {
+      final baseCoords = feature.properties?['closestProjection'];
+      if (baseCoords != null &&
+          baseCoords is List &&
+          baseCoords.length >= 2 &&
+          baseCoords.first != null &&
+          baseCoords.last != null) {
+
+        var asset = LandmarkAssetType.mapDoorLeft;
+        if(marker.properties?["openingDirection"] == "door-left"){
+          asset = LandmarkAssetType.mapDoorLeft;
+        }else if(marker.properties?["openingDirection"] == "door-right"){
+          asset = LandmarkAssetType.mapDoorRight;
+        }
+        markers.add(
+          marker.copyWith(
+            id: "${marker.id}_entryDirection",
+            position: MapLocation(
+              latitude: baseCoords.last,
+              longitude: baseCoords.first,
+            ),
+            assetPath: asset.assetPath,
+            iconName: asset.assetPath.split('/').last.split('.').first,
+            textVisibility: asset.textVisibility,
+            anchor: asset.anchor
+          ),
+        );
+      }
+    }
+    
+    return markers;
   }
 }
 

@@ -39,7 +39,10 @@ enum LandmarkAssetType {
   waitingArea,
   tuckShop,
   stationary,
-  buggyPoint
+  buggyPoint,
+  roomDoorDirectionalArrow,
+  mapDoorRight,
+  mapDoorLeft
   ;
 
   String get assetPath {
@@ -122,6 +125,12 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/stationary.png';
       case LandmarkAssetType.buggyPoint:
         return 'packages/unified_map_view/assets/markers/buggy_point.png';
+      case LandmarkAssetType.roomDoorDirectionalArrow:
+        return 'packages/unified_map_view/assets/markers/room_door_directional_arrow.png';
+      case LandmarkAssetType.mapDoorRight:
+        return 'packages/unified_map_view/assets/markers/map_door_right.png';
+      case LandmarkAssetType.mapDoorLeft:
+        return 'packages/unified_map_view/assets/markers/map_door_left.png';
     }
   }
 
@@ -160,6 +169,9 @@ enum LandmarkAssetType {
       case LandmarkAssetType.tuckShop:
       case LandmarkAssetType.stationary:
       case LandmarkAssetType.buggyPoint:
+      case LandmarkAssetType.roomDoorDirectionalArrow:
+      case LandmarkAssetType.mapDoorRight:
+      case LandmarkAssetType.mapDoorLeft:
         return false;
 
       case LandmarkAssetType.cafeteria:
@@ -189,6 +201,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.kiosk:
       case LandmarkAssetType.waitingArea:
       case LandmarkAssetType.buggyPoint:
+      case LandmarkAssetType.roomDoorDirectionalArrow:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.room:
@@ -215,6 +228,8 @@ enum LandmarkAssetType {
       case LandmarkAssetType.vendingMachine:
       case LandmarkAssetType.tuckShop:
       case LandmarkAssetType.stationary:
+      case LandmarkAssetType.mapDoorRight:
+      case LandmarkAssetType.mapDoorLeft:
         return const Offset(0.5, 1.0);
 
     }

@@ -23,9 +23,7 @@ class GeoJsonLoader {
 
   static List<GeoJsonMarker> extractMarkers(GeoJsonFeatureCollection collection) {
     return collection.features
-        .map((f) => GeoJsonMarker.fromFeature(f))
-        .where((m) => m != null)
-        .cast<GeoJsonMarker>()
-    .toList();
+        .expand((f) => GeoJsonMarker.fromFeatureList(f))
+        .toList();
   }
 }

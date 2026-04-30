@@ -473,6 +473,11 @@ class UnifiedMapController extends ChangeNotifier {
     }
   }
 
+  Future<void> toggle3DView() async {
+    await currentProviderImplementation.toggle3DView(_currentMapController);
+    notifyListeners();
+  }
+
   /// Annotation Controller
   String? get focusedBuilding => _annotationController.focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;

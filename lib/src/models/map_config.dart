@@ -7,6 +7,7 @@ class MapConfig {
   final bool rotateGesturesEnabled;
   final bool scrollGesturesEnabled;
   final bool tiltGesturesEnabled;
+  final bool immersive;
 
   final void Function(dynamic controller) onMapCreated ;
   final Future<void> Function(dynamic controller) onStyleLoadedCallback ;
@@ -32,6 +33,7 @@ class MapConfig {
     this.onMarkerTap,
     this.onPolygonTap,
     this.onPolylineTap,
+    this.immersive = false
 
   });
 
@@ -47,6 +49,7 @@ class MapConfig {
     bool? rotateGesturesEnabled,
     bool? scrollGesturesEnabled,
     bool? tiltGesturesEnabled,
+    bool? immersive,
    void Function({required MapLocation coordinates, required String markerId})? onMarkerTap,
    void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap,
    void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap
@@ -63,7 +66,8 @@ class MapConfig {
       tiltGesturesEnabled: tiltGesturesEnabled ?? this.tiltGesturesEnabled,
       onMarkerTap: onMarkerTap ?? this.onMarkerTap,
       onPolygonTap: onPolygonTap ?? this.onPolygonTap,
-      onPolylineTap: onPolylineTap ?? this.onPolylineTap, onStyleLoadedCallback:onStyleLoadedCallback??this.onStyleLoadedCallback
+      onPolylineTap: onPolylineTap ?? this.onPolylineTap, onStyleLoadedCallback:onStyleLoadedCallback??this.onStyleLoadedCallback,
+        immersive:immersive??this.immersive
     );
   }
 }

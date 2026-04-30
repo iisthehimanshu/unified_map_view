@@ -3,6 +3,7 @@ import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
 import 'package:unified_map_view/src/utils/renderingUtilities.dart';
 import 'dart:math' as math;
+import 'dart:developer' as dev;
 import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
@@ -206,7 +207,7 @@ class AnnotationController{
 
   Future<bool> annotatePath(int sourceFloor) async {
     if (_path == null) return false;
-
+    dev.log("_path in annotate path $_path");
     _pathPoints.clear();
     _unifiedMapController.removePolyline("path");
 
@@ -263,32 +264,34 @@ class AnnotationController{
       }
     }
 
+    // Annotate turn highlights over the drawn path
+    await _annotateTurnHighlights(sourceFloor);
+
     fitPathInScreen();
 
-    // _multiPath?.forEach((possiblePath){
-    //   possiblePath.forEach((bid, value){
-    //     value.forEach((floor, path) async {
-    //       if(floor == sourceFloor){
-    //         List<MapLocation> points = [];
-    //         for (var point in path) {
-    //           points.add(MapLocation(latitude: point.lat, longitude: point.lng));
-    //         }
-    //         GeoJsonPolyline polyline = GeoJsonPolyline(
-    //             id: GeoJsonUtils.buildKey(buildingID: bid, floor: floor.toString(), path: 'alternatePath'),
-    //             points: points,
-    //             properties: {
-    //               "fillColor": "#D3D3D3",
-    //               "width": 8.0,
-    //               "fillOpacity": 1.0,
-    //             }
-    //         );
-    //         await _unifiedMapController.addPolyline(polyline);
-    //       }
-    //     });
-    //   });
-    // });
-
     return true;
+  }
+
+  /// Runs TurnHighlighter over the collected path points for [sourceFloor] and
+  /// draws each resulting turn polyline on the map.
+  Future<void> _annotateTurnHighlights(int sourceFloor) async {
+    if (_pathPoints.length < 3) return;
+
+    // TurnHighlighter expects List<Map<String,dynamic>> with 'latitude'/'longitude' keys.
+    final rawPoints = _pathPoints
+        .map((loc) => {'latitude': loc.latitude, 'longitude': loc.longitude})
+        .toList();
+
+    final highlighter = TurnHighlighter(path: rawPoints);
+    final turnPolylineMaps = highlighter.getTurnPolylines();
+    // print("turnPolylineMaps $turnPolylineMaps");
+    for (final map in turnPolylineMaps) {
+      // getTurnPolylines() returns GeoJsonPolyline.toJson() maps.
+      // Re-hydrate into the typed GeoJsonPolyline the controller expects.
+      final polyline = GeoJsonPolyline.fromJson(map);
+      print("turnPolylineMaps ${map}");
+      await _unifiedMapController.addPolyline(polyline);
+    }
   }
 
   Future<void> _annotateCurvedPath(MapLocation p1, MapLocation p2, String bid, int floor)async{
