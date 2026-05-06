@@ -12,8 +12,9 @@ import '../services/GlobalGeoJSONStorageService.dart';
 class GlobalGeoJSONVenueAPI {
 
   Future<Map<String, dynamic>?> getGeoJSONData(String venueName) async {
-    final service = await GlobalGeoJSONVenueStorageService.create();
-    final bool dbHasData = service.contiansID(venueName) == true;
+    final service = await GlobalGeoJSONVenueStorageService();
+     await service.init();
+    final bool dbHasData = service.containsID(venueName) == true;
 
     // ── FIRST RUN: Seed from asset if DB is empty ──
     if (!dbHasData) {
@@ -39,7 +40,7 @@ class GlobalGeoJSONVenueAPI {
   Future<bool> _seedFromAssetIfNeeded(String venueName, GlobalGeoJSONVenueStorageService service) async {
     try {
       final raw = await rootBundle.loadString(
-        'assets/api_data/GeoJsonDataNationalZoologicalPark.json',
+        'assets/api_data/GeoJsonData${venueName}.json',
       );
       final Map<String, dynamic> responseBody = json.decode(raw);
       final model = GlobalGeoJSONVenueAPIModel(responseBody: responseBody);

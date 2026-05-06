@@ -40,7 +40,7 @@ class BuildingByVenue {
   Future<bool> _seedFromAssetIfNeeded(String id, dynamic box) async {
     try {
       final raw = await rootBundle.loadString(
-        'assets/api_data/BuildingByVenueNationalZoologicalPark.json',
+        'assets/api_data/BuildingByVenue${id}.json',
       );
       final Map<String, dynamic> responseBody = json.decode(raw);
       final model = BuildingByVenueAPIModel(responseBody: responseBody);

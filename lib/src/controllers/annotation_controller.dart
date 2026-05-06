@@ -90,7 +90,11 @@ class AnnotationController{
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
     }
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
-      localizeUser(_user!);
+      String id = GeoJsonUtils.buildKey(buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
+      GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(_user!.location, id);
+      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(_user!.location, id);
+      await _unifiedMapController.addUserMarker(userMarker);
+      await _unifiedMapController.addCircle(userCircle);
     }else{
 
     }
@@ -383,6 +387,7 @@ class AnnotationController{
     await _unifiedMapController.addPolyline(polyline);
   }
 
+
   Future<void> _annotatePathMarkers(List<Cell> path) async {
     for (var cell in path) {
       if(cell.isDestination){
@@ -449,21 +454,29 @@ class AnnotationController{
   }
 
   Future<void> localizeUser(User user) async {
-    if(_user != null){
-      await changeBuildingFloor(user.bid, user.floor);
-      moveUser(user.location);
-      return;
-    }
-    await clearUser();
+    final bool isFirstTime = _user == null;
+
     _user = user;
-    String id = GeoJsonUtils.buildKey(buildingID: user.bid, floor: user.floor.toString(), id: "user");
-    GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
-    GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
     await changeBuildingFloor(user.bid, user.floor);
-    await _unifiedMapController.removeMarker("user");
-    await _unifiedMapController.removeCircle("user");
-    await _unifiedMapController.addUserMarker(userMarker);
-    await _unifiedMapController.addCircle(userCircle);
+
+    String id = GeoJsonUtils.buildKey(
+        buildingID: user.bid,
+        floor: user.floor.toString(),
+        id: "user"
+    );
+
+    if (isFirstTime) {
+      // First time — create and add fresh markers
+      GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
+      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
+      await _unifiedMapController.removeMarker("user");
+      await _unifiedMapController.removeCircle("user");
+      await _unifiedMapController.addUserMarker(userMarker);
+      await _unifiedMapController.addCircle(userCircle);
+    } else {
+      // Subsequent calls — just move existing marker
+      await moveUser(user.location);
+    }
   }
 
   Future<void> clearUser() async {

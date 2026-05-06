@@ -1,54 +1,119 @@
 import 'package:hive/hive.dart';
 import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
 
-class GlobalGeoJSONVenueStorageService{
+class GlobalGeoJSONVenueStorageService {
   static const String _boxName = 'GlobalGeoJSONVenueAPIModelFile';
-  Box<GlobalGeoJSONVenueAPIModel>? _globalGeoJsonBox;
 
-  GlobalGeoJSONVenueStorageService._(); // private constructor
+  /// Singleton instance
+  static final GlobalGeoJSONVenueStorageService _instance =
+      GlobalGeoJSONVenueStorageService._internal();
 
-  static Future<GlobalGeoJSONVenueStorageService> create() async {
-    final service = GlobalGeoJSONVenueStorageService._();
-    await service.init();
-    return service;
+  factory GlobalGeoJSONVenueStorageService() {
+    return _instance;
   }
 
+  GlobalGeoJSONVenueStorageService._internal();
+
+  Box<GlobalGeoJSONVenueAPIModel>? _globalGeoJsonBox;
+
+  bool _initialized = false;
+
   Future<void> init() async {
-    _globalGeoJsonBox =
-    await Hive.openBox<GlobalGeoJSONVenueAPIModel>(_boxName);
+    if (_initialized &&
+        _globalGeoJsonBox != null &&
+        _globalGeoJsonBox!.isOpen) {
+      return;
+    }
+
+    _globalGeoJsonBox = await Hive.openBox<GlobalGeoJSONVenueAPIModel>(
+      _boxName,
+
+      /// helps reclaim old stale data
+      compactionStrategy: (
+        entries,
+        deletedEntries,
+      ) {
+        return deletedEntries > 0;
+      },
+    );
+
+    _initialized = true;
+
+    print(
+      "GlobalGeoJSON box initialized once",
+    );
   }
 
   Box<GlobalGeoJSONVenueAPIModel> get _getGlobalGeoJsonBox {
     if (_globalGeoJsonBox == null || !_globalGeoJsonBox!.isOpen) {
-      throw Exception('UserStorageService not initialized. Call init() first.');
+      throw Exception(
+        'StorageService not initialized',
+      );
     }
+
     return _globalGeoJsonBox!;
   }
 
-  Future<void> saveGeoData(GlobalGeoJSONVenueAPIModel user,String uniqueId) async {
-    print("saveGeoData ${getGeoData(uniqueId)}");
-    await _globalGeoJsonBox?.put(uniqueId, user);
+  Future<void> saveGeoData(
+      GlobalGeoJSONVenueAPIModel user,
+      String uniqueId,
+      ) async {
 
+    final box =
+        _getGlobalGeoJsonBox;
+
+    if (box.containsKey(
+      uniqueId,
+    )) {
+
+      await box.delete(
+        uniqueId,
+      );
+    }
+
+    await box.put(
+      uniqueId,
+      user,
+    );
+
+    await box.compact();
+
+    print(
+      "GeoJSON saved + compacted",
+    );
   }
 
-  bool? contiansID(String uniqueId){
-    return _globalGeoJsonBox?.containsKey(uniqueId);
+  bool containsID(
+    String uniqueId,
+  ) {
+    return _getGlobalGeoJsonBox.containsKey(
+      uniqueId,
+    );
   }
 
-  GlobalGeoJSONVenueAPIModel? getGeoData(String id) {
-    return _globalGeoJsonBox?.get(id);
+  GlobalGeoJSONVenueAPIModel? getGeoData(
+    String id,
+  ) {
+    return _getGlobalGeoJsonBox.get(
+      id,
+    );
   }
 
-  Future<void> deleteGeoData(String id) async {
-    await _globalGeoJsonBox?.delete(id);
+  Future<void> deleteGeoData(
+    String id,
+  ) async {
+    await _getGlobalGeoJsonBox.delete(
+      id,
+    );
   }
 
   Future<void> clearAll() async {
-    await _globalGeoJsonBox?.clear();
+    await _getGlobalGeoJsonBox.clear();
   }
 
-  /// Close the box
   Future<void> close() async {
     await _globalGeoJsonBox?.close();
+
+    _initialized = false;
   }
 }

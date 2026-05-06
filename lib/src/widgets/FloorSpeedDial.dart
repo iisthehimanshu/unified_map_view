@@ -49,6 +49,8 @@ class FloorSpeedDial extends StatelessWidget {
         ? controller.floorsContainingPath
         : (controller.focusedBuildingAvailableFloors ?? []);
 
+    floors.sort();
+
     return floors.map((floor) {
       final isSelected = controller.focusBuildingSelectedFloor == floor;
 
