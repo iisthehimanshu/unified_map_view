@@ -1471,8 +1471,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["literal", [0, 0.2]],
             ["literal", [0, 0]]
           ],
-          textAllowOverlap: false,
-          iconAllowOverlap: false,
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
           iconOpacity: [
             "interpolate",
             ["linear"],
