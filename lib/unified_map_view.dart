@@ -24,6 +24,7 @@ export 'src/models/CameraBound.dart';
 // Controllers
 export 'src/controllers/unified_map_controller.dart';
 export 'src/controllers/annotation_controller.dart';
+export 'src/database/cache/cache_controller.dart';
 
 // Widgets
 export 'src/widgets/unified_map_widget.dart';
@@ -37,6 +38,8 @@ export 'src/providers/base_map_provider.dart';
 export 'src/utils/geoJson/geojson_loader.dart';
 export 'src/utils/geoJson/geoJsonUtils.dart';
 export 'src/utils/geoJson/predefined_markers.dart';
+
+
 
 class UnifiedMapViewPackage {
   static bool _initialized = false;
