@@ -536,11 +536,9 @@ packages:
   turn_highlighter:
     dependency: transitive
     description:
-      path: "."
-      ref: main
-      resolved-ref: "10c6ec1c455c1fd7464b3e9a12d3367c57810a21"
-      url: "https://github.com/iisthehimanshu/turn_highlighter.git"
-    source: git
+      path: "../../turn_highlighter"
+      relative: true
+    source: path
     version: "2.0.0"
   typed_data:
     dependency: transitive

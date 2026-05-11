@@ -1094,11 +1094,12 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
+        double fontSize = marker.properties?["fontSize"]??14.5;
         Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
         MarkerIconWithAnchor markerIconWithAnchorWithText =
         await creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
-          fontSize: 14.5,
+          fontSize: fontSize,
           text: marker.textVisibility? marker.title??"":"",
           imageSource: marker.assetPath,
           layout: MarkerLayout.vertical,
@@ -1110,7 +1111,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         MarkerIconWithAnchor markerIconWithAnchorWithoutText =
         await creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
-          fontSize: 14.5,
+          fontSize: fontSize,
           text: "",
           imageSource: marker.assetPath,
           layout: MarkerLayout.vertical,
@@ -1196,7 +1197,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalTextMarkerLayerId,
           const SymbolLayerProperties(
-            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textField: ["get", "title"],
             textSize: 14,
             textColor: "#000000",
@@ -1231,7 +1231,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withSectionId",
         const SymbolLayerProperties(
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1289,7 +1288,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1388,7 +1386,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _fixedMarkerLayerId,
           const SymbolLayerProperties(
-            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textRotate: ["get", "bearing"],
             textRotationAlignment: "map",
             textField: ["get", "title"],
@@ -1453,7 +1450,6 @@ class MaplibreMapProvider extends BaseMapProvider {
             "bottom", // rotate around bottom when text exists
             "center"  // rotate around center when no text
           ],
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1501,7 +1497,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1549,7 +1544,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           const SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
-            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",

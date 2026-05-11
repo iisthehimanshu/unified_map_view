@@ -63,7 +63,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   void initState() {
     super.initState();
     _unifiedMapController = UnifiedMapController(
-        initialProvider: MapProvider.mapLibre,
+        initialProvider: MapProvider.mappls,
         venueName: 'AIGHospital',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
@@ -112,7 +112,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     {"node": 3897251, "x": 1187, "y": 1068, "lat": 17.443003846371283, "lng": 78.36624414341532, "ttsEnabled": true, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": true, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
     {"node": 3780534, "x": 1206, "y": 1036, "lat": 17.44313680329257, "lng": 78.36623342162618, "ttsEnabled": false, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
     {"node": 3780534, "x": 1206, "y": 1036, "lat": 17.443180266500633, "lng": 78.36628798157611, "ttsEnabled": false, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
-    {"node": 3036008, "x": 872, "y": 832, "lat": 17.44309958389197 ,"lng": 78.36628466337953, "ttsEnabled": true, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null, "destinationLat":17.44298967296045, "destinationLng": 78.36628052448958}
+    {"node": 3036008, "x": 872, "y": 832, "lat": 17.44309958389197 ,"lng": 78.36628466337953, "ttsEnabled": true, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null, "destinationLat":17.44298967296045, "destinationLng": 78.36628052448958, "name":"Destination"}
   ];
 
   @override

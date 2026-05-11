@@ -1,6 +1,7 @@
 // lib/src/providers/mappls_map_provider.dart
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -39,6 +40,7 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _normalTextMarkerLayerId = 'normalText-markers-layer';
   final String _normalIconMarkerLayerId = 'normalIcon-markers-layer';
   final String _customRenderingMarkerLayerId = 'customRendering-markers-layer';
+  final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _normalFixedMarkerLayerId = 'normalFixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
@@ -62,7 +64,8 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
   final String _polylineSourceId = 'polylines-source';
-  final String _pathLayerId = 'path-polyline-layer';
+  final String _pathSolidLayerId = 'path-solid-polyline-layer';
+  final String _pathDashedLayerId = 'path-dashed-polyline-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
 
   bool _isClusteringEnabled = false;
@@ -537,40 +540,56 @@ class MapplsMapProvider extends BaseMapProvider {
     await _setGeoJsonCircle(controller);
   }
 
-  Future<void> setGeoJsonSource(dynamic controller, List<GeoJsonMarker> symbols, String sourceID) async {
+  Future<void> setGeoJsonSource(
+      dynamic controller,
+      List<GeoJsonMarker> symbols,
+      String sourceID,
+      {String? selectedMarkerId}
+      ) async {
     if (controller is MapplsMapController) {
-
       if (!_isClusteringEnabled) {
         print("Clustering not enabled yet");
         return;
       }
 
       final features = symbols.map((marker) {
-        final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)?"center":"bottom";
+        final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
+            ? "center"
+            : "bottom";
         bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
         return {
           'type': 'Feature',
           'geometry': {
             'type': 'Point',
-            'coordinates': [marker.position.longitude, marker.position.latitude],
+            'coordinates': [
+              marker.position.longitude,
+              marker.position.latitude
+            ],
           },
           'properties': {
-            // ✅ Always include ALL properties with defaults
-            'title': marker.textVisibility ? creator.formatText(marker.title ?? "", TextFormat.smartWrap) : '',
+            'title': marker.textVisibility
+                ? creator.formatText(
+                marker.title ?? "", TextFormat.smartWrap)
+                : '',
             'id': marker.id,
             if (marker.assetPath != null) 'icon': marker.id,
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
-            'bearing': marker.compassBasedRotation ? 0.0 : (marker.properties?["bearing"] ?? 0.0), // ✅ Always set with default
+            'bearing': marker.compassBasedRotation
+                ? 0.0
+                : (marker.properties?["bearing"] ?? 0.0),
             'iconAnchor': anchor,
             'section': marker.properties?['type'] == "Section",
             'subSection': marker.properties?['type'] == "Sub Section",
             'sectionId': hasSectionId,
-            // 'boundary':marker.properties?["type"]=="Boundary",
-            'customRendering':marker.customRendering
+            'boundary':marker.properties?["type"]=="Boundary",
+            'isSelected': marker.id == selectedMarkerId,
+            'customRendering':marker.customRendering,
+            if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null)'bearing':marker.properties?['entryDirection']
           }
         };
       }).toList();
+
 
       await controller.setGeoJsonSource(
         sourceID,
@@ -877,23 +896,28 @@ class MapplsMapProvider extends BaseMapProvider {
       return;
     }
 
+    print("poyline going to add");
+
     final features = _lines.map((line) {
       return {
         'type': 'Feature',
         'id': line.id,
         'geometry': {
           'type': 'LineString',
-          'coordinates': line.points.map((point) => [point.longitude, point.latitude]).toList(),
+          'coordinates': line.points
+              .map((point) => [point.longitude, point.latitude])
+              .toList(),
         },
         'properties': {
-          // ✅ Always include ALL properties with defaults
           'id': line.id,
           'type': 'default',
           'isSelected': false,
-          'lineColor': line.properties?['fillColor'] ?? '#000000', // ✅ Always set with default
-          'lineOpacity': line.properties?['fillOpacity'] ?? 1.0,  // ✅ Always set
-          'lineWidth': line.properties?['width']?.toDouble() ?? 4.0, // ✅ Always set, ensure double
-          'path': line.properties?['path'] ?? line.id.toLowerCase().contains("path")
+          'lineColor': line.properties?['fillColor'] ?? '#000000',
+          'lineOpacity': line.properties?['fillOpacity'] ?? 1.0,
+          'lineWidth': line.properties?['width']?.toDouble() ?? 4.0,
+          'path': line.properties?['path'] ??
+              line.id.toLowerCase().contains("path"),
+          'style':line.properties?['style']
         }
       };
     }).toList();
@@ -1043,7 +1067,6 @@ class MapplsMapProvider extends BaseMapProvider {
           _clusterSourceId,
           _normalTextMarkerLayerId,
           const SymbolLayerProperties(
-            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textField: ["get", "title"],
             textSize: 14,
             textColor: "#000000",
@@ -1078,7 +1101,6 @@ class MapplsMapProvider extends BaseMapProvider {
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withSectionId",
         const SymbolLayerProperties(
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1136,7 +1158,6 @@ class MapplsMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1232,10 +1253,9 @@ class MapplsMapProvider extends BaseMapProvider {
 
       // Layer 3: Normal fixed/rotated markers (has bearing)
       await controller.addSymbolLayer(
-          _clusterSourceId,
-          _normalFixedMarkerLayerId,
-          const SymbolLayerProperties(
-            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
+        _clusterSourceId,
+        _fixedMarkerLayerId,
+        const SymbolLayerProperties(
             textRotate: ["get", "bearing"],
             textRotationAlignment: "map",
             textField: ["get", "title"],
@@ -1243,20 +1263,38 @@ class MapplsMapProvider extends BaseMapProvider {
             textColor: "#000000",
             textHaloColor: "#f8f9fa",
             textHaloWidth: 2,
-            textAnchor: "left",
+            textAnchor: "center",
             textAllowOverlap: false,
-          ),
-          filter: [
-            "all",
-            ["!", ["to-boolean", ["get", "isPriority"]]],
-            ["!", ["to-boolean", ["get", "section"]]],
-            ["!", ["to-boolean", ["get", "subSection"]]],
-            ["!", ["to-boolean", ["get", "boundary"]]],
-            ["to-boolean", ["get", "bearing"]],
-          ],
-          enableInteraction: true,
-          belowLayerId: _normalIconMarkerLayerId,
-          minzoom: 18.0
+            iconImage: ["get", "icon"],
+            iconSize: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              18, 0.0,
+              22.0, 1.0,
+            ],
+            iconAnchor: ["get", "iconAnchor"],
+            iconOpacity: [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12.0, 0.0,
+              14.0, 1.0
+            ],
+            iconRotate: ["get", "bearing"],
+            iconRotationAlignment: "map",
+            iconAllowOverlap: true
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["to-boolean", ["get", "bearing"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalIconMarkerLayerId,
       );
 
       // Layer 4: Section markers
@@ -1282,7 +1320,6 @@ class MapplsMapProvider extends BaseMapProvider {
             "bottom", // rotate around bottom when text exists
             "center"  // rotate around center when no text
           ],
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1319,7 +1356,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["to-boolean", ["get", "boundary"]],
         enableInteraction: true,
-        belowLayerId: _normalFixedMarkerLayerId,
+        belowLayerId: _fixedMarkerLayerId,
       );
 
       // Layer 4: Section markers
@@ -1330,7 +1367,6 @@ class MapplsMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
-          textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
           textField: ["get", "title"],
           textSize: 14,
           textColor: "#000000",
@@ -1367,7 +1403,7 @@ class MapplsMapProvider extends BaseMapProvider {
         ),
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
-        belowLayerId: _normalFixedMarkerLayerId,
+        belowLayerId: _fixedMarkerLayerId,
         maxzoom: 17.0,
       );
 
@@ -1378,7 +1414,6 @@ class MapplsMapProvider extends BaseMapProvider {
           const SymbolLayerProperties(
             iconImage: ["get", "icon"],
             iconSize: 1.5,
-            textFont: ["Open Sans Regular", "Arial Unicode MS Regular"],
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
@@ -1404,7 +1439,7 @@ class MapplsMapProvider extends BaseMapProvider {
           ),
           filter: ["to-boolean", ["get", "subSection"]],
           enableInteraction: true,
-          belowLayerId: _normalFixedMarkerLayerId,
+          belowLayerId: _fixedMarkerLayerId,
           maxzoom: 18.0,
           minzoom: 17.0
       );
@@ -1647,12 +1682,12 @@ class MapplsMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      /// 🔹 Normal polylines (NOT path)
+      /// Normal polylines (NOT path)
       await controller.addLineLayer(
         _polylineSourceId,
         _polylineLayerId,
-        LineLayerProperties(
-          lineColor: ["get", "lineColor"], // ✅ Direct get (ensure property exists in GeoJSON)
+        const LineLayerProperties(
+          lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
           lineOpacity: ["get", "lineOpacity"],
         ),
@@ -1661,16 +1696,41 @@ class MapplsMapProvider extends BaseMapProvider {
         belowLayerId: _normalIconMarkerLayerId,
       );
 
-      /// 🔹 Path polylines (highlighted route)
+      /// Path polylines (highlighted route)
       await controller.addLineLayer(
         _polylineSourceId,
-        _pathLayerId,
-        LineLayerProperties(
+        _pathSolidLayerId,
+        const LineLayerProperties(
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
           lineOpacity: ["get", "lineOpacity"],
         ),
-        filter: ["to-boolean", ["get", "path"]],
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"]
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalIconMarkerLayerId,
+      );
+
+      await controller.addLineLayer(
+        _polylineSourceId,
+        _pathDashedLayerId,
+        LineLayerProperties(
+          lineColor: ["get", "lineColor"],
+          lineWidth: ["get", "lineWidth"],
+          lineOpacity: ["get", "lineOpacity"],
+          lineDasharray: Platform.isAndroid
+              ? ["literal", [0.1, 2.0]]
+              : null, // ✅ FIX
+          lineCap: "round",
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "dashed"]
+        ],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
       );

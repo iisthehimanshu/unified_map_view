@@ -52,11 +52,11 @@ class PredefinedMarkers{
     );
   }
 
-  static GeoJsonMarker getDestinationMarker(MapLocation location, String id){
+  static GeoJsonMarker getDestinationMarker(MapLocation location, String id, {String title = ""}){
     return GeoJsonMarker(
         id: id,
         position: location,
-        title: "",
+        title: title,
         snippet: "",
         assetPath:LandmarkAssetType.destination.assetPath,
         iconName: "Destination",
@@ -64,7 +64,8 @@ class PredefinedMarkers{
         imageSize: Size(30, 30),
         renderAnchor: Offset(0.5, 0.8),
         anchor: LandmarkAssetType.destination.anchor,
-      customRendering: true
+      customRendering: true,
+      properties: {"fontSize":10.0}
     );
   }
 
