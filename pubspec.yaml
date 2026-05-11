@@ -34,7 +34,6 @@ dev_dependencies:
   mapbox_maps_flutter:
   mappls_gl: ^1.2.0
   maplibre_gl: ^0.21.0
-  google_maps_flutter:
 
   flutter_test:
     sdk: flutter
