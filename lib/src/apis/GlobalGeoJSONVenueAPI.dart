@@ -62,7 +62,7 @@ class GlobalGeoJSONVenueAPI {
   }
 
   Future<Map<String, dynamic>?> _fetchFromApi(String venueName, GlobalGeoJSONVenueStorageService service) async {
-    final baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/$venueName?expand=-1&api_key=${AppConfig.apiKey}";
+    final baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/$venueName?api_key=${AppConfig.apiKey}";
     final response = await http.get(
       Uri.parse(baseUrl),
       headers: {'Content-Type': 'application/json'},

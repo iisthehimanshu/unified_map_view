@@ -519,6 +519,11 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> annotateDottedPath(List<MapLocation> points, String bid, int floor, String customKey)async{
+    await _annotationController.annotateDottedPath(points, bid, floor, customKey: customKey);
+    notifyListeners();
+  }
+
   Future<void> annotatePinSelectionLandmarks({required List<MapLocation> locations, required String bid, required int floor}) async {
     await _annotationController.annotatePinSelectionLandmarks(locations, bid, floor);
     notifyListeners();

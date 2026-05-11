@@ -294,23 +294,42 @@ class AnnotationController{
     }
   }
 
-  Future<void> _annotateCurvedPath(MapLocation p1, MapLocation p2, String bid, int floor)async{
-    List<MapLocation> curvedPoints = _generateCurvedPoints(p1, p2);
+  Future<void> annotateDottedPath(
+      List<MapLocation> points,
+      String bid,
+      int floor, {String? customKey}) async {
     final polyline = GeoJsonPolyline(
       id: GeoJsonUtils.buildKey(
         buildingID: bid,
         floor: floor.toString(),
         path: 'curved_mainLine_${DateTime.now().microsecondsSinceEpoch}',
+        custom: customKey
       ),
-      points: curvedPoints,
+      points: points,
       properties: {
         "fillColor": "#448AFF",
         "width": 5.0,
         "fillOpacity": 1.0,
-        'style':'dashed'
+        "style":"dashed",
       },
     );
+
     _unifiedMapController.addPolyline(polyline);
+  }
+
+  Future<void> _annotateCurvedPath(
+      MapLocation p1,
+      MapLocation p2,
+      String bid,
+      int floor,
+      ) async {
+    final curvedPoints = _generateCurvedPoints(p1, p2);
+
+    await annotateDottedPath(
+      curvedPoints,
+      bid,
+      floor,
+    );
   }
 
   List<MapLocation> _generateCurvedPoints(MapLocation start, MapLocation end, {int segments = 50}) {
