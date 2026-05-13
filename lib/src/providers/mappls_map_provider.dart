@@ -43,6 +43,8 @@ class MapplsMapProvider extends BaseMapProvider {
   final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _normalFixedMarkerLayerId = 'normalFixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
+  final String _priorityLandmarkWithSectionLayerId = 'priority-Landmark-section-marker-layer';
+  final String _priorityLandmarkWithoutSectionLayerId = 'priority-Landmark-Without-section-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
@@ -103,7 +105,7 @@ class MapplsMapProvider extends BaseMapProvider {
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
-                    point, [_normalTextMarkerLayerId, "$_normalIconMarkerLayerId-withSectionId", "$_normalIconMarkerLayerId-withoutSectionId", _normalFixedMarkerLayerId, _priorityMarkerLayerId, _rotationMarkerLayerId],null
+                    point, [_normalTextMarkerLayerId, "$_normalIconMarkerLayerId-withSectionId", "$_normalIconMarkerLayerId-withoutSectionId", _normalFixedMarkerLayerId, _priorityMarkerLayerId, _priorityLandmarkWithSectionLayerId, _priorityLandmarkWithoutSectionLayerId, _rotationMarkerLayerId],null
                 );
 
                 if (markerFeatures.isNotEmpty) {
@@ -582,6 +584,7 @@ class MapplsMapProvider extends BaseMapProvider {
             'section': marker.properties?['type'] == "Section",
             'subSection': marker.properties?['type'] == "Sub Section",
             'sectionId': hasSectionId,
+            'annotationPriority':(marker.properties?['priority']??0)>1,
             'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering,
@@ -1115,8 +1118,8 @@ class MapplsMapProvider extends BaseMapProvider {
             ["==", ["get", "iconAnchor"], "bottom"],
             ["literal", [0, 0.0]],   // closer when anchor is bottom
             ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.5]],   // farther when anchor is center
-            ["literal", [0, 1.5]]    // default fallback
+            ["literal", [0, 1.2]],   // farther when anchor is center
+            ["literal", [0, 1.2]]    // default fallback
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
@@ -1169,8 +1172,8 @@ class MapplsMapProvider extends BaseMapProvider {
             ["==", ["get", "iconAnchor"], "bottom"],
             ["literal", [0, 0.0]],   // closer when anchor is bottom
             ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.5]],   // farther when anchor is center
-            ["literal", [0, 1.5]]    // default fallback
+            ["literal", [0, 1.2]],   // farther when anchor is center
+            ["literal", [0, 1.2]]    // default fallback
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
@@ -1264,7 +1267,7 @@ class MapplsMapProvider extends BaseMapProvider {
             textHaloColor: "#f8f9fa",
             textHaloWidth: 2,
             textAnchor: "center",
-            textAllowOverlap: false,
+            textAllowOverlap: true,
             iconImage: ["get", "icon"],
             iconSize: [
               "interpolate",
@@ -1470,6 +1473,41 @@ class MapplsMapProvider extends BaseMapProvider {
           textAllowOverlap: true,
         ),
         filter: ["to-boolean", ["get", "isPriority"]],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+      await controller.addSymbolLayer(
+          _clusterSourceId,
+          _priorityLandmarkWithSectionLayerId,
+          const SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            iconAllowOverlap: true,
+            textAllowOverlap: true,
+          ),
+          filter: [
+            "all",
+            ["to-boolean", ["get", "annotationPriority"]],
+            ["to-boolean", ["get", "sectionId"]],
+          ],
+          enableInteraction: true,
+          belowLayerId: null,
+          minzoom: 17.0
+      );
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _priorityLandmarkWithoutSectionLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "annotationPriority"]],
+          ["!", ["to-boolean", ["get", "sectionId"]]],
+        ],
         enableInteraction: true,
         belowLayerId: null,
       );
@@ -1791,6 +1829,22 @@ class MapplsMapProvider extends BaseMapProvider {
           "interpolate", ["linear"], ["zoom"],
           fadeInZoom, 1.0,
           fadeOutZoom, 0.0,
+        ],
+      ),
+    );
+
+    await controller.setLayerProperties(
+      _priorityLandmarkWithoutSectionLayerId,
+      SymbolLayerProperties(
+        iconOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeOutZoom, 0.0,
+          fadeOutZoom+1.0, 1.0,
+        ],
+        textOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeOutZoom, 0.0,
+          fadeOutZoom+1.0, 1.0,
         ],
       ),
     );

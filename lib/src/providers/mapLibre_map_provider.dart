@@ -40,6 +40,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _customRenderingMarkerLayerId = 'customRendering-markers-layer';
   final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
+  final String _priorityLandmarkWithSectionLayerId = 'priority-Landmark-section-marker-layer';
+  final String _priorityLandmarkWithoutSectionLayerId = 'priority-Landmark-Without-section-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
@@ -66,6 +68,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
   final String _pathDashedLayerId = 'path-dashed-polyline-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
+  final String _greyOverlayLayerId = 'grey-overlay-polyline-layer';
 
   bool _isClusteringEnabled = false;
   bool _isPolygonLayersEnabled = false;
@@ -119,6 +122,8 @@ class MaplibreMapProvider extends BaseMapProvider {
                     _fixedMarkerLayerId,
                     _customRenderingMarkerLayerId,
                     _priorityMarkerLayerId,
+                    _priorityLandmarkWithSectionLayerId,
+                    _priorityLandmarkWithoutSectionLayerId,
                     _rotationMarkerLayerId,
                   ],
                   null,
@@ -667,6 +672,11 @@ class MaplibreMapProvider extends BaseMapProvider {
             ? "center"
             : "bottom";
         bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
+        double? entryDirection;
+        if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null){
+          entryDirection = (marker.properties?['entryDirection'] as num).toDouble();
+        }
+
         return {
           'type': 'Feature',
           'geometry': {
@@ -695,7 +705,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering,
-            if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null)'bearing':marker.properties?['entryDirection']
+            'annotationPriority':((marker.properties?['priority']??0)>1 && entryDirection == null),
+            if(entryDirection != null)'bearing':entryDirection
           }
         };
       }).toList();
@@ -977,8 +988,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         isWaypoint =
             polyline.properties!["polygonType"].toLowerCase() == "waypoints";
       }
-      // if (isWaypoint) return;
+      if (isWaypoint) return;
       try {
+        _lines.removeWhere((line) => line.id == polyline.id);
         _lines.add(polyline);
         await _updatePolylineSource(controller);
       } catch (e) {
@@ -1043,7 +1055,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           'lineWidth': line.properties?['width']?.toDouble() ?? 4.0,
           'path': line.properties?['path'] ??
               line.id.toLowerCase().contains("path"),
-          'style':line.properties?['style']
+          'style':line.properties?['style'],
+          'isGreyOverlay': line.properties?['isGreyOverlay'] ?? false,
         }
       };
     }).toList();
@@ -1215,6 +1228,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           filter: [
             "all",
             ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "annotationPriority"]],],
             ["!", ["to-boolean", ["get", "section"]]],
             ["!", ["to-boolean", ["get", "subSection"]]],
             ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1245,8 +1259,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["==", ["get", "iconAnchor"], "bottom"],
             ["literal", [0, 0.0]],   // closer when anchor is bottom
             ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.5]],   // farther when anchor is center
-            ["literal", [0, 1.5]]    // default fallback
+            ["literal", [0, 1.2]],   // farther when anchor is center
+            ["literal", [0, 1.2]]    // default fallback
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
@@ -1268,6 +1282,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "annotationPriority"]],],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1299,8 +1314,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["==", ["get", "iconAnchor"], "bottom"],
             ["literal", [0, 0.0]],   // closer when anchor is bottom
             ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.5]],   // farther when anchor is center
-            ["literal", [0, 1.5]]    // default fallback
+            ["literal", [0, 1.2]],   // farther when anchor is center
+            ["literal", [0, 1.2]]    // default fallback
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
@@ -1322,6 +1337,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "annotationPriority"]],],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1371,6 +1387,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "annotationPriority"]],],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1394,7 +1411,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             textHaloColor: "#f8f9fa",
             textHaloWidth: 2,
             textAnchor: "center",
-            textAllowOverlap: false,
+            textAllowOverlap: true,
             iconImage: ["get", "icon"],
             iconSize: [
               "interpolate",
@@ -1418,6 +1435,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           filter: [
             "all",
             ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "annotationPriority"]],],
             ["!", ["to-boolean", ["get", "section"]]],
             ["!", ["to-boolean", ["get", "subSection"]]],
             ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1600,6 +1618,66 @@ class MaplibreMapProvider extends BaseMapProvider {
           textAllowOverlap: true,
         ),
         filter: ["to-boolean", ["get", "isPriority"]],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _priorityLandmarkWithSectionLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 1.5,
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "annotationPriority"]],
+          ["to-boolean", ["get", "sectionId"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: null,
+        minzoom: 17.0
+      );
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _priorityLandmarkWithoutSectionLayerId,
+        const SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: 0.8,
+          iconAnchor: ["get", "iconAnchor"],
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          iconOpacity: [
+            "interpolate", ["linear"], ["zoom"],
+            17.0, 0.0,
+            18.0, 1.0,
+          ],
+          textOpacity: [
+            "interpolate", ["linear"], ["zoom"],
+            17.0, 0.0,
+            18.0, 1.0,
+          ],
+          textOffset: [
+            "case",
+            ["==", ["get", "iconAnchor"], "bottom"],
+            ["literal", [0, 0.0]],   // closer when anchor is bottom
+            ["==", ["get", "iconAnchor"], "center"],
+            ["literal", [0, 1.2]],   // farther when anchor is center
+            ["literal", [0, 1.2]]    // default fallback
+          ],
+          textAllowOverlap: true,
+          iconAllowOverlap: true,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "annotationPriority"]],
+          ["!", ["to-boolean", ["get", "sectionId"]]],
+        ],
         enableInteraction: true,
         belowLayerId: null,
       );
@@ -1887,6 +1965,24 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
+    print("fadeOutZoom $fadeOutZoom");
+
+    await controller.setLayerProperties(
+      _priorityLandmarkWithoutSectionLayerId,
+      SymbolLayerProperties(
+        iconOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeOutZoom, 0.0,
+          fadeOutZoom + 1.0, 1.0,
+        ],
+        textOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeOutZoom, 0.0,
+          fadeOutZoom + 1.0, 1.0,
+        ],
+      ),
+    );
+
     // 3. All other marker layers: fade IN starting at fadeOutZoom
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
   }
@@ -2083,7 +2179,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      /// Normal polylines (NOT path)
+      // Normal polylines (NOT path) — bottom-most
       await controller.addLineLayer(
         _polylineSourceId,
         _polylineLayerId,
@@ -2097,7 +2193,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _normalIconMarkerLayerId,
       );
 
-      /// Path polylines (highlighted route)
+      // Solid path lines
       await controller.addLineLayer(
         _polylineSourceId,
         _pathSolidLayerId,
@@ -2109,31 +2205,52 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["to-boolean", ["get", "path"]],
-          ["==", ["get", "style"], "solid"]
+          ["==", ["get", "style"], "solid"],
+          // ── NEW: exclude the grey overlay from this layer
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
         ],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
       );
 
+      // Dashed path lines
       await controller.addLineLayer(
         _polylineSourceId,
         _pathDashedLayerId,
-         LineLayerProperties(
+        LineLayerProperties(
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
           lineOpacity: ["get", "lineOpacity"],
-           lineDasharray: Platform.isAndroid
-               ? ["literal", [0.1, 2.0]]
-               : null, // ✅ FIX
+          lineDasharray: Platform.isAndroid
+              ? ["literal", [0.1, 2.0]]
+              : null,
           lineCap: "round",
         ),
         filter: [
           "all",
           ["to-boolean", ["get", "path"]],
-          ["==", ["get", "style"], "dashed"]
+          ["==", ["get", "style"], "dashed"],
         ],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
+      );
+
+      // ── NEW: Grey overlay layer — added LAST so it sits above all path layers
+      // belowLayerId: null means it renders above everything except markers.
+      // If you want it below markers, pass belowLayerId: _rotationMarkerLayerId.
+      await controller.addLineLayer(
+        _polylineSourceId,
+        _greyOverlayLayerId,
+        const LineLayerProperties(
+          lineColor: ["get", "lineColor"],
+          lineWidth: ["get", "lineWidth"],
+          lineOpacity: ["get", "lineOpacity"],
+          lineCap: "round",
+          lineJoin: "round",
+        ),
+        filter: ["to-boolean", ["get", "isGreyOverlay"]],
+        enableInteraction: false,
+        belowLayerId: _rotationMarkerLayerId, // above path, below user marker
       );
 
       _isPolylineLayersEnabled = true;
