@@ -60,8 +60,8 @@ class AnnotationController{
       await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
       final grid = generateGridAroundPoint(
-        lat: 28.543019388477934,
-        lng: 77.19315622901917,
+        lat: 17.443115960139664,
+        lng: 78.36620909361523,
         radiusMeters: 100,
         cellType: "Grids", // routes through your sectionPolygons path
       );
@@ -87,8 +87,8 @@ class AnnotationController{
   }) {
     final List<GeoJsonFeature> features = [];
 
-    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 1.0, color: "#e0e0e0", width: 0.5, cellType: cellType));
-    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 3.0, color: "#888888", width: 1.5, cellType: cellType));
+    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 1.0, color: "#e0e0e0", width: 0.5, cellType: cellType, rotationDegrees: 95.5));
+    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 3.0, color: "#888888", width: 1.5, cellType: cellType, rotationDegrees: 95.5));
 
     return GeoJsonFeatureCollection(features: features);
   }
@@ -101,9 +101,11 @@ class AnnotationController{
     required String color,
     required double width,
     required String cellType,
+    required double rotationDegrees,
   }) {
     const double metersPerDegLat = 111320.0;
-    final double metersPerDegLng = metersPerDegLat * cos(lat * pi / 180.0);
+    final double metersPerDegLng =
+        metersPerDegLat * cos(lat * pi / 180.0);
 
     final double dLat = cellSizeMeters / metersPerDegLat;
     final double dLng = cellSizeMeters / metersPerDegLng;
@@ -111,10 +113,31 @@ class AnnotationController{
     final int steps = (radiusMeters / cellSizeMeters).ceil();
     final List<GeoJsonFeature> features = [];
 
+    final double angle = rotationDegrees * pi / 180.0;
+    final double cosA = cos(angle);
+    final double sinA = sin(angle);
+
+    List<double> rotatePoint(double pointLng, double pointLat) {
+      // Convert to local meter offsets
+      final double x = (pointLng - lng) * metersPerDegLng;
+      final double y = (pointLat - lat) * metersPerDegLat;
+
+      // Rotate
+      final double rx = x * cosA - y * sinA;
+      final double ry = x * sinA + y * cosA;
+
+      // Convert back to lat/lng
+      final double rotatedLng = lng + (rx / metersPerDegLng);
+      final double rotatedLat = lat + (ry / metersPerDegLat);
+
+      return [rotatedLng, rotatedLat];
+    }
+
     for (int i = -steps; i < steps; i++) {
       for (int j = -steps; j < steps; j++) {
         final double dx = (j + 0.5) * cellSizeMeters;
         final double dy = (i + 0.5) * cellSizeMeters;
+
         if (sqrt(dx * dx + dy * dy) > radiusMeters) continue;
 
         final double minLat = lat + i * dLat;
@@ -122,27 +145,32 @@ class AnnotationController{
         final double minLng = lng + j * dLng;
         final double maxLng = lng + (j + 1) * dLng;
 
-        features.add(GeoJsonFeature(
-          geometry: GeoJsonGeometry(
-            type: GeoJsonGeometryType.lineString,
-            coordinates: [
-              [minLng, minLat],
-              [maxLng, minLat],
-              [maxLng, maxLat],
-              [minLng, maxLat],
-              [minLng, minLat],
-            ],
+        final coordinates = [
+          rotatePoint(minLng, minLat),
+          rotatePoint(maxLng, minLat),
+          rotatePoint(maxLng, maxLat),
+          rotatePoint(minLng, maxLat),
+          rotatePoint(minLng, minLat),
+        ];
+
+        features.add(
+          GeoJsonFeature(
+            geometry: GeoJsonGeometry(
+              type: GeoJsonGeometryType.lineString,
+              coordinates: coordinates,
+            ),
+            properties: {
+              "fillColor": color,
+              "width": width,
+              "fillOpacity": 1.0,
+              "type": cellType,
+              "row": i,
+              "col": j,
+              "gridSize": cellSizeMeters,
+              "rotation": rotationDegrees,
+            },
           ),
-          properties: {
-            "fillColor": color,
-            "width": width,
-            "fillOpacity": 1.0,
-            "type": cellType,
-            "row": i,
-            "col": j,
-            "gridSize": cellSizeMeters,
-          },
-        ));
+        );
       }
     }
 
