@@ -71,6 +71,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isPolygonLayersEnabled = false;
   bool _isPolylineLayersEnabled = false;
   bool _isCircleLayersEnabled = false;
+  bool _isMapReady=false;
 
   Size? _screenSize;
   double? _fadeOutZoom;
@@ -179,6 +180,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               _isPolygonLayersEnabled = false;
               _isPolylineLayersEnabled = false;
               _isCircleLayersEnabled = false;
+              _isMapReady=true;
 
               // Re-register all marker icons — style reload wipes addImage() calls
               for (final marker in [..._symbols, ..._rotatingSymbols]) {
@@ -448,6 +450,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         };
       }).toList();
 
+      if (_controller == null || !_isMapReady) return;
+
       await controller.setGeoJsonSource(_circleSourceId, {
         "type": "FeatureCollection",
         "features": features,
@@ -597,7 +601,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
     })
         .toList();
-
+    if (_controller == null || !_isMapReady) return;
     await controller.setGeoJsonSource(_rotationSourceId, {
       "type": "FeatureCollection",
       "features": features,
@@ -700,7 +704,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         };
       }).toList();
 
-
+      if (_controller == null || !_isMapReady) return;
       await controller.setGeoJsonSource(
         sourceID,
         {
@@ -744,6 +748,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       })
           .toList();
 
+      if (_controller == null || !_isMapReady) return;
       await controller.setGeoJsonSource(sourceID, {
         "type": "FeatureCollection",
         "features": features,
@@ -926,6 +931,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       };
     }).toList();
 
+    if (_controller == null || !_isMapReady) return;
     await controller.setGeoJsonSource(
       _polygonSourceId,
       {
@@ -1047,7 +1053,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       };
     }).toList();
-
+    if (_controller == null || !_isMapReady) return;
     await controller.setGeoJsonSource(
       _polylineSourceId,
       {
