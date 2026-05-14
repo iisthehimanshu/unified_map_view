@@ -1965,8 +1965,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
-    print("fadeOutZoom $fadeOutZoom");
-
     await controller.setLayerProperties(
       _priorityLandmarkWithoutSectionLayerId,
       SymbolLayerProperties(
@@ -1982,6 +1980,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
       ),
     );
+
 
     // 3. All other marker layers: fade IN starting at fadeOutZoom
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);

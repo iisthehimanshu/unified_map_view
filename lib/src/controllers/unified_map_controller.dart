@@ -167,6 +167,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Animate camera to a specific location
   Future<void> animateCamera(MapLocation location, {double? zoom, double? bearing, double? tilt, Duration? duration}) async {
+    print("animateCamera ${StackTrace.current}");
     if (_currentMapController == null) return;
     await currentProviderImplementation.animateCamera(
       _currentMapController,

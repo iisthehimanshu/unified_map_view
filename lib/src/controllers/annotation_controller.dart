@@ -426,9 +426,9 @@ class AnnotationController{
       if(cell.isSource){
         _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
       }
-      if(cell.isFloorConnection){
-        _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), cell.connectorType));
-      }
+      // if(cell.isFloorConnection){
+      //   _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), cell.connectorType));
+      // }
     }
   }
 
@@ -479,7 +479,7 @@ class AnnotationController{
   }
 
   Future<void> localizeUser(User user, {bool changeFloor = true}) async {
-    if(_user != null){
+    if(_user != null && _user!.bid != user.bid && _user!.floor == user.floor ){
       if(changeFloor){
         await changeBuildingFloor(user.bid, user.floor);
       }
