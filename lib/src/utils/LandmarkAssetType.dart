@@ -136,22 +136,7 @@ enum LandmarkAssetType {
 
   bool get textVisibility {
     switch (this) {
-      case LandmarkAssetType.femaleWashroom:
-      case LandmarkAssetType.maleWashroom:
-      case LandmarkAssetType.accessibleWashroom:
-      case LandmarkAssetType.washroom:
-      case LandmarkAssetType.doorOnly:
-      case LandmarkAssetType.unisexWashroom:
-      case LandmarkAssetType.assemblyRoom:
-      case LandmarkAssetType.conferenceRoom:
-      case LandmarkAssetType.emergencyExit:
-      case LandmarkAssetType.fireExtinguisher:
-      case LandmarkAssetType.firstAid:
-      case LandmarkAssetType.meetingRoom:
-      case LandmarkAssetType.registrationDesk:
-      case LandmarkAssetType.smokingArea:
-      case LandmarkAssetType.counter:
-      case LandmarkAssetType.waterFountain:
+
       case LandmarkAssetType.room:
       case LandmarkAssetType.genericMarker:
       case LandmarkAssetType.user:
@@ -159,6 +144,10 @@ enum LandmarkAssetType {
       case LandmarkAssetType.destination:
       case LandmarkAssetType.optionPinSelection:
       case LandmarkAssetType.selectedPinSelection:
+      case LandmarkAssetType.mapDoorRight:
+      case LandmarkAssetType.mapDoorLeft:
+        return false;
+
       case LandmarkAssetType.sofa:
       case LandmarkAssetType.gadgets:
       case LandmarkAssetType.garments:
@@ -170,10 +159,22 @@ enum LandmarkAssetType {
       case LandmarkAssetType.stationary:
       case LandmarkAssetType.buggyPoint:
       case LandmarkAssetType.roomDoorDirectionalArrow:
-      case LandmarkAssetType.mapDoorRight:
-      case LandmarkAssetType.mapDoorLeft:
-        return false;
-
+      case LandmarkAssetType.doorOnly:
+      case LandmarkAssetType.assemblyRoom:
+      case LandmarkAssetType.conferenceRoom:
+      case LandmarkAssetType.emergencyExit:
+      case LandmarkAssetType.fireExtinguisher:
+      case LandmarkAssetType.firstAid:
+      case LandmarkAssetType.meetingRoom:
+      case LandmarkAssetType.registrationDesk:
+      case LandmarkAssetType.smokingArea:
+      case LandmarkAssetType.counter:
+      case LandmarkAssetType.waterFountain:
+      case LandmarkAssetType.unisexWashroom:
+      case LandmarkAssetType.femaleWashroom:
+      case LandmarkAssetType.maleWashroom:
+      case LandmarkAssetType.accessibleWashroom:
+      case LandmarkAssetType.washroom:
       case LandmarkAssetType.cafeteria:
       case LandmarkAssetType.lift:
       case LandmarkAssetType.stairs:

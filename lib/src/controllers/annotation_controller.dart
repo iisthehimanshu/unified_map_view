@@ -28,12 +28,14 @@ class AnnotationController{
   String? get focusedBuilding => _focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
+  Map<String, int> get selectedFloor => _venueData.selectedFloor;
   List<int> get floorsContainingPath => extractFloorsContainingPath(_path).toList();
 
   Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
   List<List<MapLocation>>? _multiPointPath;
   List<MapLocation> _pathPoints = [];
+  String? _greyPathPolylineId;
 
   User? _user;
 
@@ -98,8 +100,11 @@ class AnnotationController{
       String id = GeoJsonUtils.buildKey(buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
       GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(_user!.location, id);
       GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(_user!.location, id);
+      await _unifiedMapController.removeMarker("user");
+      await _unifiedMapController.removeCircle("user");
       await _unifiedMapController.addUserMarker(userMarker);
       await _unifiedMapController.addCircle(userCircle);
+      localizeUser(_user!);
     }else{
 
     }
@@ -151,6 +156,7 @@ class AnnotationController{
 
   bool clearPath(){
     _unifiedMapController.removePolyline('path');
+    _unifiedMapController.removePolyline('greyTraversed_');
     _unifiedMapController.removeMarker('path');
     _path = null;
     _multiPath = null;
@@ -239,6 +245,7 @@ class AnnotationController{
     dev.log("_path in annotate path $_path");
     _pathPoints.clear();
     _unifiedMapController.removePolyline("path");
+    _unifiedMapController.removePolyline('greyTraversed_');
 
     for (var entry in _path!.entries) {
       final bid = entry.key;
@@ -540,7 +547,7 @@ class AnnotationController{
         "fillColor": color,
         "width": 8.0,
         "fillOpacity": 1.0,
-        'style':"solid"
+        'style': "solid"
       },
     );
 
@@ -597,17 +604,17 @@ class AnnotationController{
       if(cell.isDestination){
         if(cell.destinationLat != null && cell.destinationLng != null){
           await _annotateCurvedPath(MapLocation(latitude: cell.lat, longitude: cell.lng), MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), cell.bid!, cell.floor);
-          _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+          _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'),title: cell.name??""));
         }else{
-          _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+          _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), title: cell.name??""));
         }
       }
       if(cell.isSource){
         _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
       }
-      if(cell.isFloorConnection){
-        _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), cell.connectorType));
-      }
+      // if(cell.isFloorConnection){
+      //   _unifiedMapController.addMarker(PredefinedMarkers.getFloorConnectionMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), cell.connectorType));
+      // }
     }
   }
 
@@ -688,10 +695,108 @@ class AnnotationController{
     await _unifiedMapController.removeMarker("user");
   }
 
-  Future<void> moveUser(MapLocation location)async {
-    if(_user == null) return;
+  Future<void> moveUser(MapLocation location) async {
+    if (_user == null) return;
     _user?.location = location;
     await _unifiedMapController.moveMarker("user", location);
+
+    // ── NEW: draw grey path from start of last polyline → user's projection
+    await _updateGreyTraversedPath(location);
+  }
+
+  Future<void> _updateGreyTraversedPath(MapLocation userLocation) async {
+    if (_pathPoints.length < 2) return;
+
+    // Remove the previous grey overlay (if any).
+    if (_greyPathPolylineId != null) {
+      await _unifiedMapController.removePolyline(_greyPathPolylineId!);
+      _greyPathPolylineId = null;
+    }
+
+    final projected = _projectPointOntoPolyline(
+      userLocation,
+      _pathPoints,
+    );
+    if (projected == null) return;
+
+    // Build the grey path: all points up to the projection index, then the
+    // projected point itself so the line ends exactly under the user marker.
+    final greyPoints = <MapLocation>[
+      ..._pathPoints.sublist(0, projected.segmentIndex + 1),
+      projected.point,
+    ];
+
+    if (greyPoints.length < 2) return;
+
+    _greyPathPolylineId =
+    'greyTraversed_${DateTime.now().microsecondsSinceEpoch}';
+
+    final greyPolyline = GeoJsonPolyline(
+      id: _greyPathPolylineId!,
+      points: greyPoints,
+      properties: {
+        "fillColor": "#C4C4C4", // neutral grey
+        "width": 9.0,
+        "fillOpacity": 1.0,
+        'style': "solid",
+        'isGreyOverlay': true,
+      },
+    );
+
+    await _unifiedMapController.addPolyline(greyPolyline);
+  }
+
+  /// Result of projecting a point onto a polyline.
+  ({MapLocation point, int segmentIndex, double distanceMeters}) ?
+  _projectPointOntoPolyline(
+      MapLocation user,
+      List<MapLocation> polyline,
+      ) {
+    if (polyline.length < 2) return null;
+
+    MapLocation? bestPoint;
+    int bestIndex = 0;
+    double bestDist = double.infinity;
+
+    for (int i = 0; i < polyline.length - 1; i++) {
+      final a = polyline[i];
+      final b = polyline[i + 1];
+
+      final proj = _closestPointOnSegment(user, a, b);
+      final dist = MapCalculations.distanceInMeters(user, proj);
+
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestPoint = proj;
+        bestIndex = i;
+      }
+    }
+
+    if (bestPoint == null) return null;
+    return (point: bestPoint, segmentIndex: bestIndex, distanceMeters: bestDist);
+  }
+
+  MapLocation _closestPointOnSegment(
+      MapLocation p,
+      MapLocation a,
+      MapLocation b,
+      ) {
+    final dx = b.longitude - a.longitude;
+    final dy = b.latitude - a.latitude;
+    final lenSq = dx * dx + dy * dy;
+
+    if (lenSq == 0) return a; // degenerate segment — a == b
+
+    // Scalar projection of (p - a) onto (b - a), clamped to [0, 1].
+    final t = (((p.longitude - a.longitude) * dx +
+        (p.latitude - a.latitude) * dy) /
+        lenSq)
+        .clamp(0.0, 1.0);
+
+    return MapLocation(
+      latitude: a.latitude + t * dy,
+      longitude: a.longitude + t * dx,
+    );
   }
 
   Set<int> extractFloorsContainingPath(Map<String, Map<int, List<List<Cell>>>>? path) {

@@ -167,6 +167,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Animate camera to a specific location
   Future<void> animateCamera(MapLocation location, {double? zoom, double? bearing, double? tilt, Duration? duration}) async {
+    print("animateCamera ${StackTrace.current}");
     if (_currentMapController == null) return;
     await currentProviderImplementation.animateCamera(
       _currentMapController,
@@ -489,6 +490,7 @@ class UnifiedMapController extends ChangeNotifier {
   String? get focusedBuilding => _annotationController.focusedBuilding;
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
+  Map<String,int> get selectedFloor => _annotationController.selectedFloor;
   List<int> get floorsContainingPath => _annotationController.floorsContainingPath;
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
@@ -570,8 +572,8 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void localizeUser(User user) async {
-    await _annotationController.localizeUser(user);
+  void localizeUser(User user, {bool changeFloor = true}) async {
+    await _annotationController.localizeUser(user, changeFloor: changeFloor);
     notifyListeners();
   }
 

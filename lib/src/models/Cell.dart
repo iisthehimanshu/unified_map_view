@@ -24,8 +24,9 @@ class Cell{
   String? connectorType;
   double? destinationLat;
   double? destinationLng;
+  String? name;
 
-  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType, this.color, this.destinationLat, this.destinationLng});
+  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType, this.color, this.destinationLat, this.destinationLng, this.name});
 
   Map<String, dynamic> toJson() => {
     'node': node,
@@ -55,7 +56,8 @@ class Cell{
     'connectorType': connectorType,
     'color': color,
     'destinationLat':destinationLat,
-    'destinationLng':destinationLng
+    'destinationLng':destinationLng,
+    'name':name
   };
 
 
@@ -95,6 +97,7 @@ class Cell{
       color: json['color'],
       destinationLat: json['destinationLat'],
       destinationLng: json['destinationLng'],
+      name: json['name']
     );
   }
 
