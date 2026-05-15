@@ -230,8 +230,10 @@ class GeoJsonMarker {
   final bool customRendering;
   final bool compassBasedRotation;
   final double? bearing;
+  final bool hasPreregisteredImage;
   Offset? anchor;
   Offset? renderAnchor;
+
 
   GeoJsonMarker({
     required this.id,
@@ -249,6 +251,7 @@ class GeoJsonMarker {
     this.bearing,
     this.anchor,
     this.renderAnchor,
+    this.hasPreregisteredImage=false,
   });
 
   GeoJsonMarker copyWith({

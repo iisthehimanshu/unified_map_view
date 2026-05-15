@@ -278,6 +278,8 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
     print("addGeoJsonFeatures ${StackTrace.current}");
     // Add polygons
+    var t1=DateTime.now();
+    print("addGeoJsonFeatures1 ${t1}");
     final polygons = GeoJsonLoader.extractPolygons(collection);
     final sectionPolygons = polygons.where((p) => p.properties?["type"] == "Section").toList();
     final subSection = polygons.where((p) => p.properties?["type"] == "SubSection").toList();
@@ -287,10 +289,10 @@ class UnifiedMapController extends ChangeNotifier {
     await addPolygons(otherPolygons);
     await addPolygons(sectionPolygons);
     await addPolygons(subSection);
-
+    print("addGeoJsonFeatures2 ${DateTime.now().difference(t1)}");
     final polylines = GeoJsonLoader.extractPolylines(collection);
     await addPolylines(polylines);
-
+    var t2=DateTime.now();
     final markers = GeoJsonLoader.extractMarkers(collection);
     final urlMarkers = markers.where((marker)=> (marker.assetPath != null && marker.assetPath!.contains("http"))).toList();
     addMarkers(urlMarkers);
@@ -301,7 +303,7 @@ class UnifiedMapController extends ChangeNotifier {
     await addMarkers(normalMarker);
     await addMarkers(sectionMarkers);
     await addMarkers(subSectionMarkers);
-
+    print("addGeoJsonFeatures3 ${DateTime.now().difference(t2)}");
     notifyListeners();
   }
 
@@ -335,6 +337,11 @@ class UnifiedMapController extends ChangeNotifier {
       await currentProviderImplementation.addPolygons(_currentMapController, polygons);
     }
     notifyListeners();
+  }
+
+  Future<void> addCustomImage(String imageId, Uint8List bytes) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.addCustomImage(_currentMapController, imageId, bytes);
   }
 
   /// Remove a polygon from the map
@@ -486,12 +493,26 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
-    await _annotationController.annotatePath(floor);
+    await _annotationController.annotateMultiPointPath();
     notifyListeners();
   }
 
   Future<bool> addPath({required List<Map<String, dynamic>> path}) async {
     return _annotationController.addPath(path.map((map)=>Cell.fromJson(map)).toList());
+  }
+
+  Future<bool> addMultiPointPath({
+    required List<List<Map<String, dynamic>>> paths,
+  }) async {
+    final cellPaths = paths
+        .map(
+          (segment) => segment
+          .map((map) => Cell.fromJson(map))
+          .toList(),
+    )
+        .toList();
+
+    return _annotationController.addMultiPointPath(cellPaths);
   }
 
   Future<bool> addMultiPathGraph({required List<Map<String, dynamic>> path}) async {
@@ -511,6 +532,16 @@ class UnifiedMapController extends ChangeNotifier {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }
     await _annotationController.annotatePath(sourceFloor);
+    notifyListeners();
+  }
+
+  Future<void> annotateMultiPointPath({required List<String> bids, required int sourceFloor}) async {
+    deSelectLocation();
+    if(RenderingTheme.current.isZoo)await currentProviderImplementation.addMapFade(_currentMapController);
+    // for (var bid in bids) {
+    //   changeBuildingFloor(buildingID: bid, floor: sourceFloor);
+    // }
+    await _annotationController.annotateMultiPointPath();
     notifyListeners();
   }
 

@@ -1,3 +1,7 @@
+import 'dart:ui';
+
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:turn_highlighter/turn_highlighter.dart';
 import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
@@ -28,6 +32,7 @@ class AnnotationController{
 
   Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
+  List<List<MapLocation>>? _multiPointPath;
   List<MapLocation> _pathPoints = [];
 
   User? _user;
@@ -149,11 +154,12 @@ class AnnotationController{
     _unifiedMapController.removeMarker('path');
     _path = null;
     _multiPath = null;
+    _multiPointPath=null;
     _pathPoints.clear();
     return true;
   }
 
-  bool addPath(List<Cell> path) {
+    bool addPath(List<Cell> path) {
     _path ??= <String, Map<int, List<List<Cell>>>>{};
 
     if (path.isEmpty) return false;
@@ -178,6 +184,25 @@ class AnnotationController{
     // Store last segment
     if (currentSegment.isNotEmpty) {
       _storeSegment(currentSegment);
+    }
+
+    return true;
+  }
+
+
+  bool addMultiPointPath(List<List<Cell>> routes) {
+    _multiPointPath = [];
+
+    for (final route in routes) {
+      final convertedRoute = route.map((cell) {
+        return MapLocation(
+          latitude: cell.lat,
+          longitude: cell.lng,
+          id: cell.node.toString(), // optional
+        );
+      }).toList();
+
+      _multiPointPath!.add(convertedRoute);
     }
 
     return true;
@@ -274,6 +299,122 @@ class AnnotationController{
     fitPathInScreen();
 
     return true;
+  }
+
+
+  Future<void> annotateMultiPointPath() async {
+    if (_multiPointPath == null || _multiPointPath!.isEmpty) return;
+
+    _unifiedMapController.removePolyline("path");
+
+    for (int segmentIndex = 0;
+    segmentIndex < _multiPointPath!.length;
+    segmentIndex++) {
+
+      final route = _multiPointPath![segmentIndex];
+
+      await _drawSegmentMultiPolyline(
+        "path_$segmentIndex",
+        0, // dummy floor if still needed by method signature
+        route,
+        "#448AFF",
+      );
+
+      await _annotateStopMarkers(
+        route,
+        segmentIndex,
+      );
+    }
+
+    fitPathInScreen();
+  }
+
+
+
+  Future<void> _annotateStopMarkers(
+      List<MapLocation> path,
+      int segmentIndex,
+      ) async {
+    if (path.isEmpty) return;
+
+    final stopPoint = path.last;
+    final markerId = "stop_$segmentIndex";
+
+    // Pass segmentIndex directly, increment inside _createStopMarkerIcon
+    final Uint8List iconBytes = await _createStopMarkerIcon(segmentIndex,60,30,25);
+
+    // Register image directly — no assetPath needed
+    await _unifiedMapController.addCustomImage(markerId, iconBytes);
+
+    final marker = GeoJsonMarker(
+      id: markerId,
+      position: stopPoint,
+      title: "${segmentIndex + 1}",
+      assetPath: null,         // ← not an asset, already registered above
+      textVisibility: false,
+      customRendering: false,  // ← already fully rendered, skip creator pipeline
+      imageSize: const Size(30, 30),
+      hasPreregisteredImage: true,
+        priority: true
+    );
+
+
+    print("addMarker:${marker}");
+
+    await _unifiedMapController.addMarker(marker);
+  }
+
+  Future<Uint8List> _createStopMarkerIcon(int segmentIndex,double? stopSize,double outerRadius,double innerCircle) async {
+    double? size = stopSize??120.0;
+
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // White outer ring
+    canvas.drawCircle(
+      Offset(size / 2, size / 2),
+      outerRadius,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.fill,
+    );
+
+    // Blue inner circle
+    canvas.drawCircle(
+      Offset(size / 2, size / 2),
+      innerCircle,
+      Paint()
+        ..color = Colors.blue
+        ..style = PaintingStyle.fill,
+    );
+
+    // Segment number text (segmentIndex + 1 for 1-based display)
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: "${segmentIndex + 1}",
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    textPainter.paint(
+      canvas,
+      Offset(
+        (size / 2) - (textPainter.width / 2),
+        (size / 2) - (textPainter.height / 2),
+      ),
+    );
+
+    final image = await recorder
+        .endRecording()
+        .toImage(size.toInt(), size.toInt());
+
+    final byteData = await image.toByteData(format: ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
   }
 
   /// Runs TurnHighlighter over the collected path points for [sourceFloor] and
@@ -375,7 +516,7 @@ class AnnotationController{
 
   Future<void> fitPathInScreen() async {
     await _unifiedMapController.fitBoundsToGeoJson(
-      allPoint: _pathPoints,
+      allPoint: _multiPointPath?[0],
       padding: 0.0,
     );
   }
@@ -404,6 +545,50 @@ class AnnotationController{
     );
 
     await _unifiedMapController.addPolyline(polyline);
+  }
+
+
+  Future<void> _drawSegmentMultiPolyline(
+      String bid,
+      int floor,
+      List<MapLocation> points,
+      String color,
+      ) async {
+    if (points.length < 2) return;
+
+    final baseId = GeoJsonUtils.buildKey(
+      buildingID: bid,
+      floor: floor.toString(),
+      path: 'mainLine_${DateTime.now().microsecondsSinceEpoch}',
+    );
+
+    // White stroke (background)
+    final strokePolyline = GeoJsonPolyline(
+      id: "${baseId}_stroke",
+      points: points,
+      properties: {
+        "fillColor": "#FFFFFF",
+        "width": 12.0, // bigger than main line
+        "fillOpacity": 1.0,
+        "style": "solid",
+      },
+    );
+
+    // Main colored route
+    final mainPolyline = GeoJsonPolyline(
+      id: "${baseId}_main",
+      points: points,
+      properties: {
+        "fillColor": color,
+        "width": 8.0,
+        "fillOpacity": 1.0,
+        "style": "solid",
+      },
+    );
+
+    // Draw stroke first, then main line
+    await _unifiedMapController.addPolyline(strokePolyline);
+    await _unifiedMapController.addPolyline(mainPolyline);
   }
 
 

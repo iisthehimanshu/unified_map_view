@@ -559,6 +559,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               await controller.addImage(marker.id, iconBytes);
             }
           }
+
         }catch(e){
           print("error in addMarkers $e");
         }
@@ -686,7 +687,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                 marker.title ?? "", TextFormat.smartWrap)
                 : '',
             'id': marker.id,
-            if (marker.assetPath != null) 'icon': marker.id,
+            if (marker.assetPath != null || marker.hasPreregisteredImage) 'icon': marker.id,
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             'bearing': marker.compassBasedRotation
@@ -830,14 +831,56 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MaplibreMapController) {
       try {
         _polygons.addAll(polygons);
-        for(var polygon in polygons){
-          await RenderingUtilities.registerLandmarkPattern(controller, polygon);
-        }
+        await Future.wait(
+          polygons.map((polygon) =>
+              RenderingUtilities.registerLandmarkPattern(controller, polygon)
+          ),
+        );
         await _updatePolygonSource(controller);
       } catch (e) {
         print('Error adding polygons: $e');
       }
     }
+  }
+
+  // Helper — call once, reuse everywhere
+  String? _validProp(Map<String, dynamic>? props, String key) {
+    final v = props?[key];
+    if (v == null || v.isEmpty || v.toLowerCase() == 'undefined') return null;
+    return v as String;
+  }
+
+  int? _validIntProp(Map<String, dynamic>? props, String key) {
+    final v = props?[key];
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is String) {
+      if (v.isEmpty || v.toLowerCase() == 'undefined') return null;
+      return int.tryParse(v);
+    }
+    return null;
+  }
+
+  double? _validDoubleProp(Map<String, dynamic>? props, String key) {
+    final v = props?[key];
+    if (v == null) return null;
+    if (v is double) return v;
+    if (v is int) return v.toDouble();
+    if (v is String) {
+      if (v.isEmpty || v.toLowerCase() == 'undefined') return null;
+      return double.tryParse(v);
+    }
+    return null;
+  }
+
+  Color _resolveColor(
+      String? hex,
+      Map<String, dynamic>? typeColors,
+      String colorKey,
+      Color fallback,
+      ) {
+    if (hex != null) return RenderingUtilities.hexToColor(hex);
+    return typeColors?[colorKey] ?? fallback;
   }
 
   Future<void> _updatePolygonSource(
@@ -848,96 +891,77 @@ class MaplibreMapProvider extends BaseMapProvider {
       print("Polygon layers not enabled yet");
       return;
     }
+    if (_controller == null || !_isMapReady) return; // ← moved up, fail fast
 
     final features = _polygons.map((polygon) {
-      final String? rawType =
-          polygon.properties?["type"] ?? polygon.properties?["polygonType"];
-      final String? type = rawType?.toLowerCase();
+      final props = polygon.properties;           // ← cache once
+      final String? type = _validProp(props, 'type')?.toLowerCase()
+          ?? _validProp(props, 'polygonType')?.toLowerCase();
+      final typeColors = RenderingUtilities.polygonColorMap[type]; // ← cache once
 
-      final String? fillColorHex = polygon.properties?["fillColor"];
-      final String? strokeColorHex = polygon.properties?["strokeColor"];
-      final String? fillColorSecondaryHex=polygon.properties?["fillColorSecondary"];
+      // Colors — single call each
+      final fillColor   = _resolveColor(_validProp(props, 'fillColor'),
+          typeColors, 'fillColor', Colors.white);
+      final strokeColor = _resolveColor(_validProp(props, 'strokeColor'),
+          typeColors, 'strokeColor', fillColor);
+      final fillColorSecondary = _resolveColor(_validProp(props, 'fillColorSecondary'),
+          typeColors, 'fillColorSecondary', const Color(0xffD3D3D3));
 
-      final Color fillColor = (fillColorHex != null &&
-          fillColorHex != "undefined" &&
-          fillColorHex.isNotEmpty)
-          ? RenderingUtilities.hexToColor(fillColorHex)
-          : RenderingUtilities.polygonColorMap[type]?["fillColor"] ??
-          Colors.white;
+      // Heights
+      final double? baseHeight = double.tryParse(_validProp(props, 'baseHeight') ?? '');
+      final double? rawHeight  = double.tryParse(_validProp(props, 'height') ?? '');
+      final double? height = (rawHeight != null && baseHeight != null)
+          ? rawHeight + baseHeight
+          : rawHeight;
 
-      final Color strokeColor = (strokeColorHex != null &&
-          strokeColorHex != "undefined" &&
-          strokeColorHex.isNotEmpty)
-          ? RenderingUtilities.hexToColor(strokeColorHex)
-          : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ??
-          fillColor;
+      // Pattern — all fields must be present
+      final patternName    = _validProp(props, 'pattern');
+      final patternSize    = _validIntProp(props, 'patternSize');
+      final patternSpacing = _validIntProp(props, 'patternSpacing');
+      final patternRotation = _validIntProp(props, 'patternRotation');
+      final bool hasPattern = patternName != null && patternSize != null
+          && patternSpacing != null && patternRotation != null;
 
-
-      final Color fillColorSecondary = (fillColorSecondaryHex != null &&
-          fillColorSecondaryHex != "undefined" &&
-          fillColorSecondaryHex.isNotEmpty)
-          ? RenderingUtilities.hexToColor(fillColorSecondaryHex)
-          : RenderingUtilities.polygonColorMap[type]?["fillColorSecondary"] ??
-          const Color(0xffD3D3D3);
-
-      final coordinates =
-      polygon.points.map((p) => [p.longitude, p.latitude]).toList();
-
-      double? baseHeight;
-      double? height;
-      bool pattern=false;
-
-      if (polygon.properties?['baseHeight'] != null && polygon.properties?['baseHeight'].isNotEmpty && polygon.properties?['baseHeight'].toLowerCase() != "undefined") {
-        baseHeight = double.tryParse(polygon.properties?['baseHeight']);
-      }
-
-      if (polygon.properties?['height'] != null && polygon.properties?['height'].isNotEmpty && polygon.properties?['height'].toLowerCase() != "undefined") {
-        height = double.tryParse(polygon.properties?['height']);
-        // If baseHeight exists, add it to height
-        if (baseHeight != null && height != null) {
-          height = height + baseHeight;
-        }
-      }
-
-      if(polygon.properties?['pattern']!=null && polygon.properties?['pattern'].isNotEmpty && polygon.properties?['patternSize']!=null && polygon.properties?['patternSpacing']!=null && polygon.properties?['patternRotation']!=null){
-        pattern=true;
-      }
+      // Hex strings — computed once
+      final fillHex      = '#${RenderingUtilities.colorToMapplsHex(fillColor)}';
+      final strokeHex    = '#${RenderingUtilities.colorToMapplsHex(strokeColor)}';
+      final fillSecHex   = '#${RenderingUtilities.colorToMapplsHex(fillColorSecondary)}';
 
       return {
         'type': 'Feature',
         'id': polygon.id,
         'geometry': {
           'type': 'Polygon',
-          'coordinates': [coordinates],
+          'coordinates': [polygon.points.map((p) => [p.longitude, p.latitude]).toList()],
         },
         'properties': {
-          'id': polygon.id,
-          'type': type ?? 'default',
-          'fillColor':
-          '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
-          'strokeColor':
-          '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillColorSecondary':'#${RenderingUtilities.colorToMapplsHex(fillColorSecondary)}',
-          'fillOpacity': fillColor.a,
-          'isSelected': polygon.id == selectPolygonId,
-          'boundary': polygon.properties?['type'] == "Boundary",
-          'section': polygon.properties?['type'] == "Section",
-          'subsection': polygon.properties?['type'] == "Sub Section",
+          'id':               polygon.id,
+          'type':             type ?? 'default',
+          'fillColor':        fillHex,
+          'strokeColor':      strokeHex,
+          'fillColorSecondary': fillSecHex,
+          'fillOpacity':      fillColor.a,
+          'isSelected':       polygon.id == selectPolygonId,
+          'boundary':         props?['type'] == 'Boundary',
+          'section':          props?['type'] == 'Section',
+          'subsection':       props?['type'] == 'Sub Section',
+          'hasPattern':       hasPattern,
+          'pattern':          hasPattern
+              ? GeoJsonUtils.buildPatternKey(
+            name: patternName, size: patternSize,
+            gap: patternSpacing, rotation: patternRotation,
+            color: _validProp(props, 'patternColor'),
+          )
+              : null,
           if (_config.immersive && baseHeight != null) 'base_height': baseHeight,
-          if (_config.immersive && height != null) 'height': height,
-          'hasPattern':pattern,
-          'pattern':GeoJsonUtils.buildPatternKey(name:polygon.properties?['pattern'],size:polygon.properties?['patternSize'] ,gap: polygon.properties?['patternSpacing'],rotation:polygon.properties?['patternRotation'] ,color: polygon.properties?['patternColor']),
-        }
+          if (_config.immersive && height != null)     'height':      height,
+        },
       };
     }).toList();
 
-    if (_controller == null || !_isMapReady) return;
     await controller.setGeoJsonSource(
       _polygonSourceId,
-      {
-        "type": "FeatureCollection",
-        "features": features,
-      },
+      {'type': 'FeatureCollection', 'features': features},
     );
   }
 
@@ -1100,21 +1124,22 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
-        Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
-        MarkerIconWithAnchor markerIconWithAnchorWithText =
-        await creator.createUnifiedMarker(
+        final Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+        final bool expandCanvas = customAnchor.dx != 0.5 || customAnchor.dy != 0.5;
+
+        final (withText, withoutText) = await (
+        creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
           fontSize: 14.5,
-          text: marker.textVisibility? marker.title??"":"",
+          text: marker.textVisibility ? marker.title ?? "" : "",
           imageSource: marker.assetPath,
           layout: MarkerLayout.vertical,
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
           customAnchor: customAnchor,
-          expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
-        );
-        MarkerIconWithAnchor markerIconWithAnchorWithoutText =
-        await creator.createUnifiedMarker(
+          expandCanvasForRotation: expandCanvas,
+        ),
+        creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
           fontSize: 14.5,
           text: "",
@@ -1123,30 +1148,27 @@ class MaplibreMapProvider extends BaseMapProvider {
           textFormat: TextFormat.smartWrap,
           textColor: const Color(0xff000000),
           customAnchor: customAnchor,
-        );
-        final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
-        final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
-        await controller.addImage(marker.id, iconBytes);
-        await controller.addImage("${marker.id}-small", iconBytes2);
-        marker.anchor = markerIconWithAnchorWithText.anchor;
+        ),
+        ).wait;
+
+        await Future.wait([
+          controller.addImage(marker.id, withText.icon),
+          controller.addImage("${marker.id}-small", withoutText.icon),
+        ]);
+
+        marker.anchor = withText.anchor;
         return true;
       } else {
-        Uint8List? iconBytes;
-        if (marker.assetPath!.startsWith('http')) {
-          final response = await CacheController().fetchWithCache(marker.assetPath!);
-          iconBytes = response;
-        } else {
-          final bd = await rootBundle.load(marker.assetPath!);
-          iconBytes = bd.buffer.asUint8List();
-        }
-        if (iconBytes != null) {
-          await controller.addImage(marker.id, iconBytes);
-          return true;
-        }
+        final Uint8List? iconBytes = marker.assetPath!.startsWith('http')
+            ? await CacheController().fetchWithCache(marker.assetPath!)
+            : (await rootBundle.load(marker.assetPath!)).buffer.asUint8List();
+
+        if (iconBytes == null) return false;
+        await controller.addImage(marker.id, iconBytes);
+        return true;
       }
-      return false;
     } catch (e) {
-      print("_loadMarkerIcon $e");
+      debugPrint("_loadMarkerIcon $e");
       return false;
     }
   }
@@ -1154,6 +1176,11 @@ class MaplibreMapProvider extends BaseMapProvider {
   // ---------------------------------------------------------------------------
   // Layer initialisation
   // ---------------------------------------------------------------------------
+
+  @override
+  Future<void> addCustomImage(dynamic controller,String markerId,Uint8List bytes)async{
+    await controller.addImage(markerId, bytes);
+  }
 
   Future<void> enableCircleLayers(MaplibreMapController controller) async {
     try {

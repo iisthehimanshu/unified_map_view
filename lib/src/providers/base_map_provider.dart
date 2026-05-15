@@ -65,6 +65,8 @@ abstract class BaseMapProvider {
   /// Remove a polygon from the map
   Future<void> removePolygon(dynamic controller, String polygonId,{String? exclude});
 
+  Future<void> addCustomImage(dynamic controller, String imageId, Uint8List bytes);
+
   /// Clear all polygons
   Future<void> clearPolygons(dynamic controller);
 
