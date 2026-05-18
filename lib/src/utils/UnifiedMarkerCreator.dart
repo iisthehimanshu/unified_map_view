@@ -162,7 +162,7 @@ class UnifiedMarkerCreator {
     Offset? customAnchor, // normalized if provided
     bool maintainAspectRatio = true,
     bool expandCanvasForRotation = false,
-    bool scaleMarkerWithDevicePixelDensity = true,
+    bool scaleMarkerWithDevicePixelDensity = false,
     double baseDevicePixelRatio = 2.0,
     bool useCache = true, // New parameter to optionally disable cache
   }) async {
