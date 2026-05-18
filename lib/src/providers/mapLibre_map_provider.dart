@@ -1451,13 +1451,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         _patchAboveMarkerLayerId,
         const SymbolLayerProperties(
           iconImage: ["get", "icon"],
-          iconSize: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            13,  0.2, // at zoom 8  → 30% size
-            18.3,  1.0,   // at zoom 8  → 30% size
-          ],
           iconAnchor: [
             "case",
             [
@@ -1485,8 +1478,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["literal", [0, 0.2]],
             ["literal", [0, 0]]
           ],
-          textAllowOverlap: false,
-          iconAllowOverlap: false,
+          textAllowOverlap: true,
+          iconAllowOverlap: true,
           iconOpacity: [
             "interpolate",
             ["linear"],
@@ -1538,21 +1531,20 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            12.0, 0.0,
-            14.0, 1.0
+            17, 1.0,
+            18, 0.0
           ],
           textOpacity: [
             "interpolate",
             ["linear"],
             ["zoom"],
-            12.0, 0.0,
-            14.0, 1.0
+            17, 1.0,
+            18, 0.0
           ],
         ),
         filter: ["to-boolean", ["get", "section"]],
         enableInteraction: true,
         belowLayerId: _fixedMarkerLayerId,
-        maxzoom: 17.0,
       );
 
       // Layer 4b: SubSection markers
@@ -1727,7 +1719,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         _sectionPolygonLayerId,
         const FillLayerProperties(
           fillColor: ["get", "fillColor"],
-          fillOpacity: ["get", "fillOpacity"],
+          fillOpacity: [
+            "interpolate", ["linear"], ["zoom"],
+            16, 0.0,
+            17, 1.0,
+            17.5, 0.0
+          ],
           fillOutlineColor: ["get", "strokeColor"],
         ),
         filter: [
@@ -1738,7 +1735,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: false,
-        maxzoom: 17.0,
         belowLayerId: _polylineLayerId,
       );
 
@@ -1930,7 +1926,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     ) - 1.7;
 
     final fadeOutZoom = fitZoom;
-    final fadeInZoom  = fitZoom - 1.0;
+    final fadeInZoom  = fitZoom - 0.5;
 
     // Cache so removeMapFade and style-reload can reuse it
     _fadeOutZoom = fadeOutZoom;
@@ -1965,6 +1961,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
+    print("fadeOutZoom $fadeOutZoom");
+
     await controller.setLayerProperties(
       _priorityLandmarkWithoutSectionLayerId,
       SymbolLayerProperties(
@@ -1981,6 +1979,31 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
+    await controller.setLayerProperties(
+      _sectionPolygonLayerId,
+      FillLayerProperties(
+        fillOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeOutZoom, 1.0,
+          fadeOutZoom + 1.0, 0.0,
+        ],
+      ),
+    );
+    await controller.setLayerProperties(
+      _sectionMarkerLayerId,
+      SymbolLayerProperties(
+        iconOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeOutZoom, 1.0,
+          fadeOutZoom + 1.0, 0.0,
+        ],
+        textOpacity: [
+          "interpolate", ["linear"], ["zoom"],
+          fadeOutZoom, 1.0,
+          fadeOutZoom + 1.0, 0.0,
+        ],
+      ),
+    );
 
     // 3. All other marker layers: fade IN starting at fadeOutZoom
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);

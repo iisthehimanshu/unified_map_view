@@ -276,7 +276,7 @@ class AnnotationController{
     }
 
     // Annotate turn highlights over the drawn path
-    await _annotateTurnHighlights(sourceFloor);
+    // await _annotateTurnHighlights(sourceFloor);
 
     fitPathInScreen();
 
@@ -479,7 +479,7 @@ class AnnotationController{
   }
 
   Future<void> localizeUser(User user, {bool changeFloor = true}) async {
-    if(_user != null && _user!.bid != user.bid && _user!.floor == user.floor ){
+    if(_user != null && _user!.bid == user.bid && _user!.floor == user.floor ){
       if(changeFloor){
         await changeBuildingFloor(user.bid, user.floor);
       }
