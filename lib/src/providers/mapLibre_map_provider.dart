@@ -836,9 +836,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MaplibreMapController) {
       try {
         _polygons.addAll(polygons);
-        for(var polygon in polygons){
-          await RenderingUtilities.registerLandmarkPattern(controller, polygon);
-        }
+        await Future.wait(
+          polygons.map((polygon) =>
+              RenderingUtilities.registerLandmarkPattern(controller, polygon)
+          ),
+        );
         await _updatePolygonSource(controller);
       } catch (e) {
         print('Error adding polygons: $e');
