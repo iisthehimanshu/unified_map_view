@@ -573,7 +573,7 @@ class UnifiedMapController extends ChangeNotifier {
   }
 
   void localizeUser(User user, {bool changeFloor = true}) async {
-    await _annotationController.localizeUser(user, changeFloor: changeFloor);
+    await _annotationController.localizeUser(user);
     notifyListeners();
   }
 

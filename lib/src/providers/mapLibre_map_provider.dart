@@ -1154,7 +1154,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         creator.createUnifiedMarker(
           imageSize: marker.imageSize ?? const Size(85, 85),
-          fontSize: fontSize,
+          fontSize: 14.5,
           text: "",
           imageSource: marker.assetPath,
           layout: MarkerLayout.vertical,

@@ -160,8 +160,10 @@ class AnnotationController{
     _unifiedMapController.removeMarker('path');
     _path = null;
     _multiPath = null;
+    _multiPointPath?.clear();
     _multiPointPath=null;
     _pathPoints.clear();
+    _unifiedMapController.clearMarkers();
     return true;
   }
 
@@ -320,20 +322,29 @@ class AnnotationController{
 
       final route = _multiPointPath![segmentIndex];
 
+      if (route.isEmpty) continue;
+
       await _drawSegmentMultiPolyline(
         "path_$segmentIndex",
-        0, // dummy floor if still needed by method signature
+        0,
         route,
         "#448AFF",
       );
 
+      /// Add stop marker at first point of the path
+      await _annotateStopMarkers(
+        [route.first], // passing only first point
+        segmentIndex,
+      );
+
+      /// Existing stop markers
       await _annotateStopMarkers(
         route,
-        segmentIndex,
+        segmentIndex + 1,
       );
     }
 
-    fitPathInScreen();
+    fitMultiPathInScreen();
   }
 
 
@@ -356,7 +367,7 @@ class AnnotationController{
     final marker = GeoJsonMarker(
       id: markerId,
       position: stopPoint,
-      title: "${segmentIndex + 1}",
+      title: "${segmentIndex}",
       assetPath: null,         // ← not an asset, already registered above
       textVisibility: false,
       customRendering: false,  // ← already fully rendered, skip creator pipeline
@@ -523,7 +534,14 @@ class AnnotationController{
 
   Future<void> fitPathInScreen() async {
     await _unifiedMapController.fitBoundsToGeoJson(
-      allPoint: _multiPointPath?[0],
+      allPoint: _pathPoints,
+      padding: 0.0,
+    );
+  }
+
+  Future<void> fitMultiPathInScreen() async {
+    await _unifiedMapController.fitBoundsToGeoJson(
+      allPoint: _multiPointPath?.expand((e) => e).toList(),
       padding: 0.0,
     );
   }

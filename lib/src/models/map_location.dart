@@ -1,4 +1,4 @@
-import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:google_maps_flutter_platform_interface/google_maps_flutter_platform_interface.dart';
 
 class MapLocation {
   final double latitude;

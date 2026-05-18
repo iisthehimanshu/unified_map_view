@@ -1247,4 +1247,10 @@ class MapboxMapProvider extends BaseMapProvider {
 
   }
 
+  @override
+  Future<void> addCustomImage(controller, String imageId, Uint8List bytes) {
+    // TODO: implement addCustomImage
+    throw UnimplementedError();
+  }
+
 }
