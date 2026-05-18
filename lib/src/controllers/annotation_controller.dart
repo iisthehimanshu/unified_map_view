@@ -308,7 +308,7 @@ class AnnotationController{
   Future<void> annotateDottedPath(
       List<MapLocation> points,
       String bid,
-      int floor, {String? customKey}) async {
+      int floor, {String? customKey, String color = "#448AFF"}) async {
     final polyline = GeoJsonPolyline(
       id: GeoJsonUtils.buildKey(
         buildingID: bid,
@@ -318,8 +318,8 @@ class AnnotationController{
       ),
       points: points,
       properties: {
-        "fillColor": "#448AFF",
-        "width": 5.0,
+        "fillColor": color,
+        "width": 6.0,
         "fillOpacity": 1.0,
         "style":"dashed",
       },
@@ -328,11 +328,12 @@ class AnnotationController{
     _unifiedMapController.addPolyline(polyline);
   }
 
-  Future<void> _annotateCurvedPath(
+  Future<void> annotateCurvedPath(
       MapLocation p1,
       MapLocation p2,
       String bid,
       int floor,
+      {String? customKey, String color = "#448AFF"}
       ) async {
     final curvedPoints = _generateCurvedPoints(p1, p2);
 
@@ -340,6 +341,8 @@ class AnnotationController{
       curvedPoints,
       bid,
       floor,
+      customKey: customKey,
+      color: color
     );
   }
 
@@ -417,7 +420,7 @@ class AnnotationController{
     for (var cell in path) {
       if(cell.isDestination){
         if(cell.destinationLat != null && cell.destinationLng != null){
-          await _annotateCurvedPath(MapLocation(latitude: cell.lat, longitude: cell.lng), MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), cell.bid!, cell.floor);
+          await annotateCurvedPath(MapLocation(latitude: cell.lat, longitude: cell.lng), MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), cell.bid!, cell.floor);
           _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'),title: cell.name??""));
         }else{
           _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), title: cell.name??""));
