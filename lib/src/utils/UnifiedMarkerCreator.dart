@@ -45,8 +45,6 @@ class MarkerCacheKey {
   final Offset? customAnchor;
   final bool maintainAspectRatio;
   final bool expandCanvasForRotation;
-  final bool scaleMarkerWithDevicePixelDensity;
-  final double baseDevicePixelRatio;
 
   MarkerCacheKey({
     required this.text,
@@ -62,8 +60,6 @@ class MarkerCacheKey {
     this.customAnchor,
     required this.maintainAspectRatio,
     required this.expandCanvasForRotation,
-    required this.scaleMarkerWithDevicePixelDensity,
-    required this.baseDevicePixelRatio,
   });
 
   @override
@@ -82,10 +78,7 @@ class MarkerCacheKey {
         other.spacing == spacing &&
         other.customAnchor == customAnchor &&
         other.maintainAspectRatio == maintainAspectRatio &&
-        other.expandCanvasForRotation == expandCanvasForRotation &&
-        other.scaleMarkerWithDevicePixelDensity ==
-            scaleMarkerWithDevicePixelDensity &&
-        other.baseDevicePixelRatio == baseDevicePixelRatio;
+        other.expandCanvasForRotation == expandCanvasForRotation;
   }
 
   @override
@@ -104,8 +97,6 @@ class MarkerCacheKey {
       customAnchor,
       maintainAspectRatio,
       expandCanvasForRotation,
-      scaleMarkerWithDevicePixelDensity,
-      baseDevicePixelRatio,
     );
   }
 }
@@ -142,7 +133,7 @@ class UnifiedMarkerCreator {
     };
   }
 
-  /// Creates a crisp marker.
+  /// Creates a crisp marker that keeps the same *physical* size across devices.
   /// Results are cached automatically for faster subsequent access.
   /// imageSize is in logical dp (same units you'd expect for Flutter widgets).
   ///
@@ -162,8 +153,6 @@ class UnifiedMarkerCreator {
     Offset? customAnchor, // normalized if provided
     bool maintainAspectRatio = true,
     bool expandCanvasForRotation = false,
-    bool scaleMarkerWithDevicePixelDensity = true,
-    double baseDevicePixelRatio = 2.0,
     bool useCache = true, // New parameter to optionally disable cache
   }) async {
     // Create cache key
@@ -181,8 +170,6 @@ class UnifiedMarkerCreator {
       customAnchor: customAnchor,
       maintainAspectRatio: maintainAspectRatio,
       expandCanvasForRotation: expandCanvasForRotation,
-      scaleMarkerWithDevicePixelDensity: scaleMarkerWithDevicePixelDensity,
-      baseDevicePixelRatio: baseDevicePixelRatio,
     );
 
     // Check cache first
@@ -208,8 +195,6 @@ class UnifiedMarkerCreator {
       customAnchor: customAnchor,
       maintainAspectRatio: maintainAspectRatio,
       expandCanvasForRotation: expandCanvasForRotation,
-      scaleMarkerWithDevicePixelDensity: scaleMarkerWithDevicePixelDensity,
-      baseDevicePixelRatio: baseDevicePixelRatio,
     );
 
     // Store in cache
@@ -235,20 +220,15 @@ class UnifiedMarkerCreator {
     Offset? customAnchor, // normalized if provided
     bool maintainAspectRatio = true,
     bool expandCanvasForRotation = false,
-    bool scaleMarkerWithDevicePixelDensity = true,
-    double baseDevicePixelRatio = 2.0,
   }) async {
     final double ratio = ui.window.devicePixelRatio; // device pixel ratio
-    final double densityScale = scaleMarkerWithDevicePixelDensity
-        ? (ratio / baseDevicePixelRatio).clamp(0.75, 2.0).toDouble()
-        : 1.0;
 
     // Convert logical sizes to pixel sizes (so final PNG has pixel-perfect content)
-    final double imageWidthPx = imageSize.width * ratio * densityScale;
-    final double imageHeightPx = imageSize.height * ratio * densityScale;
-    final double fontSizePx = fontSize * ratio * densityScale;
-    final double strokeWidthPx = strokeWidth * ratio * densityScale;
-    final double spacingPx = spacing * ratio * densityScale;
+    final double imageWidthPx = imageSize.width * ratio;
+    final double imageHeightPx = imageSize.height * ratio;
+    final double fontSizePx = fontSize * ratio;
+    final double strokeWidthPx = strokeWidth * ratio;
+    final double spacingPx = spacing * ratio;
 
     // Format text
     final String formattedText = formatText(text, textFormat);
@@ -262,7 +242,7 @@ class UnifiedMarkerCreator {
         Uint8List? bytes;
         if (imageSource.startsWith('http')) {
           final response = await CacheController().fetchWithCache(imageSource!);
-           bytes = response;
+          bytes = response;
         } else {
           final bd = await rootBundle.load(imageSource);
           bytes = bd.buffer.asUint8List();
@@ -353,7 +333,7 @@ class UnifiedMarkerCreator {
       // We must give a sufficiently large max width in pixels.
       // This ensures multi-line wrapping behaves like you'd expect.
       // Choose a generous maximum width in pixels (e.g., 300 dp * ratio)
-      final double maxTextWidthPx = (300.0 * ratio * densityScale);
+      final double maxTextWidthPx = (300.0 * ratio);
       fillPainter.layout(minWidth: 0, maxWidth: maxTextWidthPx);
       strokePainter.layout(minWidth: 0, maxWidth: maxTextWidthPx);
 
@@ -555,21 +535,21 @@ class UnifiedMarkerCreator {
       final textOffset = Offset(textX, textY);
 
       // Draw pill background
-        final double pillRadius = (textHeightPx + pillPaddingV * 1.2) / 2;
+      final double pillRadius = (textHeightPx + pillPaddingV * 1.2) / 2;
 
-        final Rect pillRect = Rect.fromLTWH(
-          textX - pillPaddingH,
-          textY - pillPaddingV,
-          textWidthPx + pillPaddingH * 2,
-          textHeightPx + pillPaddingV * 2,
-        );
-        canvas.drawRRect(
-          RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
-          Paint()
-            ..color = Colors.white
-            ..isAntiAlias = true
-            ..style = PaintingStyle.fill,
-        );
+      final Rect pillRect = Rect.fromLTWH(
+        textX - pillPaddingH,
+        textY - pillPaddingV,
+        textWidthPx + pillPaddingH * 2,
+        textHeightPx + pillPaddingV * 2,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
+        Paint()
+          ..color = Colors.white
+          ..isAntiAlias = true
+          ..style = PaintingStyle.fill,
+      );
 
       canvas.drawRRect(
         RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
