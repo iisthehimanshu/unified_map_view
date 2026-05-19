@@ -296,7 +296,6 @@ class AnnotationController{
               currentColor,
             );
           }
-
           _annotatePathMarkers(path);
         }
       }
@@ -695,25 +694,17 @@ class AnnotationController{
     }
     await clearUser();
     _user = user;
-    await changeBuildingFloor(user.bid, user.floor);
-
-    String id = GeoJsonUtils.buildKey(
-        buildingID: user.bid,
-        floor: user.floor.toString(),
-        id: "user"
-    );
-
-    if (isFirstTime) {
-      // First time — create and add fresh markers
-      GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
-      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
-      await _unifiedMapController.removeMarker("user");
-      await _unifiedMapController.removeCircle("user");
+    String id = GeoJsonUtils.buildKey(buildingID: user.bid, floor: user.floor.toString(), id: "user");
+    GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
+    GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
+    if(changeFloor){
+      await changeBuildingFloor(user.bid, user.floor);
+    }
+    await _unifiedMapController.removeMarker("user");
+    await _unifiedMapController.removeCircle("user");
+    if(_venueData.selectedFloor[user.bid] == user.floor){
       await _unifiedMapController.addUserMarker(userMarker);
       await _unifiedMapController.addCircle(userCircle);
-    } else {
-      // Subsequent calls — just move existing marker
-      await moveUser(user.location);
     }
   }
 
