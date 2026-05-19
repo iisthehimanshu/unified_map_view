@@ -160,10 +160,8 @@ class AnnotationController{
     _unifiedMapController.removeMarker('path');
     _path = null;
     _multiPath = null;
-    _multiPointPath?.clear();
-    _multiPointPath=null;
     _pathPoints.clear();
-    _unifiedMapController.clearMarkers();
+    _multiPointPath?.clear();
     return true;
   }
 
