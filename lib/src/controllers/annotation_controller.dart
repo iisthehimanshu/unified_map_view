@@ -15,6 +15,7 @@ import '../apis/BuildingByVenue.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
 import '../config.dart';
 import '../models/Cell.dart';
+import '../utils/geoJson/predefined_circles.dart';
 import '../utils/geoJson/predefined_markers.dart';
 
 class AnnotationController{
@@ -328,17 +329,31 @@ class AnnotationController{
         "#448AFF",
       );
 
-      /// Add stop marker at first point of the path
-      await _annotateStopMarkers(
-        [route.first], // passing only first point
-        segmentIndex,
-      );
+      /// Only first segment gets start marker
+      if (segmentIndex == 0) {
+        _unifiedMapController.addMarker(
+          PredefinedMarkers.getTourStartMarker(
+            route.first,
+            "start_$segmentIndex",
+          ),
+        );
+      }
 
-      /// Existing stop markers
-      await _annotateStopMarkers(
-        route,
-        segmentIndex + 1,
-      );
+      /// Last segment gets end marker
+      if (segmentIndex == _multiPointPath!.length - 1) {
+        _unifiedMapController.addMarker(
+          PredefinedMarkers.getTourEndMarker(
+            route.last,
+            "end_$segmentIndex",
+          ),
+        );
+      } else {
+        /// Intermediate stop markers
+        await _annotateStopMarkers(
+          [route.last],
+          segmentIndex,
+        );
+      }
     }
 
     fitMultiPathInScreen();

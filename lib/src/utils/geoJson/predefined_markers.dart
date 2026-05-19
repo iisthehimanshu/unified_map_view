@@ -69,6 +69,40 @@ class PredefinedMarkers{
     );
   }
 
+  static GeoJsonMarker getTourStartMarker(MapLocation location, String id, {String title = ""}){
+    return GeoJsonMarker(
+        id: id,
+        position: location,
+        title: title,
+        snippet: "",
+        assetPath:LandmarkAssetType.startTour.assetPath,
+        iconName: "Source",
+        priority: true,
+        imageSize: Size(30, 30),
+        renderAnchor: Offset(0.5, 0.8),
+        anchor: LandmarkAssetType.startTour.anchor,
+        customRendering: true,
+        properties: {"fontSize":10.0}
+    );
+  }
+
+  static GeoJsonMarker getTourEndMarker(MapLocation location, String id, {String title = ""}){
+    return GeoJsonMarker(
+        id: id,
+        position: location,
+        title: title,
+        snippet: "",
+        assetPath:LandmarkAssetType.endTour.assetPath,
+        iconName: "Destination",
+        priority: true,
+        imageSize: Size(30, 30),
+        renderAnchor: Offset(0.5, 0.8),
+        anchor: LandmarkAssetType.endTour.anchor,
+        customRendering: true,
+        properties: {"fontSize":10.0}
+    );
+  }
+
   static GeoJsonMarker getFloorConnectionMarker(MapLocation location, String id, String? type){
     switch (type){
       case "Lift":

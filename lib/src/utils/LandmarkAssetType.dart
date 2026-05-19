@@ -42,7 +42,9 @@ enum LandmarkAssetType {
   buggyPoint,
   roomDoorDirectionalArrow,
   mapDoorRight,
-  mapDoorLeft
+  mapDoorLeft,
+  startTour,
+  endTour,
   ;
 
   String get assetPath {
@@ -131,6 +133,10 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/map_door_right.png';
       case LandmarkAssetType.mapDoorLeft:
         return 'packages/unified_map_view/assets/markers/map_door_left.png';
+      case LandmarkAssetType.startTour:
+        return 'packages/unified_map_view/assets/markers/Start.png';
+      case LandmarkAssetType.endTour:
+        return 'packages/unified_map_view/assets/markers/Stop.png';
     }
   }
 
@@ -181,6 +187,8 @@ enum LandmarkAssetType {
       case LandmarkAssetType.escalator:
       case LandmarkAssetType.ramp:
       case LandmarkAssetType.mainEntry:
+      case LandmarkAssetType.startTour:
+        case LandmarkAssetType.endTour:
         return true;
     }
   }
@@ -231,6 +239,8 @@ enum LandmarkAssetType {
       case LandmarkAssetType.stationary:
       case LandmarkAssetType.mapDoorRight:
       case LandmarkAssetType.mapDoorLeft:
+      case LandmarkAssetType.startTour:
+      case LandmarkAssetType.endTour:
         return const Offset(0.5, 1.0);
 
     }
