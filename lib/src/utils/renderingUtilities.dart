@@ -198,9 +198,11 @@ class RenderingUtilities{
         return LandmarkAssetType.vendingMachine;
       }
       if (type.contains('water')) {
+        return LandmarkAssetType.waterPoint;
+      }
+      if (type.contains('fountain')) {
         return LandmarkAssetType.waterFountain;
       }
-
       if (type.contains('door only')) {
         return LandmarkAssetType.doorOnly;
       }

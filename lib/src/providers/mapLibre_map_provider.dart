@@ -80,6 +80,24 @@ class MaplibreMapProvider extends BaseMapProvider {
   double? _fadeOutZoom;
 
   // ---------------------------------------------------------------------------
+  // Priority collision key
+  //
+  // MapLibre's symbol-sort-key: lower value = rendered first = wins collision.
+  // We negate the marker priority so that a higher priority number wins.
+  // All layers that participate in collision detection must declare this key.
+  // ---------------------------------------------------------------------------
+
+  /// GeoJSON property name that carries the numeric priority value.
+  static const String _kPriorityKey = 'markerPriority';
+
+  /// MapLibre expression: negate priority so higher number → lower sort key → wins.
+  static const List<dynamic> _kSortKeyExpression = [
+    "*",
+    ["get", _kPriorityKey],
+    -1,
+  ];
+
+  // ---------------------------------------------------------------------------
   // Styles
   // ---------------------------------------------------------------------------
 
@@ -292,15 +310,15 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MaplibreMapController) {
       if (bearing != null && tilt != null) {
         await controller.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: LatLng(location.latitude, location.longitude),
-              zoom: zoom,
-              bearing: bearing,
-              tilt: tilt,
+            CameraUpdate.newCameraPosition(
+              CameraPosition(
+                target: LatLng(location.latitude, location.longitude),
+                zoom: zoom,
+                bearing: bearing,
+                tilt: tilt,
+              ),
             ),
-          ),
-          duration: duration
+            duration: duration
         );
       } else {
         await controller.animateCamera(
@@ -319,10 +337,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> set3DViewEnabled(
-    dynamic controller, {
-    required bool isEnabled,
-    double? tiltWhen3D,
-  }) async {
+      dynamic controller, {
+        required bool isEnabled,
+        double? tiltWhen3D,
+      }) async {
     if (controller is! MaplibreMapController) return;
     if (_config.immersive == isEnabled) return;
 
@@ -660,6 +678,15 @@ class MaplibreMapProvider extends BaseMapProvider {
     await _setGeoJsonCircle(controller);
   }
 
+  /// Reads the numeric priority from a marker's properties.
+  /// Returns 0 if the property is absent or not a number.
+  int _markerPriority(GeoJsonMarker marker) {
+    final raw = marker.properties?['priority'];
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return 0;
+  }
+
   Future<void> setGeoJsonSource(
       dynamic controller,
       List<GeoJsonMarker> symbols,
@@ -711,6 +738,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering,
             'annotationPriority':((marker.properties?['priority']??0)>1 && entryDirection == null),
+            // Numeric priority used by symbolSortKey: higher value → higher sort
+            // precedence (wins collision). Negated inside the layer expression.
+            _kPriorityKey: _markerPriority(marker),
             if(entryDirection != null)'bearing':entryDirection
           }
         };
@@ -1238,10 +1268,12 @@ class MaplibreMapProvider extends BaseMapProvider {
       });
 
       // Layer 1: Normal text markers (no icon, no bearing)
+      // symbolSortKey: higher marker priority wins when markers overlap.
       await controller.addSymbolLayer(
           _clusterSourceId,
           _normalTextMarkerLayerId,
-          const SymbolLayerProperties(
+          SymbolLayerProperties(
+            symbolSortKey: _kSortKeyExpression,
             textField: ["get", "title"],
             textSize: 14,
             textColor: "#000000",
@@ -1272,11 +1304,12 @@ class MaplibreMapProvider extends BaseMapProvider {
           minzoom: 18.0
       );
 
-      // Layer 2: Normal icon markers (has icon, no bearing)
+      // Layer 2: Normal icon markers (has icon, no bearing) — with sectionId
       await controller.addSymbolLayer(
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withSectionId",
-        const SymbolLayerProperties(
+        SymbolLayerProperties(
+          symbolSortKey: _kSortKeyExpression,
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1289,10 +1322,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           textOffset: [
             "case",
             ["==", ["get", "iconAnchor"], "bottom"],
-            ["literal", [0, 0.0]],   // closer when anchor is bottom
+            ["literal", [0, 0.0]],
             ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.2]],   // farther when anchor is center
-            ["literal", [0, 1.2]]    // default fallback
+            ["literal", [0, 1.2]],
+            ["literal", [0, 1.2]]
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
@@ -1328,10 +1361,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         minzoom: 18.0,
       );
 
+      // Layer 2b: Normal icon markers — without sectionId
       await controller.addSymbolLayer(
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withoutSectionId",
-        const SymbolLayerProperties(
+        SymbolLayerProperties(
+          symbolSortKey: _kSortKeyExpression,
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1344,10 +1379,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           textOffset: [
             "case",
             ["==", ["get", "iconAnchor"], "bottom"],
-            ["literal", [0, 0.0]],   // closer when anchor is bottom
+            ["literal", [0, 0.0]],
             ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.2]],   // farther when anchor is center
-            ["literal", [0, 1.2]]    // default fallback
+            ["literal", [0, 1.2]],
+            ["literal", [0, 1.2]]
           ],
           textAllowOverlap: false,
           iconAllowOverlap: false,
@@ -1385,7 +1420,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addSymbolLayer(
         _clusterSourceId,
         _customRenderingMarkerLayerId,
-        const SymbolLayerProperties(
+        SymbolLayerProperties(
+          symbolSortKey: _kSortKeyExpression,
           iconImage: [
             "step",
             ["zoom"],
@@ -1397,16 +1433,16 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            14,  0.2, // at zoom 8  → 30% size
-            18.3,  1.0,   // at zoom 8  → 30% size
+            14,  0.2,
+            18.3,  1.0,
           ],
           iconAnchor: ["get", "iconAnchor"],
           iconAllowOverlap: [
             "step",
             ["zoom"],
-            true,   // below zoom 16 → allow overlap (all markers visible)
+            true,
             16,
-            false,  // zoom 16+ → collision detection kicks in
+            false,
           ],
           iconOpacity: [
             "interpolate",
@@ -1431,10 +1467,13 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 3: Normal fixed/rotated markers (has bearing)
+      // bearing-based markers use iconAllowOverlap: true, so symbolSortKey
+      // affects text collision only — still worth setting for consistency.
       await controller.addSymbolLayer(
-          _clusterSourceId,
-          _fixedMarkerLayerId,
-          const SymbolLayerProperties(
+        _clusterSourceId,
+        _fixedMarkerLayerId,
+        SymbolLayerProperties(
+            symbolSortKey: _kSortKeyExpression,
             textRotate: ["get", "bearing"],
             textRotationAlignment: "map",
             textField: ["get", "title"],
@@ -1463,25 +1502,26 @@ class MaplibreMapProvider extends BaseMapProvider {
             iconRotate: ["get", "bearing"],
             iconRotationAlignment: "map",
             iconAllowOverlap: true
-          ),
-          filter: [
-            "all",
-            ["!", ["to-boolean", ["get", "isPriority"]]],
-            ["!", ["to-boolean", ["get", "annotationPriority"]],],
-            ["!", ["to-boolean", ["get", "section"]]],
-            ["!", ["to-boolean", ["get", "subSection"]]],
-            ["!", ["to-boolean", ["get", "boundary"]]],
-            ["to-boolean", ["get", "bearing"]],
-          ],
-          enableInteraction: true,
-          belowLayerId: _normalIconMarkerLayerId,
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "annotationPriority"]],],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["to-boolean", ["get", "bearing"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: _normalIconMarkerLayerId,
       );
 
-      // Layer 4: Section markers
+      // Layer 4: Boundary / patch-above markers
       await controller.addSymbolLayer(
         _clusterSourceId,
         _patchAboveMarkerLayerId,
         const SymbolLayerProperties(
+          // Boundary markers have no numeric priority concept — omit sort key.
           iconImage: ["get", "icon"],
           iconAnchor: [
             "case",
@@ -1490,8 +1530,8 @@ class MaplibreMapProvider extends BaseMapProvider {
               ["has", "title"],
               ["!=", ["get", "title"], ""]
             ],
-            "bottom", // rotate around bottom when text exists
-            "center"  // rotate around center when no text
+            "bottom",
+            "center"
           ],
           textField: ["get", "title"],
           textSize: 14,
@@ -1536,7 +1576,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addSymbolLayer(
         _clusterSourceId,
         _sectionMarkerLayerId,
-        const SymbolLayerProperties(
+        SymbolLayerProperties(
+          symbolSortKey: _kSortKeyExpression,
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1583,7 +1624,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addSymbolLayer(
           _clusterSourceId,
           _subSectionMarkerLayerId,
-          const SymbolLayerProperties(
+          SymbolLayerProperties(
+            symbolSortKey: _kSortKeyExpression,
             iconImage: ["get", "icon"],
             iconSize: 1.5,
             textField: ["get", "title"],
@@ -1616,11 +1658,12 @@ class MaplibreMapProvider extends BaseMapProvider {
           minzoom: 17.0
       );
 
-      // Layer 5: Rotation markers (separate source)
+      // Layer 5: Rotation markers (separate source) — user location, no collision
       await controller.addSymbolLayer(
         _rotationSourceId,
         _rotationMarkerLayerId,
         const SymbolLayerProperties(
+          // User-location marker always shows — no sort key needed.
           iconImage: ["get", "icon"],
           iconSize: 1.5,
           iconRotate: ["get", "bearing"],
@@ -1631,11 +1674,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _sectionMarkerLayerId,
       );
 
-      // Layer 6: Priority markers (always on top)
+      // Layer 6: isPriority markers — always on top, no collision
       await controller.addSymbolLayer(
         _clusterSourceId,
         _priorityMarkerLayerId,
         const SymbolLayerProperties(
+          // isPriority markers always render; sort key not needed.
           iconImage: ["get", "icon"],
           iconSize: 1.5,
           iconAllowOverlap: true,
@@ -1645,28 +1689,33 @@ class MaplibreMapProvider extends BaseMapProvider {
         enableInteraction: true,
         belowLayerId: null,
       );
+
+      // Layer 7: annotationPriority with sectionId
       await controller.addSymbolLayer(
-        _clusterSourceId,
-        _priorityLandmarkWithSectionLayerId,
-        const SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: 1.5,
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "annotationPriority"]],
-          ["to-boolean", ["get", "sectionId"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
-        minzoom: 17.0
+          _clusterSourceId,
+          _priorityLandmarkWithSectionLayerId,
+          const SymbolLayerProperties(
+            iconImage: ["get", "icon"],
+            iconSize: 1.5,
+            // iconAllowOverlap: true,
+            // textAllowOverlap: true,
+          ),
+          filter: [
+            "all",
+            ["to-boolean", ["get", "annotationPriority"]],
+            ["to-boolean", ["get", "sectionId"]],
+          ],
+          enableInteraction: true,
+          belowLayerId: null,
+          minzoom: 17.0
       );
+
+      // Layer 8: annotationPriority without sectionId — participates in collision
       await controller.addSymbolLayer(
         _clusterSourceId,
         _priorityLandmarkWithoutSectionLayerId,
-        const SymbolLayerProperties(
+        SymbolLayerProperties(
+          symbolSortKey: _kSortKeyExpression,
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1689,13 +1738,13 @@ class MaplibreMapProvider extends BaseMapProvider {
           textOffset: [
             "case",
             ["==", ["get", "iconAnchor"], "bottom"],
-            ["literal", [0, 0.0]],   // closer when anchor is bottom
+            ["literal", [0, 0.0]],
             ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.2]],   // farther when anchor is center
-            ["literal", [0, 1.2]]    // default fallback
+            ["literal", [0, 1.2]],
+            ["literal", [0, 1.2]]
           ],
-          textAllowOverlap: true,
-          iconAllowOverlap: true,
+          // textAllowOverlap: true,
+          // iconAllowOverlap: true,
         ),
         filter: [
           "all",
@@ -1706,6 +1755,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: null,
       );
 
+      // Layer 9: Selected marker — always on top, no collision
       await controller.addSymbolLayer(
         _clusterSourceId,
         _selectedMarkerLayerId,
@@ -1715,8 +1765,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             "interpolate",
             ["linear"],
             ["zoom"],
-            13,  0.2, // at zoom 8  → 30% size
-            18,  1.5,   // at zoom 8  → 30% size
+            13,  0.2,
+            18,  1.5,
           ],
           iconAllowOverlap: true,
           textAllowOverlap: true,
@@ -1904,11 +1954,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: false,
-        minzoom: 13.5,                      // visible at zoom >= 14
-        belowLayerId: _normalPolygonLayerId, // sits below everything
+        minzoom: 13.5,
+        belowLayerId: _normalPolygonLayerId,
       );
 
-      /// 8️⃣ PATCH ABOVE (zoom < 14 → top-most, added last so it's above all polygon layers)
+      /// 8️⃣ PATCH ABOVE (zoom < 14 → top-most)
       await controller.addFillLayer(
         _polygonSourceId,
         _patchAbovePolygonLayerId,
@@ -1919,7 +1969,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["linear"],
             ["zoom"],
             13, 1.0,
-            14, 0.0    // fade out as you zoom in
+            14, 0.0
           ],
           fillOutlineColor: ["get", "strokeColor"],
         ),
@@ -1930,7 +1980,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
         enableInteraction: false,
-        belowLayerId: _polylineLayerId,      // sits just below polylines = above all polygon layers
+        belowLayerId: _polylineLayerId,
       );
 
       _isPolygonLayersEnabled = true;
@@ -1960,7 +2010,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     final fadeOutZoom = fitZoom;
     final fadeInZoom  = fitZoom - 0.5;
 
-    // Cache so removeMapFade and style-reload can reuse it
     _fadeOutZoom = fadeOutZoom;
 
     // 1. Boundary polygon fade layer
@@ -1998,6 +2047,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.setLayerProperties(
       _priorityLandmarkWithoutSectionLayerId,
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         iconOpacity: [
           "interpolate", ["linear"], ["zoom"],
           fadeOutZoom, 0.0,
@@ -2024,6 +2074,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.setLayerProperties(
       _sectionMarkerLayerId,
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         iconOpacity: [
           "interpolate", ["linear"], ["zoom"],
           fadeOutZoom, 1.0,
@@ -2037,17 +2088,13 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
-    // 3. All other marker layers: fade IN starting at fadeOutZoom
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
   }
 
-  /// Updates the opacity-based "minzoom" of every non-boundary marker layer
-  /// so they only appear at zoom >= fadeOutZoom (i.e. when patch-above fades out).
   Future<void> _refreshMarkerLayerMinZooms(
       MaplibreMapController controller,
       double fadeOutZoom,
       ) async {
-    // Fade in over 1 zoom level after fadeOutZoom
     final fadeInEnd = fadeOutZoom;
     fadeOutZoom --;
 
@@ -2057,61 +2104,61 @@ class MaplibreMapProvider extends BaseMapProvider {
       fadeInEnd,   1.0,
     ];
 
-    // normalText: only text, no icon
     await controller.setLayerProperties(
       _normalTextMarkerLayerId,
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         textOpacity: opacityExpression,
       ),
     );
 
-    // normalIcon-withSectionId
     await controller.setLayerProperties(
       "$_normalIconMarkerLayerId-withSectionId",
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         iconOpacity: opacityExpression,
         textOpacity: opacityExpression,
       ),
     );
 
-    // normalIcon-withoutSectionId
     await controller.setLayerProperties(
       "$_normalIconMarkerLayerId-withoutSectionId",
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         iconOpacity: opacityExpression,
         textOpacity: opacityExpression,
       ),
     );
 
-    // customRendering
     await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         iconOpacity: opacityExpression,
       ),
     );
 
-    // normalFixed (bearing-based text markers)
     await controller.setLayerProperties(
       _fixedMarkerLayerId,
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         textOpacity: opacityExpression,
       ),
     );
 
-    // section markers
     await controller.setLayerProperties(
       _sectionMarkerLayerId,
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         iconOpacity: opacityExpression,
         textOpacity: opacityExpression,
       ),
     );
 
-    // subSection markers
     await controller.setLayerProperties(
       _subSectionMarkerLayerId,
       SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         iconOpacity: opacityExpression,
         textOpacity: opacityExpression,
       ),
@@ -2133,14 +2180,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
     }
 
-    // Tile size in pixels (standard Web Mercator)
     const double tileSize = 256.0;
 
-    // Use actual screen size or fall back to a sensible default
     final double mapWidthPx  = screenSize?.width  ?? 400.0;
     final double mapHeightPx = screenSize?.height ?? 800.0;
 
-    // Convert lat span to Mercator fraction (0..1)
     double _latToMercatorFraction(double latDeg) {
       final sinLat = sin(latDeg * pi / 180.0);
       return (0.5 - log((1 + sinLat) / (1 - sinLat)) / (4 * pi));
@@ -2149,7 +2193,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     final double lngFraction = (maxLng - minLng) / 360.0;
     final double latFraction = (_latToMercatorFraction(minLat) - _latToMercatorFraction(maxLat)).abs();
 
-    // Zoom at which the bounding box exactly fills the screen
     double zoomForLng = double.infinity;
     double zoomForLat = double.infinity;
 
@@ -2160,71 +2203,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       zoomForLat = log(mapHeightPx / tileSize / latFraction) / ln2;
     }
 
-    // Take the more restrictive axis, then clamp to sane map limits
     final double fitZoom = min(zoomForLng, zoomForLat);
     return fitZoom.clamp(1.0, 22.0);
   }
-
-  // Future<void> enablePolylineLayers(MaplibreMapController controller) async {
-  //   try {
-  //     await controller.addGeoJsonSource(_polylineSourceId, {
-  //       'type': 'FeatureCollection',
-  //       'features': [],
-  //     });
-  //
-  //     // TEST: Add ONLY this first, no filter, no expressions
-  //     await controller.addLineLayer(
-  //       _polylineSourceId,
-  //       _polylineLayerId,
-  //       const LineLayerProperties(
-  //         lineColor: ["get", "lineColor"],
-  //         lineWidth: ["get", "lineWidth"], // hardcoded
-  //         lineOpacity: ["get", "lineOpacity"],     // hardcoded
-  //       ),
-  //       // NO filter
-  //       filter: ["!", ["to-boolean", ["get", "path"]]],
-  //     );
-  //
-  //     // ← add second layer
-  //     await controller.addLineLayer(
-  //       _polylineSourceId,
-  //       _pathSolidLayerId,
-  //       const LineLayerProperties(
-  //         lineColor: ["get", "lineColor"],
-  //         lineWidth: ["get", "lineWidth"],
-  //         lineOpacity: ["get", "lineOpacity"],
-  //       ),
-  //       filter: [
-  //         "all",
-  //         ["to-boolean", ["get", "path"]],
-  //         ["==", ["get", "style"], "solid"]
-  //       ],
-  //     );
-  //
-  //
-  //     await controller.addLineLayer(
-  //       _polylineSourceId,
-  //       _pathDashedLayerId,
-  //       const LineLayerProperties(
-  //         lineColor: ["get", "lineColor"],
-  //         lineWidth: ["get", "lineWidth"],
-  //         lineOpacity: ["get", "lineOpacity"],
-  //         lineDasharray: [0.1, 2.0],  // hardcoded
-  //         lineCap: "round",
-  //       ),
-  //       filter: [
-  //         "all",
-  //         ["to-boolean", ["get", "path"]],
-  //         ["==", ["get", "style"], "dashed"]
-  //       ],
-  //     );
-  //
-  //   _isPolylineLayersEnabled = true;
-  //   } catch (e, stack) {
-  //     print('Error enabling polyline layers: $e');
-  //     print('Stack trace: $stack');
-  //   }
-  // }
 
   Future<void> enablePolylineLayers(MaplibreMapController controller) async {
     try {
@@ -2260,7 +2241,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           "all",
           ["to-boolean", ["get", "path"]],
           ["==", ["get", "style"], "solid"],
-          // ── NEW: exclude the grey overlay from this layer
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
         ],
         enableInteraction: true,
@@ -2289,9 +2269,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _normalIconMarkerLayerId,
       );
 
-      // ── NEW: Grey overlay layer — added LAST so it sits above all path layers
-      // belowLayerId: null means it renders above everything except markers.
-      // If you want it below markers, pass belowLayerId: _rotationMarkerLayerId.
+      // Grey overlay — above all path layers, below user marker
       await controller.addLineLayer(
         _polylineSourceId,
         _greyOverlayLayerId,
@@ -2304,7 +2282,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: ["to-boolean", ["get", "isGreyOverlay"]],
         enableInteraction: false,
-        belowLayerId: _rotationMarkerLayerId, // above path, below user marker
+        belowLayerId: _rotationMarkerLayerId,
       );
 
       _isPolylineLayersEnabled = true;
@@ -2348,7 +2326,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   GeoJsonPolygon? _hitTestPolygons(double lat, double lng) {
     final hits = _polygons.where((p) =>
     !p.id.toLowerCase().contains("boundary") &&
-    !p.properties?['type'].toLowerCase().contains("boundary") &&
+        !p.properties?['type'].toLowerCase().contains("boundary") &&
         _pointInPolygon(lat, lng, p.points),
     ).toList();
 
@@ -2404,7 +2382,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     try {
-      // Deselect any existing selection first
       if (selectedLocation != null) {
         await deSelectLocation(controller);
       }
@@ -2412,7 +2389,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       GeoJsonPolygon? polygon;
       GeoJsonMarker? marker;
 
-      // Find marker
       try {
         if (_symbols.isNotEmpty) {
           marker = _symbols.firstWhere(
@@ -2431,7 +2407,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
       print("polyIDInsideMarker $polyIDInsideMarker");
 
-      // Find polygon
       try {
         if (_polygons.isNotEmpty) {
           polygon = _polygons.firstWhere(
@@ -2452,12 +2427,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         return;
       }
 
-      // 1. Update polygon selection state first and await it fully
       if (polygon != null) {
         await _updatePolygonSource(controller, selectPolygonId: polygon.id);
       }
 
-      // 2. Update marker selection state — NO remove/add, just update the source
       if (marker != null) {
         await setGeoJsonSource(
           controller,
@@ -2467,14 +2440,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         );
       }
 
-      // 3. Set selectedLocation AFTER both sources are updated
       selectedLocation = SelectedLocation(
         polyID: polyIDInsideMarker,
         polygon: polygon,
         marker: marker,
       );
 
-      // 4. Camera
       MapLocation? center;
       double? targetZoom;
       CameraBound? bounds;
@@ -2522,7 +2493,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         print('Warning: Failed to animate camera: $e');
       }
 
-      // 5. Callbacks
       if (polygon != null) {
         _config.onPolygonTap?.call(
           coordinates: polygon.points,
@@ -2539,183 +2509,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       selectedLocation = null;
     }
   }
-
-  // @override
-  // Future<void> selectLocation(controller, String polyID) async {
-  //   if (selectedLocation?.polyID == polyID) return;
-  //   if (controller is! MaplibreMapController) {
-  //     print('Error: Invalid controller type');
-  //     return;
-  //   }
-  //   if (polyID.isEmpty) {
-  //     print('Error: polyID cannot be empty');
-  //     return;
-  //   }
-  //
-  //   try {
-  //     GeoJsonPolygon? polygon;
-  //     GeoJsonMarker? marker;
-  //
-  //     // Try to find marker
-  //     try {
-  //       if (_symbols.isNotEmpty) {
-  //         marker = _symbols.firstWhere(
-  //               (m) => m.id.contains(polyID),
-  //           orElse: () => throw Exception('Marker not found'),
-  //         );
-  //       }
-  //     } catch (e) {
-  //       print('No marker found for polyID: $polyID - $e');
-  //       return;
-  //     }
-  //
-  //     if (marker != null) {
-  //       if (selectedLocation != null) {
-  //         print("selectedLocation is ${selectedLocation.toString()}");
-  //         await deSelectLocation(controller);
-  //       }
-  //     }
-  //
-  //     String polyIDInsideMarker = polyID;
-  //     print("markerid ${marker?.id}");
-  //     if (marker?.id != null) {
-  //       polyIDInsideMarker =
-  //           _extractPolygonIdFromTap(marker!.id) ?? polyID;
-  //     }
-  //     print("polyIDInsideMarker $polyIDInsideMarker");
-  //
-  //     // Try to find polygon
-  //     try {
-  //       if (_polygons.isNotEmpty) {
-  //         polygon = _polygons.firstWhere(
-  //               (p) =>
-  //           (p.id.contains(polyID) || p.id.contains(polyIDInsideMarker)),
-  //           orElse: () => throw Exception('Polygon not found'),
-  //         );
-  //         if (polygon.points.isEmpty) {
-  //           print('Warning: No coordinates found for polygon: ${polygon.id}');
-  //           polygon = null;
-  //         } else if (polygon.points.length < 3) {
-  //           print(
-  //               'Warning: Polygon must have at least 3 points: ${polygon.id}');
-  //           polygon = null;
-  //         }
-  //       }
-  //     } catch (e) {
-  //       print('No polygon found for polyID: $polyID - $e');
-  //     }
-  //
-  //     if (polygon == null && marker == null) {
-  //       print('Error: Neither polygon nor marker found for polyID: $polyID');
-  //       return;
-  //     }
-  //
-  //     // Calculate bounds / center
-  //     MapLocation? center;
-  //     double? targetZoom;
-  //
-  //     if (polygon != null && polygon.points.isNotEmpty) {
-  //       double minLat = polygon.points.first.latitude;
-  //       double maxLat = polygon.points.first.latitude;
-  //       double minLng = polygon.points.first.longitude;
-  //       double maxLng = polygon.points.first.longitude;
-  //
-  //       for (final point in polygon.points) {
-  //         if (point.latitude < -90 || point.latitude > 90) continue;
-  //         if (point.longitude < -180 || point.longitude > 180) continue;
-  //         minLat = min(minLat, point.latitude);
-  //         maxLat = max(maxLat, point.latitude);
-  //         minLng = min(minLng, point.longitude);
-  //         maxLng = max(maxLng, point.longitude);
-  //       }
-  //
-  //       final centerLat = (minLat + maxLat) / 2;
-  //       final centerLng = (minLng + maxLng) / 2;
-  //
-  //       if (!centerLat.isNaN &&
-  //           !centerLng.isNaN &&
-  //           !centerLat.isInfinite &&
-  //           !centerLng.isInfinite) {
-  //         center = MapLocation(latitude: centerLat, longitude: centerLng);
-  //         final latSpan = maxLat - minLat;
-  //         final lngSpan = maxLng - minLng;
-  //         final maxSpan = max(latSpan, lngSpan);
-  //         targetZoom = 20.0;
-  //         if (maxSpan > 0.01) targetZoom = 15.0;
-  //         if (maxSpan > 0.1) targetZoom = 12.0;
-  //         if (maxSpan > 1.0) targetZoom = 8.0;
-  //       }
-  //     } else if (marker != null) {
-  //       center = marker.position;
-  //       targetZoom = 19;
-  //     }
-  //
-  //     // Update polygon selection state
-  //     if (polygon != null) {
-  //       await _updatePolygonSelectionState(controller, polygon.id, true);
-  //     }
-  //
-  //     print("marker $marker");
-  //
-  //     // Handle marker styling
-  //     if (marker != null) {
-  //       if (marker.assetPath == null) {
-  //         try {
-  //           final genericMarker = PredefinedMarkers.getGenericMarker(marker);
-  //           print("genericMarker id ${genericMarker.id}");
-  //           await removeMarker(controller, polyID);
-  //           await addMarker(controller, genericMarker);
-  //         } catch (e) {
-  //           print('Warning: Failed to update marker styling: $e');
-  //         }
-  //       } else {
-  //         final copyMarker = marker.copyWith();
-  //         print("copyMarker ${copyMarker.assetPath}");
-  //         await removeMarker(controller, polyID);
-  //         await addMarker(controller, copyMarker, selectedMarkerId: copyMarker.id);
-  //       }
-  //     }
-  //
-  //     selectedLocation = SelectedLocation(
-  //       polyID: polyIDInsideMarker ?? polyID,
-  //       polygon: polygon,
-  //       marker: marker,
-  //     );
-  //
-  //     CameraBound? bounds;
-  //     if (polygon != null && polygon.points.isNotEmpty) {
-  //       bounds = calculateBounds(controller, polygon.points);
-  //     }
-  //
-  //     if (bounds != null || (center != null && targetZoom != null)) {
-  //       try {
-  //         if (bounds != null) {
-  //           fitCameraToBounds(controller, bounds);
-  //         } else if (center != null && targetZoom != null) {
-  //           animateCamera(controller, center, targetZoom);
-  //         }
-  //       } catch (e) {
-  //         print('Warning: Failed to animate camera: $e');
-  //       }
-  //     }
-  //
-  //     if (polygon != null) {
-  //       _config.onPolygonTap?.call(
-  //         coordinates: polygon.points,
-  //         polygonId: polyID,
-  //       );
-  //     } else if (marker != null) {
-  //       _config.onMarkerTap?.call(
-  //         coordinates: marker.position,
-  //         markerId: polyID,
-  //       );
-  //     }
-  //   } catch (e, stackTrace) {
-  //     print('Error selecting location: $e');
-  //     print('Stack trace: $stackTrace');
-  //     selectedLocation = null;
-  //   }
-  // }
 
   Future<void> _updatePolygonSelectionState(
       MaplibreMapController controller,
@@ -2741,10 +2534,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     try {
-      // 1. Reset polygon selection first — await fully before touching markers
       await _updatePolygonSource(controller, selectPolygonId: null);
 
-      // 2. Reset marker selection — NO remove/add, just clear selectedMarkerId
       await setGeoJsonSource(
         controller,
         _symbols,
@@ -2758,48 +2549,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       selectedLocation = null;
     }
   }
-
-  // @override
-  // Future<void> deSelectLocation(dynamic controller) async {
-  //   if (controller is! MaplibreMapController) {
-  //     print('Error: Invalid controller type in deSelectLocation');
-  //     return;
-  //   }
-  //
-  //   print("selectedLocation $selectedLocation");
-  //   if (selectedLocation == null) return;
-  //
-  //   final polyID = selectedLocation!.polyID;
-  //
-  //   if (polyID.isEmpty) {
-  //     print('Error: polyID is empty in selectedLocation');
-  //     selectedLocation = null;
-  //     return;
-  //   }
-  //
-  //   try {
-  //     await _updatePolygonSelectionState(controller, polyID, false);
-  //
-  //     try {
-  //       final marker = selectedLocation?.marker as GeoJsonMarker?;
-  //       print(
-  //           "marker in deselect $polyID ${_symbols.where((m) => m.id.toLowerCase().contains(polyID))}");
-  //
-  //       if (marker != null) {
-  //         await removeMarker(controller, polyID);
-  //         await addMarker(controller, marker);
-  //       }
-  //     } catch (e) {
-  //       print('Error handling marker during deselection: $e');
-  //     }
-  //
-  //     selectedLocation = null;
-  //   } catch (e, stackTrace) {
-  //     print('Error deselecting location: $e');
-  //     print('Stack trace: $stackTrace');
-  //     selectedLocation = null;
-  //   }
-  // }
 
   // ---------------------------------------------------------------------------
   // Zoom helpers
@@ -2900,7 +2649,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         right: 50,
         bottom: 50,
       ),
-      duration: const Duration(milliseconds: 2000), // slower animation
+      duration: const Duration(milliseconds: 2000),
     );
   }
 
@@ -2908,7 +2657,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.setLayerProperties(
       _patchAbovePolygonLayerId,
       FillLayerProperties(
-          fillOpacity: 0.5,
+        fillOpacity: 0.5,
         fillColor: "#FFFFFF",
       ),
     );

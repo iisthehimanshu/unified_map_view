@@ -10,6 +10,7 @@ enum LandmarkAssetType {
   accessibleWashroom,
   washroom,
   waterFountain,
+  waterPoint,
   cafeteria,
   room,
   doorOnly,
@@ -137,6 +138,9 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/Start.png';
       case LandmarkAssetType.endTour:
         return 'packages/unified_map_view/assets/markers/Stop.png';
+      case LandmarkAssetType.waterPoint:
+        return 'packages/unified_map_view/assets/markers/water_point.png';
+
     }
   }
 
@@ -189,6 +193,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.startTour:
         case LandmarkAssetType.endTour:
+      case LandmarkAssetType.waterPoint:
         return true;
     }
   }
@@ -211,6 +216,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.waitingArea:
       case LandmarkAssetType.buggyPoint:
       case LandmarkAssetType.roomDoorDirectionalArrow:
+      case LandmarkAssetType.waterPoint:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.room:

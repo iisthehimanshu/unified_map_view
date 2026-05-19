@@ -35,9 +35,9 @@ class CacheController {
       print("$fileName not found in assets");
     }
 
-    if (AppConfig.internetSpeedInMbps < 1) {
-      return null;
-    }
+    // if (AppConfig.internetSpeedInMbps < 1) {
+    //   return null;
+    // }
 
     // First time — fetch from network AND cache it
     try {
