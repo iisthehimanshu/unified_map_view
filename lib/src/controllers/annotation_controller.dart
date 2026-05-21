@@ -60,8 +60,8 @@ class AnnotationController{
       await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
       final grid = generateGridAroundPoint(
-        lat: 17.443115960139664,
-        lng: 78.36620909361523,
+        lat: 15.520937665843288,
+        lng: 73.83054852389627,
         radiusMeters: 100,
         cellType: "Grids", // routes through your sectionPolygons path
       );
@@ -87,8 +87,8 @@ class AnnotationController{
   }) {
     final List<GeoJsonFeature> features = [];
 
-    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 1.0, color: "#e0e0e0", width: 0.5, cellType: cellType, rotationDegrees: 95.5));
-    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 3.0, color: "#888888", width: 1.5, cellType: cellType, rotationDegrees: 95.5));
+    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 1.0, color: "#e0e0e0", width: 0.5, cellType: cellType, rotationDegrees: 107));
+    features.addAll(_generateGrid(lat: lat, lng: lng, radiusMeters: radiusMeters, cellSizeMeters: 3.0, color: "#888888", width: 1.5, cellType: cellType, rotationDegrees: 107));
 
     return GeoJsonFeatureCollection(features: features);
   }
