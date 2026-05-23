@@ -126,9 +126,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
             controller.onFeatureTapped.add((dynamic id, Point<double> point, LatLng coordinates, String layerId) async {
               print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
-              if (_symbols
-                  .where((s) => s.id.toLowerCase().contains("path"))
-                  .isNotEmpty) return;
+              // if (_symbols
+              //     .where((s) => s.id.toLowerCase().contains("path"))
+              //     .isNotEmpty) return;
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
@@ -1139,37 +1139,43 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
-        double fontSize = marker.properties?["fontSize"]??14.5;
-        Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
-        MarkerIconWithAnchor markerIconWithAnchorWithText =
-        await creator.createUnifiedMarker(
-          imageSize: marker.imageSize ?? const Size(85, 85),
-          fontSize: fontSize,
-          text: marker.textVisibility? marker.title??"":"",
-          imageSource: marker.assetPath,
-          layout: MarkerLayout.vertical,
-          textFormat: TextFormat.smartWrap,
-          textColor: const Color(0xff000000),
-          customAnchor: customAnchor,
-          expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
-        );
-        MarkerIconWithAnchor markerIconWithAnchorWithoutText =
-        await creator.createUnifiedMarker(
-          imageSize: marker.imageSize ?? const Size(85, 85),
-          fontSize: fontSize,
-          text: "",
-          imageSource: marker.assetPath,
-          layout: MarkerLayout.vertical,
-          textFormat: TextFormat.smartWrap,
-          textColor: const Color(0xff000000),
-          customAnchor: customAnchor,
-        );
-        final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
-        final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
-        await controller.addImage(marker.id, iconBytes);
-        await controller.addImage("${marker.id}-small", iconBytes2);
-        marker.anchor = markerIconWithAnchorWithText.anchor;
-        return true;
+        if(marker.properties?['pathStop']??false){
+          final Uint8List iconBytes = await creator.createStopMarkerIcon(marker.title??"");
+          await controller.addImage(marker.id, iconBytes);
+          return true;
+        }else{
+          double fontSize = marker.properties?["fontSize"]??14.5;
+          Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+          MarkerIconWithAnchor markerIconWithAnchorWithText =
+          await creator.createUnifiedMarker(
+            imageSize: marker.imageSize ?? const Size(85, 85),
+            fontSize: fontSize,
+            text: marker.textVisibility? marker.title??"":"",
+            imageSource: marker.assetPath,
+            layout: MarkerLayout.vertical,
+            textFormat: TextFormat.smartWrap,
+            textColor: const Color(0xff000000),
+            customAnchor: customAnchor,
+            expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
+          );
+          MarkerIconWithAnchor markerIconWithAnchorWithoutText =
+          await creator.createUnifiedMarker(
+            imageSize: marker.imageSize ?? const Size(85, 85),
+            fontSize: fontSize,
+            text: "",
+            imageSource: marker.assetPath,
+            layout: MarkerLayout.vertical,
+            textFormat: TextFormat.smartWrap,
+            textColor: const Color(0xff000000),
+            customAnchor: customAnchor,
+          );
+          final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
+          final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
+          await controller.addImage(marker.id, iconBytes);
+          await controller.addImage("${marker.id}-small", iconBytes2);
+          marker.anchor = markerIconWithAnchorWithText.anchor;
+          return true; 
+        }
       } else {
         Uint8List? iconBytes;
         if (marker.assetPath!.startsWith('http')) {

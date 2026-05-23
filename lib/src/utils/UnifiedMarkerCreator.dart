@@ -43,7 +43,6 @@ class MarkerCacheKey {
   final double strokeWidth;
   final double spacing;
   final Offset? customAnchor;
-  final bool maintainAspectRatio;
   final bool expandCanvasForRotation;
 
   MarkerCacheKey({
@@ -58,7 +57,6 @@ class MarkerCacheKey {
     required this.strokeWidth,
     required this.spacing,
     this.customAnchor,
-    required this.maintainAspectRatio,
     required this.expandCanvasForRotation,
   });
 
@@ -77,7 +75,6 @@ class MarkerCacheKey {
         other.strokeWidth == strokeWidth &&
         other.spacing == spacing &&
         other.customAnchor == customAnchor &&
-        other.maintainAspectRatio == maintainAspectRatio &&
         other.expandCanvasForRotation == expandCanvasForRotation;
   }
 
@@ -95,7 +92,6 @@ class MarkerCacheKey {
       strokeWidth,
       spacing,
       customAnchor,
-      maintainAspectRatio,
       expandCanvasForRotation,
     );
   }
@@ -151,7 +147,6 @@ class UnifiedMarkerCreator {
     double strokeWidth = 2.0, // logical
     double spacing = 0.0, // logical
     Offset? customAnchor, // normalized if provided
-    bool maintainAspectRatio = true,
     bool expandCanvasForRotation = false,
     bool useCache = true, // New parameter to optionally disable cache
   }) async {
@@ -168,7 +163,6 @@ class UnifiedMarkerCreator {
       strokeWidth: strokeWidth,
       spacing: spacing,
       customAnchor: customAnchor,
-      maintainAspectRatio: maintainAspectRatio,
       expandCanvasForRotation: expandCanvasForRotation,
     );
 
@@ -193,7 +187,6 @@ class UnifiedMarkerCreator {
       strokeWidth: strokeWidth,
       spacing: spacing,
       customAnchor: customAnchor,
-      maintainAspectRatio: maintainAspectRatio,
       expandCanvasForRotation: expandCanvasForRotation,
     );
 
@@ -218,7 +211,6 @@ class UnifiedMarkerCreator {
     double strokeWidth = 2.0, // logical
     double spacing = 0.0, // logical
     Offset? customAnchor, // normalized if provided
-    bool maintainAspectRatio = true,
     bool expandCanvasForRotation = false,
   }) async {
     final double ratio = ui.window.devicePixelRatio; // device pixel ratio
@@ -254,19 +246,7 @@ class UnifiedMarkerCreator {
           ui.decodeImageFromList(
               bytes, (ui.Image img) => originalCompleter.complete(img));
           final ui.Image originalImage = await originalCompleter.future;
-          if (maintainAspectRatio) {
-            final double origAR = originalImage.width / originalImage.height;
-            final double targetAR = imageWidthPx / imageHeightPx;
-            if (origAR > targetAR) {
-              // image is wider -> fit width
-              actualImageSizePx = Size(imageWidthPx, imageWidthPx / origAR);
-            } else {
-              // image is taller or equal -> fit height
-              actualImageSizePx = Size(imageHeightPx * origAR, imageHeightPx);
-            }
-          } else {
-            actualImageSizePx = Size(imageWidthPx, imageHeightPx);
-          }
+          actualImageSizePx = Size(imageWidthPx, imageHeightPx);
 
           // instantiate codec at final pixel size (prevents later upscaling)
           final codec = await ui.instantiateImageCodec(
@@ -669,5 +649,58 @@ class UnifiedMarkerCreator {
         }
         return finalLines.join("\n");
     }
+  }
+
+  Future<Uint8List> createStopMarkerIcon(String text) async {
+    double? size = 30;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // White outer ring
+    canvas.drawCircle(
+      Offset(size / 2, size / 2),
+      15,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.fill,
+    );
+
+    // Blue inner circle
+    canvas.drawCircle(
+      Offset(size / 2, size / 2),
+      12,
+      Paint()
+        ..color = Colors.blue
+        ..style = PaintingStyle.fill,
+    );
+
+    // Segment number text (segmentIndex + 1 for 1-based display)
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    textPainter.paint(
+      canvas,
+      Offset(
+        (size / 2) - (textPainter.width / 2),
+        (size / 2) - (textPainter.height / 2),
+      ),
+    );
+
+    final image = await recorder
+        .endRecording()
+        .toImage(size.toInt(), size.toInt());
+
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
   }
 }

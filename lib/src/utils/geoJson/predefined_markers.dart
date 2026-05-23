@@ -166,4 +166,24 @@ class PredefinedMarkers{
         customRendering: true
     );
   }
+
+  static GeoJsonMarker getPathStopMarker(MapLocation location, String id, {String title = ""}){
+    return GeoJsonMarker(
+        id: id,
+        position: location,
+        title: title,
+        snippet: "",
+        assetPath:LandmarkAssetType.destination.assetPath,
+        iconName: "Destination",
+        priority: true,
+        imageSize: Size(30, 30),
+        renderAnchor: Offset(0.5, 0.8),
+        anchor: LandmarkAssetType.destination.anchor,
+        customRendering: true,
+        properties: {
+          "fontSize":10.0,
+          "pathStop": true,
+        }
+    );
+  }
 }
