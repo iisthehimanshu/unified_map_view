@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:ui';
 
 import 'package:flutter/cupertino.dart';
@@ -205,7 +206,7 @@ class AnnotationController{
         return MapLocation(
           latitude: cell.lat,
           longitude: cell.lng,
-          id: cell.node.toString(), // optional
+          id: "${cell.node.toString()}_${cell.name}", // optional
         );
       }).toList();
 
@@ -364,11 +365,16 @@ class AnnotationController{
   Future<void> _annotateStopMarkers(
       List<MapLocation> path,
       int segmentIndex,
+  {String? id}
       ) async {
     if (path.isEmpty) return;
 
     final stopPoint = path.last;
-    final markerId = "stop_$segmentIndex";
+    print("stopPoint ${stopPoint.id}");
+    var markerId = "stop_$segmentIndex";
+    if(id != null){
+      markerId = GeoJsonUtils.buildKey(id: segmentIndex.toString(), polyId: id, custom: "stop_$segmentIndex");
+    }
 
     // Pass segmentIndex directly, increment inside _createStopMarkerIcon
     final Uint8List iconBytes = await _createStopMarkerIcon(segmentIndex,60,30,25);
