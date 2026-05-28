@@ -512,14 +512,14 @@ class UnifiedMarkerCreator {
         ..filterQuality = FilterQuality.high;
       canvas.drawImage(markerImage, Offset(imageX, imageY), paint);
 
-      canvas.drawRect(
-        Rect.fromLTWH(imageX, imageY, actualImageSizePx.width, actualImageSizePx.height),
-        Paint()
-          ..color = Colors.red
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = strokeWidthPx
-          ..isAntiAlias = true,
-      );
+      // canvas.drawRect(
+      //   Rect.fromLTWH(imageX, imageY, actualImageSizePx.width, actualImageSizePx.height),
+      //   Paint()
+      //     ..color = Colors.red
+      //     ..style = PaintingStyle.stroke
+      //     ..strokeWidth = strokeWidthPx
+      //     ..isAntiAlias = true,
+      // );
     }
 
     // Draw text stroke then fill with improved quality
