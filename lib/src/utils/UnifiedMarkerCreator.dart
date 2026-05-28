@@ -241,12 +241,17 @@ class UnifiedMarkerCreator {
         }
 
         if (bytes != null) {
-          // Decode original to get aspect ratio
+          // Decode original to get its natural dimensions
           final Completer<ui.Image> originalCompleter = Completer();
           ui.decodeImageFromList(
               bytes, (ui.Image img) => originalCompleter.complete(img));
           final ui.Image originalImage = await originalCompleter.future;
-          actualImageSizePx = Size(imageWidthPx, imageHeightPx);
+
+          // Fit within imageSize while preserving aspect ratio (BoxFit.contain)
+          final double origW = originalImage.width.toDouble();
+          final double origH = originalImage.height.toDouble();
+          final double scale = min(imageWidthPx / origW, imageHeightPx / origH);
+          actualImageSizePx = Size(origW * scale, origH * scale);
 
           // instantiate codec at final pixel size (prevents later upscaling)
           final codec = await ui.instantiateImageCodec(
@@ -506,6 +511,15 @@ class UnifiedMarkerCreator {
         ..isAntiAlias = true
         ..filterQuality = FilterQuality.high;
       canvas.drawImage(markerImage, Offset(imageX, imageY), paint);
+
+      canvas.drawRect(
+        Rect.fromLTWH(imageX, imageY, actualImageSizePx.width, actualImageSizePx.height),
+        Paint()
+          ..color = Colors.red
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidthPx
+          ..isAntiAlias = true,
+      );
     }
 
     // Draw text stroke then fill with improved quality

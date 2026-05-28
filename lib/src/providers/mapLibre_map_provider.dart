@@ -40,8 +40,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _customRenderingMarkerLayerId = 'customRendering-markers-layer';
   final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
-  final String _priorityLandmarkWithSectionLayerId = 'priority-Landmark-section-marker-layer';
-  final String _priorityLandmarkWithoutSectionLayerId = 'priority-Landmark-Without-section-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
@@ -140,8 +138,6 @@ class MaplibreMapProvider extends BaseMapProvider {
                     _fixedMarkerLayerId,
                     _customRenderingMarkerLayerId,
                     _priorityMarkerLayerId,
-                    _priorityLandmarkWithSectionLayerId,
-                    _priorityLandmarkWithoutSectionLayerId,
                     _rotationMarkerLayerId,
                   ],
                   null,
@@ -732,7 +728,6 @@ class MaplibreMapProvider extends BaseMapProvider {
             'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering,
-            'annotationPriority':((marker.properties?['priority']??0)>1 && entryDirection == null),
             // Numeric priority used by symbolSortKey: higher value → higher sort
             // precedence (wins collision). Negated inside the layer expression.
             _kPriorityKey: _markerPriority(marker),
@@ -1229,7 +1224,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> enableMarkerLayers(dynamic controller) async {
+  Future<void> enableMarkerLayers(dynamic controller) async  {
     if (controller is! MapLibreMapController) return;
 
     try {
@@ -1244,12 +1239,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       });
 
       // Layer 1: Normal text markers (no icon, no bearing)
-      // symbolSortKey: higher marker priority wins when markers overlap.
       await controller.addSymbolLayer(
           _clusterSourceId,
           _normalTextMarkerLayerId,
           SymbolLayerProperties(
-            symbolSortKey: _kSortKeyExpression,
+            symbolSortKey: ["+", 0, _kSortKeyExpression],
             textField: ["get", "title"],
             textSize: 14,
             textColor: "#000000",
@@ -1268,7 +1262,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           filter: [
             "all",
             ["!", ["to-boolean", ["get", "isPriority"]]],
-            ["!", ["to-boolean", ["get", "annotationPriority"]],],
             ["!", ["to-boolean", ["get", "section"]]],
             ["!", ["to-boolean", ["get", "subSection"]]],
             ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1285,7 +1278,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withSectionId",
         SymbolLayerProperties(
-          symbolSortKey: _kSortKeyExpression,
+          symbolSortKey: ["+", 3000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1323,7 +1316,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "annotationPriority"]],],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1342,7 +1334,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withoutSectionId",
         SymbolLayerProperties(
-          symbolSortKey: _kSortKeyExpression,
+          symbolSortKey: ["+", 2000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1380,7 +1372,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "annotationPriority"]],],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1393,11 +1384,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _normalTextMarkerLayerId,
       );
 
+      // Layer 3: Custom rendering markers
       await controller.addSymbolLayer(
         _clusterSourceId,
         _customRenderingMarkerLayerId,
         SymbolLayerProperties(
-          symbolSortKey: _kSortKeyExpression,
+          symbolSortKey: ["+", 4000, _kSortKeyExpression],
           iconImage: [
             "step",
             ["zoom"],
@@ -1413,13 +1405,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             18.3,  1.0,
           ],
           iconAnchor: ["get", "iconAnchor"],
-          iconAllowOverlap: [
-            "step",
-            ["zoom"],
-            true,
-            16,
-            false,
-          ],
+          iconAllowOverlap: false,
           iconOpacity: [
             "interpolate",
             ["linear"],
@@ -1431,7 +1417,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "annotationPriority"]],],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1442,47 +1427,44 @@ class MaplibreMapProvider extends BaseMapProvider {
         enableInteraction: true,
       );
 
-      // Layer 3: Normal fixed/rotated markers (has bearing)
-      // bearing-based markers use iconAllowOverlap: true, so symbolSortKey
-      // affects text collision only — still worth setting for consistency.
+      // Layer 4: Normal fixed/rotated markers (has bearing)
       await controller.addSymbolLayer(
         _clusterSourceId,
         _fixedMarkerLayerId,
         SymbolLayerProperties(
-            symbolSortKey: _kSortKeyExpression,
-            textRotate: ["get", "bearing"],
-            textRotationAlignment: "map",
-            textField: ["get", "title"],
-            textSize: 12,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
-            textAnchor: "center",
-            textAllowOverlap: true,
-            iconImage: ["get", "icon"],
-            iconSize: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              18, 0.0,
-              22.0, 1.0,
-            ],
-            iconAnchor: ["get", "iconAnchor"],
-            iconOpacity: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              12.0, 0.0,
-              14.0, 1.0
-            ],
-            iconRotate: ["get", "bearing"],
-            iconRotationAlignment: "map",
-            iconAllowOverlap: true
+          symbolSortKey: ["+", 1000, _kSortKeyExpression],
+          textRotate: ["get", "bearing"],
+          textRotationAlignment: "map",
+          textField: ["get", "title"],
+          textSize: 12,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 2,
+          textAnchor: "center",
+          textAllowOverlap: false,
+          iconImage: ["get", "icon"],
+          iconSize: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            18, 0.0,
+            22.0, 1.0,
+          ],
+          iconAnchor: ["get", "iconAnchor"],
+          iconOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0, 0.0,
+            14.0, 1.0
+          ],
+          iconRotate: ["get", "bearing"],
+          iconRotationAlignment: "map",
+          iconAllowOverlap: false,
         ),
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "annotationPriority"]],],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
@@ -1492,12 +1474,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _normalIconMarkerLayerId,
       );
 
-      // Layer 4: Boundary / patch-above markers
+      // Layer 5: Boundary / patch-above markers
       await controller.addSymbolLayer(
         _clusterSourceId,
         _patchAboveMarkerLayerId,
-        const SymbolLayerProperties(
-          // Boundary markers have no numeric priority concept — omit sort key.
+        SymbolLayerProperties(
+          symbolSortKey: ["+", 10000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconAnchor: [
             "case",
@@ -1526,8 +1508,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["literal", [0, 0.2]],
             ["literal", [0, 0]]
           ],
-          textAllowOverlap: true,
-          iconAllowOverlap: true,
+          textAllowOverlap: false,
+          iconAllowOverlap: false,
           iconOpacity: [
             "interpolate",
             ["linear"],
@@ -1548,12 +1530,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _fixedMarkerLayerId,
       );
 
-      // Layer 4: Section markers
+      // Layer 6: Section markers
       await controller.addSymbolLayer(
         _clusterSourceId,
         _sectionMarkerLayerId,
         SymbolLayerProperties(
-          symbolSortKey: _kSortKeyExpression,
+          symbolSortKey: ["+", 7000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
@@ -1596,12 +1578,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _fixedMarkerLayerId,
       );
 
-      // Layer 4b: SubSection markers
+      // Layer 7: SubSection markers
       await controller.addSymbolLayer(
           _clusterSourceId,
           _subSectionMarkerLayerId,
           SymbolLayerProperties(
-            symbolSortKey: _kSortKeyExpression,
+            symbolSortKey: ["+", 6000, _kSortKeyExpression],
             iconImage: ["get", "icon"],
             iconSize: 1.5,
             textField: ["get", "title"],
@@ -1610,8 +1592,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             textHaloColor: "#f8f9fa",
             textHaloWidth: 2,
             textAnchor: "center",
-            iconAllowOverlap: true,
-            textAllowOverlap: true,
+            iconAllowOverlap: false,
+            textAllowOverlap: false,
             iconOpacity: [
               "interpolate",
               ["linear"],
@@ -1634,12 +1616,12 @@ class MaplibreMapProvider extends BaseMapProvider {
           minzoom: 17.0
       );
 
-      // Layer 5: Rotation markers (separate source) — user location, no collision
+      // Layer 8: Rotation markers (separate source)
       await controller.addSymbolLayer(
         _rotationSourceId,
         _rotationMarkerLayerId,
-        const SymbolLayerProperties(
-          // User-location marker always shows — no sort key needed.
+        SymbolLayerProperties(
+          symbolSortKey: ["+", 9000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: 1.5,
           iconRotate: ["get", "bearing"],
@@ -1650,92 +1632,28 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: _sectionMarkerLayerId,
       );
 
-      // Layer 6: isPriority markers — always on top, no collision
+      // Layer 9: isPriority markers
       await controller.addSymbolLayer(
         _clusterSourceId,
         _priorityMarkerLayerId,
-        const SymbolLayerProperties(
-          // isPriority markers always render; sort key not needed.
+        SymbolLayerProperties(
+          symbolSortKey: ["+", 5000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: 1.5,
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
         ),
         filter: ["to-boolean", ["get", "isPriority"]],
         enableInteraction: true,
         belowLayerId: null,
       );
 
-      // Layer 7: annotationPriority with sectionId
-      await controller.addSymbolLayer(
-          _clusterSourceId,
-          _priorityLandmarkWithSectionLayerId,
-          const SymbolLayerProperties(
-            iconImage: ["get", "icon"],
-            iconSize: 1.5,
-            // iconAllowOverlap: true,
-            // textAllowOverlap: true,
-          ),
-          filter: [
-            "all",
-            ["to-boolean", ["get", "annotationPriority"]],
-            ["to-boolean", ["get", "sectionId"]],
-          ],
-          enableInteraction: true,
-          belowLayerId: null,
-          minzoom: 17.0
-      );
-
-      // Layer 8: annotationPriority without sectionId — participates in collision
-      await controller.addSymbolLayer(
-        _clusterSourceId,
-        _priorityLandmarkWithoutSectionLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: _kSortKeyExpression,
-          iconImage: ["get", "icon"],
-          iconSize: 0.8,
-          iconAnchor: ["get", "iconAnchor"],
-          textField: ["get", "title"],
-          textSize: 14,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: "top",
-          iconOpacity: [
-            "interpolate", ["linear"], ["zoom"],
-            17.0, 0.0,
-            18.0, 1.0,
-          ],
-          textOpacity: [
-            "interpolate", ["linear"], ["zoom"],
-            17.0, 0.0,
-            18.0, 1.0,
-          ],
-          textOffset: [
-            "case",
-            ["==", ["get", "iconAnchor"], "bottom"],
-            ["literal", [0, 0.0]],
-            ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.2]],
-            ["literal", [0, 1.2]]
-          ],
-          // textAllowOverlap: true,
-          // iconAllowOverlap: true,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "annotationPriority"]],
-          ["!", ["to-boolean", ["get", "sectionId"]]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
-      );
-
-      // Layer 9: Selected marker — always on top, no collision
+      // Layer 10: Selected marker
       await controller.addSymbolLayer(
         _clusterSourceId,
         _selectedMarkerLayerId,
-        const SymbolLayerProperties(
+        SymbolLayerProperties(
+          symbolSortKey: ["+", 8000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: [
             "interpolate",
@@ -1744,8 +1662,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             13,  0.2,
             18,  1.5,
           ],
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
         ),
         filter: ["to-boolean", ["get", "isSelected"]],
         enableInteraction: true,
@@ -2001,10 +1919,34 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
-    // 2. Boundary marker fade layer
-    await controller.setLayerProperties(
+    // 2. Boundary marker fade layer — remove and re-add to update maxzoom
+    await controller.removeLayer(_patchAboveMarkerLayerId);
+    await controller.addSymbolLayer(
+      _clusterSourceId,
       _patchAboveMarkerLayerId,
       SymbolLayerProperties(
+        symbolSortKey: ["+", 10000, _kSortKeyExpression],
+        iconImage: ["get", "icon"],
+        iconAnchor: [
+          "case",
+          ["all", ["has", "title"], ["!=", ["get", "title"], ""]],
+          "bottom",
+          "center"
+        ],
+        textField: ["get", "title"],
+        textSize: 14,
+        textColor: "#000000",
+        textHaloColor: "#f8f9fa",
+        textHaloWidth: 1.5,
+        textAnchor: ["case", ["has", "icon"], "top", "center"],
+        textOffset: [
+          "case",
+          ["has", "icon"],
+          ["literal", [0, 0.2]],
+          ["literal", [0, 0]]
+        ],
+        textAllowOverlap: true,
+        iconAllowOverlap: true,
         iconOpacity: [
           "interpolate", ["linear"], ["zoom"],
           fadeInZoom, 1.0,
@@ -2016,26 +1958,13 @@ class MaplibreMapProvider extends BaseMapProvider {
           fadeOutZoom, 0.0,
         ],
       ),
+      filter: ["to-boolean", ["get", "boundary"]],
+      enableInteraction: true,
+      belowLayerId: _fixedMarkerLayerId,
+      maxzoom: fadeOutZoom,
     );
 
     print("fadeOutZoom $fadeOutZoom");
-
-    await controller.setLayerProperties(
-      _priorityLandmarkWithoutSectionLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: [
-          "interpolate", ["linear"], ["zoom"],
-          fadeOutZoom, 0.0,
-          fadeOutZoom + 1.0, 1.0,
-        ],
-        textOpacity: [
-          "interpolate", ["linear"], ["zoom"],
-          fadeOutZoom, 0.0,
-          fadeOutZoom + 1.0, 1.0,
-        ],
-      ),
-    );
 
     await controller.setLayerProperties(
       _sectionPolygonLayerId,
