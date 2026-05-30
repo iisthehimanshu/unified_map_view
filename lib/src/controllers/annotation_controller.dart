@@ -59,13 +59,13 @@ class AnnotationController{
       });
       await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
-      final grid = generateGridAroundPoint(
-        lat: 15.520937665843288,
-        lng: 73.83054852389627,
-        radiusMeters: 100,
-        cellType: "Grids", // routes through your sectionPolygons path
-      );
-      await _unifiedMapController.addGeoJsonFeatures(grid);
+      // final grid = generateGridAroundPoint(
+      //   lat: 15.520937665843288,
+      //   lng: 73.83054852389627,
+      //   radiusMeters: 100,
+      //   cellType: "Grids", // routes through your sectionPolygons path
+      // );
+      // await _unifiedMapController.addGeoJsonFeatures(grid);
       await _unifiedMapController.fitBoundsToGeoJson();
       if(_user != null){
         localizeUser(_user!);
