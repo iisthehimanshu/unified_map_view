@@ -12,6 +12,7 @@ import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
+import '../utils/mapCalculations.dart';
 import '../utils/renderingUtilities.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
@@ -127,9 +128,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
             controller.onFeatureTapped.add((dynamic id, Point<double> point, LatLng coordinates, String layerId) async {
               print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
-              if (_symbols
-                  .where((s) => s.id.toLowerCase().contains("path"))
-                  .isNotEmpty) return;
+              // if (_symbols
+              //     .where((s) => s.id.toLowerCase().contains("path"))
+              //     .isNotEmpty) return;
               try {
                 // Query rendered features at the tap point for marker layers
                 final markerFeatures = await controller.queryRenderedFeatures(
@@ -177,8 +178,8 @@ class MaplibreMapProvider extends BaseMapProvider {
                   if (polygonId != null &&
                       !polygonId.toLowerCase().contains("boundary")) {
                     selectLocation(controller, polygonId);
+                    return;
                   }
-                  return;
                 }
 
                 // Fall through to polygon tap
@@ -187,8 +188,19 @@ class MaplibreMapProvider extends BaseMapProvider {
                   if (polygonId != null &&
                       !polygonId.toLowerCase().contains("boundary")) {
                     selectLocation(controller, polygonId);
+                    return;
                   }
                 }
+
+                final nearest = _symbols.where((s)=>!s.id.contains("stop")).reduce((a, b) => MapCalculations.distanceInMeters(a.position, MapLocation(latitude: coordinates.latitude, longitude: coordinates.longitude)) < MapCalculations.distanceInMeters(b.position, MapLocation(latitude: coordinates.latitude, longitude: coordinates.longitude)) ? a : b);
+                  print("nearestID ${nearest.id}");
+                  final markerId = _extractPolygonIdFromTap(nearest.id);
+                  if (markerId != null) {
+                    selectLocation(controller, markerId);
+                    return;
+                  }
+
+
               } catch (e) {
                 print("Error handling feature tap: $e");
               }
