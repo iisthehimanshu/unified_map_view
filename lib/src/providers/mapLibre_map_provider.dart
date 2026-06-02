@@ -2487,7 +2487,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         if (bounds != null) {
           fitCameraToBounds(controller, bounds);
         } else if (center != null && targetZoom != null) {
-          animateCamera(controller, center, targetZoom);
+          final offsetCenter = _applyBottomOffset(center, targetZoom, offsetPx: 150.0);
+          animateCamera(controller, offsetCenter, targetZoom);
         }
       } catch (e) {
         print('Warning: Failed to animate camera: $e');
@@ -2508,6 +2509,17 @@ class MaplibreMapProvider extends BaseMapProvider {
       print('Error selecting location: $e\n$stackTrace');
       selectedLocation = null;
     }
+  }
+
+  MapLocation _applyBottomOffset(MapLocation center, double zoom, {double offsetPx = 150.0}) {
+    // At zoom N, 1 degree lat ≈ 256 * 2^N pixels (Mercator)
+    final metersPerPx = 156543.03392 * cos(center.latitude * pi / 180) / pow(2, zoom);
+    final metersOffset = metersPerPx * offsetPx;
+    final latOffset = metersOffset / 111320.0; // 1 degree lat ≈ 111320 m
+    return MapLocation(
+      latitude: center.latitude + latOffset, // shift north = visually up
+      longitude: center.longitude,
+    );
   }
 
   Future<void> _updatePolygonSelectionState(
