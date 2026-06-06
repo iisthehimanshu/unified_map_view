@@ -382,10 +382,10 @@ class GeoJsonMarker {
       }
     }
 
-    if((parsedTitle == null || parsedTitle.isEmpty) && (assetPath == null || assetPath.isEmpty)){
-      print("skipping marker ${feature.id}");
-      return null;
-    }
+    // if((parsedTitle == null || parsedTitle.isEmpty) && (assetPath == null || assetPath.isEmpty)){
+    //   print("skipping marker ${feature.id}");
+    //   return null;
+    // }
 
     return GeoJsonMarker(
       id: GeoJsonUtils.buildKey(id:feature.id, buildingID:feature.buildingId, polyId:polyId),

@@ -2458,6 +2458,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         marker: marker,
       );
 
+      print("polygon:${polygon}");
+
       MapLocation? center;
       double? targetZoom;
       CameraBound? bounds;
@@ -2490,17 +2492,17 @@ class MaplibreMapProvider extends BaseMapProvider {
               : 20.0;
           bounds = calculateBounds(controller, polygon.points);
         }
-      } else if (marker != null) {
+      }
+      else if (marker != null) {
         center = marker.position;
-        targetZoom = 19;
+        targetZoom = 20;
       }
 
       try {
         if (bounds != null) {
-          fitCameraToBounds(controller, bounds);
+          fitCameraToBounds(controller, bounds, bottomPadding: 200);
         } else if (center != null && targetZoom != null) {
-          final offsetCenter = _applyBottomOffset(center, targetZoom, offsetPx: 150.0);
-          animateCamera(controller, offsetCenter, targetZoom);
+          animateCamera(controller, center, targetZoom);
         }
       } catch (e) {
         print('Warning: Failed to animate camera: $e');
@@ -2657,12 +2659,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> fitCameraToBounds(controller, CameraBound bound) async {
+  Future<void> fitCameraToBounds(controller, CameraBound bound, {double bottomPadding = 50}) async {
     final bounds = LatLngBounds(
-      southwest:
-      LatLng(bound.southwest.latitude, bound.southwest.longitude),
-      northeast:
-      LatLng(bound.northeast.latitude, bound.northeast.longitude),
+      southwest: LatLng(bound.southwest.latitude, bound.southwest.longitude),
+      northeast: LatLng(bound.northeast.latitude, bound.northeast.longitude),
     );
 
     await controller.animateCamera(
@@ -2671,7 +2671,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         left: 50,
         top: 50,
         right: 50,
-        bottom: 50,
+        bottom: bottomPadding,
       ),
       duration: const Duration(milliseconds: 2000),
     );
