@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:ui';
 
@@ -38,6 +39,7 @@ class AnnotationController{
   List<List<MapLocation>>? _multiPointPath;
   List<MapLocation> _pathPoints = [];
   String? _greyPathPolylineId;
+  final Completer<void> _venueRenderCompleter = Completer<void>();
 
   User? _user;
 
@@ -84,6 +86,10 @@ class AnnotationController{
       }
     }catch(e){
       print("e ${e}");
+    } finally {
+      if (!_venueRenderCompleter.isCompleted) {
+        _venueRenderCompleter.complete();
+      }
     }
   }
 
@@ -311,6 +317,7 @@ class AnnotationController{
 
 
   Future<void> annotateMultiPointPath() async {
+    await _venueRenderCompleter.future;
     if (_multiPointPath == null || _multiPointPath!.isEmpty) return;
 
     _unifiedMapController.removePolyline("path");
@@ -356,6 +363,8 @@ class AnnotationController{
         );
       }
     }
+
+
 
     fitMultiPathInScreen();
   }

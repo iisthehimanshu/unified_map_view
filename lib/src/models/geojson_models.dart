@@ -377,7 +377,14 @@ class GeoJsonMarker {
             pick(feature.properties?["renderName"]) ??
                 pick(feature.properties?["name"]) ??
                 "";
+      }else{
+        print("marker to be skipped ${feature.id} with assetPath $assetPath");
       }
+    }
+
+    if((parsedTitle == null || parsedTitle.isEmpty) && (assetPath == null || assetPath.isEmpty)){
+      print("skipping marker ${feature.id}");
+      return null;
     }
 
     return GeoJsonMarker(
@@ -438,7 +445,6 @@ class GeoJsonMarker {
         );
       }
     }
-    
     return markers;
   }
 }
