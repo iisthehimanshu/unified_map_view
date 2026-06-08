@@ -316,7 +316,7 @@ class AnnotationController{
   }
 
 
-  Future<void> annotateMultiPointPath() async {
+  Future<void> annotateMultiPointPath(List<dynamic>? stops) async {
     await _venueRenderCompleter.future;
     if (_multiPointPath == null || _multiPointPath!.isEmpty) return;
 
@@ -360,12 +360,10 @@ class AnnotationController{
         await _annotateStopMarkers(
           [route.last],
           segmentIndex,
+          id:stops?[segmentIndex+1]["stopId"]["mapId"]
         );
       }
     }
-
-
-
     fitMultiPathInScreen();
   }
 

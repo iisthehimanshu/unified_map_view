@@ -495,7 +495,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
-    await _annotationController.annotateMultiPointPath();
+    await _annotationController.annotateMultiPointPath([]);
     notifyListeners();
   }
 
@@ -537,13 +537,13 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> annotateMultiPointPath({required List<String> bids, required int sourceFloor}) async {
+  Future<void> annotateMultiPointPath({required List<String> bids, required int sourceFloor,List<dynamic>? stops}) async {
     deSelectLocation();
     if(RenderingTheme.current.isZoo)await currentProviderImplementation.addMapFade(_currentMapController);
     // for (var bid in bids) {
     //   changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     // }
-    await _annotationController.annotateMultiPointPath();
+    await _annotationController.annotateMultiPointPath(stops);
     notifyListeners();
   }
 
