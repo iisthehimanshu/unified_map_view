@@ -739,7 +739,7 @@ class GoogleMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> moveUser(dynamic controller, String id, MapLocation location) async {
+  Future<void> moveUser(dynamic controller, String id, MapLocation location, Duration duration) async {
     if (controller is GoogleMapController) {
       try {
         // Find and update the user marker position in the list

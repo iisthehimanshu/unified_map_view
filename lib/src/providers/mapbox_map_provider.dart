@@ -1102,7 +1102,7 @@ class MapboxMapProvider extends BaseMapProvider {
   Timer? _animationTimer;
 
   @override
-  Future<void> moveUser(dynamic controller, String id, MapLocation location) async {
+  Future<void> moveUser(dynamic controller, String id, MapLocation location, Duration duration) async {
     if (controller is! MapboxMap) return;
 
     try {

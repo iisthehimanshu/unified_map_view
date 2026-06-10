@@ -589,9 +589,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> moveUser(controller, String id, MapLocation location) async {
+  Future<void> moveUser(controller, String id, MapLocation location, Duration duration) async {
     if (controller is MaplibreMapController) {
-      await _animateMarkerToPosition(controller, id, location);
+      await _animateMarkerToPosition(controller, id, location, duration);
     }
   }
 
@@ -627,8 +627,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       MaplibreMapController controller,
       String id,
       MapLocation targetLocation,
+      Duration duration
       ) async {
-    const duration = Duration(milliseconds: 300);
     const fps = 60;
     final steps = (duration.inMilliseconds / (1000 / fps)).round();
 
@@ -1971,26 +1971,57 @@ class MaplibreMapProvider extends BaseMapProvider {
       FillLayerProperties(
         fillOpacity: [
           "interpolate", ["linear"], ["zoom"],
-          fadeOutZoom, 1.0,
-          fadeOutZoom + 1.0, 0.0,
+          fadeOutZoom + 1.5, 1.0,
+          fadeOutZoom + 2.0, 0.0,
         ],
       ),
     );
-    await controller.setLayerProperties(
+    await controller.removeLayer(_sectionMarkerLayerId);
+    await controller.addSymbolLayer(
+      _clusterSourceId,
       _sectionMarkerLayerId,
       SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
+        symbolSortKey: ["+", 7000, _kSortKeyExpression],
+        iconImage: ["get", "icon"],
+        iconSize: 0.8,
+        iconAnchor: ["get", "iconAnchor"],
+        textField: ["get", "title"],
+        textSize: 14,
+        textColor: "#000000",
+        textHaloColor: "#f8f9fa",
+        textHaloWidth: 1.5,
+        textAnchor: [
+          "case",
+          ["has", "icon"],
+          "top",
+          "center"
+        ],
+        textOffset: [
+          "case",
+          ["has", "icon"],
+          ["literal", [0, 0.2]],
+          ["literal", [0, 0]]
+        ],
+        textAllowOverlap: false,
+        iconAllowOverlap: false,
         iconOpacity: [
-          "interpolate", ["linear"], ["zoom"],
-          fadeOutZoom, 1.0,
-          fadeOutZoom + 1.0, 0.0,
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          fadeOutZoom+1.5, 1.0,
+          fadeOutZoom+2.0, 0.0
         ],
         textOpacity: [
-          "interpolate", ["linear"], ["zoom"],
-          fadeOutZoom, 1.0,
-          fadeOutZoom + 1.0, 0.0,
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          fadeOutZoom+1.5, 1.0,
+          fadeOutZoom+2.0, 0.0
         ],
       ),
+      filter: ["to-boolean", ["get", "section"]],
+      enableInteraction: true,
+      belowLayerId: _fixedMarkerLayerId,
     );
 
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
@@ -2047,24 +2078,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       _fixedMarkerLayerId,
       SymbolLayerProperties(
         symbolSortKey: _kSortKeyExpression,
-        textOpacity: opacityExpression,
-      ),
-    );
-
-    await controller.setLayerProperties(
-      _sectionMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: opacityExpression,
-        textOpacity: opacityExpression,
-      ),
-    );
-
-    await controller.setLayerProperties(
-      _subSectionMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: opacityExpression,
         textOpacity: opacityExpression,
       ),
     );
@@ -2232,6 +2245,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     final hits = _polygons.where((p) =>
     !p.id.toLowerCase().contains("boundary") &&
         !p.properties?['type'].toLowerCase().contains("boundary") &&
+        !p.properties?['type'].toLowerCase().contains("section") &&
         _pointInPolygon(lat, lng, p.points),
     ).toList();
 

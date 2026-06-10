@@ -31,7 +31,8 @@ class PredefinedMarkers{
         priority: true,
         imageSize: Size(35, 35),
       anchor: LandmarkAssetType.user.anchor,
-      renderAnchor: Offset(0.515, 0.66),
+      renderAnchor: Offset(0.5, 0.5),
+      // renderAnchor: Offset(0.515, 0.66),
       compassBasedRotation: true,
       customRendering: true
     );

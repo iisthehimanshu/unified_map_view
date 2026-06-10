@@ -233,9 +233,9 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> moveMarker(String id, MapLocation location) async {
+  Future<void> moveMarker(String id, MapLocation location, {Duration duration = const Duration(milliseconds: 300)}) async {
     if (_currentMapController != null) {
-      await currentProviderImplementation.moveUser(_currentMapController, id, location);
+      await currentProviderImplementation.moveUser(_currentMapController, id, location, duration);
     }
     notifyListeners();
   }
@@ -556,8 +556,8 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> moveUser(MapLocation location) async {
-    await _annotationController.moveUser(location);
+  Future<void> moveUser(MapLocation location,  {Duration duration = const Duration(milliseconds: 300), bool compensateForDistance = false}) async {
+    await _annotationController.moveUser(location, duration: duration, compensateForDistance: compensateForDistance);
     notifyListeners();
   }
 

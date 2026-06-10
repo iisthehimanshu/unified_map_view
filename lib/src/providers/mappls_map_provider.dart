@@ -465,7 +465,7 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
-  Future<void> moveUser(controller, String id, MapLocation location) async {
+  Future<void> moveUser(controller, String id, MapLocation location, Duration duration) async {
     if(controller is MapplsMapController){
       await _animateMarkerToPosition(controller, id, location);
     }

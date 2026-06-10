@@ -513,10 +513,17 @@ class AnnotationController{
     await _unifiedMapController.removeMarker("user");
   }
 
-  Future<void> moveUser(MapLocation location) async {
+  Future<void> moveUser(MapLocation location, {Duration duration = const Duration(milliseconds: 300), bool compensateForDistance = false}) async {
+    print("_userMoveUser $_user $location");
     if (_user == null) return;
+    if(compensateForDistance){
+      MapLocation previousLocation = _user!.location;
+      double distance = MapCalculations.distanceInMeters(previousLocation, location);
+      duration = Duration(milliseconds: ((300/0.91)*distance).toInt());
+      print("calculatedDuration ${duration.inMilliseconds}");
+    }
     _user?.location = location;
-    await _unifiedMapController.moveMarker("user", location);
+    await _unifiedMapController.moveMarker("user", location, duration: duration);
 
     // ── NEW: draw grey path from start of last polyline → user's projection
     await _updateGreyTraversedPath(location);
@@ -530,6 +537,8 @@ class AnnotationController{
       await _unifiedMapController.removePolyline(_greyPathPolylineId!);
       _greyPathPolylineId = null;
     }
+
+    print("userLocation $userLocation");
 
     final projected = _projectPointOntoPolyline(
       userLocation,
