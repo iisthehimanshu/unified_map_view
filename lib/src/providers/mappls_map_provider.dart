@@ -250,6 +250,13 @@ class MapplsMapProvider extends BaseMapProvider {
   }
 
   @override
+  Future<void> setContentInsets(dynamic controller, EdgeInsets insets, {bool animated = true}) async {
+    if (controller is MapplsMapController) {
+      await controller.updateContentInsets(insets, animated);
+    }
+  }
+
+  @override
   Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt, Duration? duration}) async {
     if (controller is MapplsMapController) {
       if(bearing != null && tilt != null){

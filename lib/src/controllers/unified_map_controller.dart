@@ -1,6 +1,7 @@
 // lib/src/controllers/unified_map_controller.dart
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show EdgeInsets;
 import 'package:unified_map_view/src/enums/Theme.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
@@ -176,6 +177,17 @@ class UnifiedMapController extends ChangeNotifier {
       bearing: bearing,
       tilt: tilt,
       duration: duration
+    );
+  }
+
+  /// Set content insets so subsequent camera operations (animateCamera,
+  /// fitCameraToBounds, user-follow) center on the unobstructed viewport area.
+  Future<void> setContentInsets(EdgeInsets insets, {bool animated = true}) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setContentInsets(
+      _currentMapController,
+      insets,
+      animated: animated,
     );
   }
 

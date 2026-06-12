@@ -330,6 +330,13 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  @override
+  Future<void> setContentInsets(dynamic controller, EdgeInsets insets, {bool animated = true}) async {
+    if (controller is MaplibreMapController) {
+      await controller.updateContentInsets(insets, animated);
+    }
+  }
+
   Future<void> set3DViewEnabled(
       dynamic controller, {
         required bool isEnabled,

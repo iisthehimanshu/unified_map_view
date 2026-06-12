@@ -52,6 +52,11 @@ abstract class BaseMapProvider {
   /// Animate camera to location
   Future<void> animateCamera(dynamic controller, MapLocation location, double zoom, {double? bearing, double? tilt, Duration? duration});
 
+  /// Set content insets so camera operations center on the unobstructed part
+  /// of the viewport (e.g. the area not covered by bottom panels).
+  /// Providers without native support inherit this no-op.
+  Future<void> setContentInsets(dynamic controller, EdgeInsets insets, {bool animated = true}) async {}
+
   /// Set map style (if supported)
   Future<void> setMapStyle(dynamic controller, String? styleJson);
 
