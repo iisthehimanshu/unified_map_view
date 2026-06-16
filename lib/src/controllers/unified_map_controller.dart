@@ -271,6 +271,26 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Temporarily force `allowIconOverlap` ON for the given marker ids so they
+  /// stay visible even when they collide with other markers. Reverse it with
+  /// [clearMarkersAllowOverlap] (per id) or [clearAllMarkersAllowOverlap].
+  Future<void> setMarkersAllowOverlap(List<String> markerIds) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setMarkersAllowOverlap(_currentMapController, markerIds);
+  }
+
+  /// Turn the temporary overlap override back OFF for the given marker ids.
+  Future<void> clearMarkersAllowOverlap(List<String> markerIds) async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.clearMarkersAllowOverlap(_currentMapController, markerIds);
+  }
+
+  /// Turn the temporary overlap override OFF for every marker it was set on.
+  Future<void> clearAllMarkersAllowOverlap() async {
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.clearAllMarkersAllowOverlap(_currentMapController);
+  }
+
   /// Get current camera location
   Future<MapLocation?> getCurrentLocation() async {
     if (_currentMapController == null) return null;

@@ -41,6 +41,11 @@ class MapboxMapProvider extends BaseMapProvider {
   static const String _rotationMarkerLayerId = 'rotation-marker-layer';
   final Map<String, GeoJsonMarker> _rotatingSymbols = {};
 
+  /// Marker ids for which icon/text overlap is temporarily forced on.
+  /// These markers are routed into the always-visible (priority) layer so they
+  /// are never hidden by collision, regardless of their `priority` flag.
+  final Set<String> _overlapOverrideIds = {};
+
   StreamSubscription<CompassEvent>? _compassSub;
 
 
@@ -311,7 +316,11 @@ class MapboxMapProvider extends BaseMapProvider {
           iconSizeExpression: ['literal', 1.5],
           iconAllowOverlap: false,  // Can be hidden
           textAllowOverlap: false,  // Can be hidden
-          filter: ['!=', ['get', 'isPriority'], true],
+          filter: [
+            'all',
+            ['!=', ['get', 'isPriority'], true],
+            ['!=', ['get', 'overlapOverride'], true],
+          ],
         ),
       );
     }
@@ -329,7 +338,11 @@ class MapboxMapProvider extends BaseMapProvider {
           iconSizeExpression: ['literal', 1.5],
           iconAllowOverlap: true,   // Always visible
           textAllowOverlap: true,   // Always visible
-          filter: ['==', ['get', 'isPriority'], true],
+          filter: [
+            'any',
+            ['==', ['get', 'isPriority'], true],
+            ['==', ['get', 'overlapOverride'], true],
+          ],
         ),
       );
     }
@@ -447,6 +460,7 @@ class MapboxMapProvider extends BaseMapProvider {
           'title': "",
           'icon': marker.id,
           'isPriority': marker.priority ?? false,  // This determines which layer renders it
+          'overlapOverride': _overlapOverrideIds.contains(marker.id),  // Temporary allow-overlap toggle
           'intractable': marker.properties?["polyId"] != null,
           if (marker.compassBasedRotation) "bearing": 0.0,
         },
@@ -461,6 +475,35 @@ class MapboxMapProvider extends BaseMapProvider {
         'features': features,
       },
     );
+  }
+
+  /// Temporarily force icon/text overlap ON for the given marker ids.
+  /// These markers become always-visible (never hidden by collision) until
+  /// cleared with [clearMarkersAllowOverlap] or [clearAllMarkersAllowOverlap].
+  @override
+  Future<void> setMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {
+    if (controller is! MapboxMap) return;
+    if (markerIds.isEmpty) return;
+    _overlapOverrideIds.addAll(markerIds);
+    await _updateMarkerSource(controller);
+  }
+
+  /// Turn the temporary overlap override back OFF for the given marker ids.
+  @override
+  Future<void> clearMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {
+    if (controller is! MapboxMap) return;
+    if (markerIds.isEmpty) return;
+    _overlapOverrideIds.removeAll(markerIds);
+    await _updateMarkerSource(controller);
+  }
+
+  /// Turn the temporary overlap override OFF for every marker it was set on.
+  @override
+  Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {
+    if (controller is! MapboxMap) return;
+    if (_overlapOverrideIds.isEmpty) return;
+    _overlapOverrideIds.clear();
+    await _updateMarkerSource(controller);
   }
 
   @override

@@ -44,6 +44,13 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
+  final String _overlapOverrideMarkerLayerId = 'overlap-override-markers-layer';
+
+  /// Marker ids for which icon/text overlap is temporarily forced on. These
+  /// markers are routed into a dedicated always-visible layer (and excluded
+  /// from the collision-subject normal layers) so they are never hidden by
+  /// collision, until cleared.
+  final Set<String> _overlapOverrideIds = {};
 
   final String _rotationSourceId = 'rotation-markers-source';
   final String _rotationMarkerLayerId = 'rotation-marker-layer';
@@ -736,6 +743,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering,
+            'overlapOverride': _overlapOverrideIds.contains(marker.id),
             // Numeric priority used by symbolSortKey: higher value → higher sort
             // precedence (wins collision). Negated inside the layer expression.
             _kPriorityKey: _markerPriority(marker),
@@ -793,6 +801,35 @@ class MaplibreMapProvider extends BaseMapProvider {
         "features": features,
       });
     });
+  }
+
+  /// Temporarily force icon/text overlap ON for the given marker ids so they
+  /// are never hidden by collision. Reverse with [clearMarkersAllowOverlap] or
+  /// [clearAllMarkersAllowOverlap].
+  @override
+  Future<void> setMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {
+    if (controller is! MaplibreMapController) return;
+    if (markerIds.isEmpty) return;
+    _overlapOverrideIds.addAll(markerIds);
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId);
+  }
+
+  /// Turn the temporary overlap override back OFF for the given marker ids.
+  @override
+  Future<void> clearMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {
+    if (controller is! MaplibreMapController) return;
+    if (markerIds.isEmpty) return;
+    _overlapOverrideIds.removeAll(markerIds);
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId);
+  }
+
+  /// Turn the temporary overlap override OFF for every marker it was set on.
+  @override
+  Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {
+    if (controller is! MaplibreMapController) return;
+    if (_overlapOverrideIds.isEmpty) return;
+    _overlapOverrideIds.clear();
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId);
   }
 
   @override
@@ -1269,6 +1306,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ),
           filter: [
             "all",
+            ["!", ["to-boolean", ["get", "overlapOverride"]]],
             ["!", ["to-boolean", ["get", "isPriority"]]],
             ["!", ["to-boolean", ["get", "section"]]],
             ["!", ["to-boolean", ["get", "subSection"]]],
@@ -1323,6 +1361,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
           ["!", ["to-boolean", ["get", "isPriority"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
@@ -1379,6 +1418,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
           ["!", ["to-boolean", ["get", "isPriority"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
@@ -1424,6 +1464,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
           ["!", ["to-boolean", ["get", "isPriority"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
@@ -1472,6 +1513,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: [
           "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
           ["!", ["to-boolean", ["get", "isPriority"]]],
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
@@ -1652,6 +1694,47 @@ class MaplibreMapProvider extends BaseMapProvider {
           textAllowOverlap: false,
         ),
         filter: ["to-boolean", ["get", "isPriority"]],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+
+      // Layer 9b: Temporary allow-overlap override markers.
+      // Mirrors the normal icon-marker styling but with icon/text overlap forced
+      // on, so toggled markers stay visible regardless of collision. Excludes
+      // priority/structural markers (they are handled by their own layers).
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _overlapOverrideMarkerLayerId,
+        SymbolLayerProperties(
+          symbolSortKey: ["+", 11000, _kSortKeyExpression],
+          iconImage: ["get", "icon"],
+          iconSize: 0.8,
+          iconAnchor: ["get", "iconAnchor"],
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: [
+            "case",
+            ["==", ["get", "iconAnchor"], "bottom"],
+            ["literal", [0, 0.0]],
+            ["==", ["get", "iconAnchor"], "center"],
+            ["literal", [0, 1.2]],
+            ["literal", [0, 1.2]]
+          ],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "overlapOverride"]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+        ],
         enableInteraction: true,
         belowLayerId: null,
       );
@@ -1907,7 +1990,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     final fitZoom = _calculateFitZoom(
       boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons,
       screenSize: screenSize,
-    ) - 1.7;
+    ) - 2.0;
 
     final fadeOutZoom = fitZoom;
     final fadeInZoom  = fitZoom - 0.5;

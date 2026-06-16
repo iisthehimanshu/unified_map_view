@@ -46,6 +46,16 @@ abstract class BaseMapProvider {
   /// Clear all markers
   Future<void> clearMarkers(dynamic controller);
 
+  /// Temporarily force icon/text overlap ON for the given marker ids so they
+  /// are never hidden by collision. Providers without support inherit a no-op.
+  Future<void> setMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {}
+
+  /// Turn the temporary overlap override back OFF for the given marker ids.
+  Future<void> clearMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {}
+
+  /// Turn the temporary overlap override OFF for every marker it was set on.
+  Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {}
+
   /// Get current camera position
   Future<MapLocation?> getCurrentLocation(dynamic controller);
 
