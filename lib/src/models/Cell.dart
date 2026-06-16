@@ -103,7 +103,7 @@ class Cell{
       destinationLng: json['destinationLng'],
       name: json['name'],
         stopItems: json['stopItems'],
-        pathStop: json['pathStop']
+        pathStop: json['pathStop']??false
     );
   }
 

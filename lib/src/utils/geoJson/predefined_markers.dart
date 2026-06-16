@@ -187,4 +187,34 @@ class PredefinedMarkers{
         }
     );
   }
+
+  static GeoJsonMarker getStartMarker(MapLocation location, String id){
+    return GeoJsonMarker(
+        id: id,
+        position: location,
+        title: "",
+        snippet: "",
+        assetPath: LandmarkAssetType.start.assetPath,
+        iconName: "start",
+        priority: true,
+        imageSize: Size(30, 30),
+        anchor: LandmarkAssetType.start.anchor,
+        customRendering: true
+    );
+  }
+
+  static GeoJsonMarker getStopMarker(MapLocation location, String id){
+    return GeoJsonMarker(
+        id: id,
+        position: location,
+        title: "",
+        snippet: "",
+        assetPath: LandmarkAssetType.stop.assetPath,
+        iconName: "stop",
+        priority: true,
+        imageSize: Size(30, 30),
+        anchor: LandmarkAssetType.stop.anchor,
+        customRendering: true
+    );
+  }
 }

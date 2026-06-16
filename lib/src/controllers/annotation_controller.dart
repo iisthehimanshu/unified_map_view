@@ -32,6 +32,12 @@ class AnnotationController{
   List<MapLocation> _pathPoints = [];
   String? _greyPathPolylineId;
 
+  /// How far the user has progressed along [_pathPoints], as a segment index.
+  /// Used to keep the grey "traversed" overlay monotonic so it can't jump
+  /// across loops/self-intersections in the path (which produced lines that
+  /// connected cyclic points).
+  int _lastProjectionIndex = 0;
+
   User? _user;
 
   List<MapLocation>? _pinSelectionLocation;
@@ -156,6 +162,7 @@ class AnnotationController{
     _path = null;
     _multiPath = null;
     _pathPoints.clear();
+    _lastProjectionIndex = 0;
     return true;
   }
 
@@ -219,6 +226,7 @@ class AnnotationController{
     if (_path == null) return false;
     dev.log("_path in annotate path $_path");
     _pathPoints.clear();
+    _lastProjectionIndex = 0;
     _unifiedMapController.removePolyline("path");
     _unifiedMapController.removePolyline('greyTraversed_');
 
@@ -417,19 +425,24 @@ class AnnotationController{
   }
 
   Future<void> _annotatePathMarkers(List<Cell> path) async {
+    bool isTour = path.where((cell)=>cell.pathStop).isNotEmpty;
     for (var cell in path) {
       if(cell.isDestination){
-        if(cell.destinationLat != null && cell.destinationLng != null){
+        if(isTour){
+          _unifiedMapController.addMarker(PredefinedMarkers.getStopMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        }else if(cell.destinationLat != null && cell.destinationLng != null){
           await annotateCurvedPath(MapLocation(latitude: cell.lat, longitude: cell.lng), MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), cell.bid!, cell.floor);
           _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.destinationLat!, longitude: cell.destinationLng!), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'),title: cell.name??""));
         }else{
           _unifiedMapController.addMarker(PredefinedMarkers.getDestinationMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), title: cell.name??""));
         }
-      }
-      if(cell.isSource){
-        _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
-      }
-      if(cell.pathStop){
+      }else if(cell.isSource){
+        if(isTour){
+          _unifiedMapController.addMarker(PredefinedMarkers.getStartMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        }else{
+          _unifiedMapController.addMarker(PredefinedMarkers.getSourceMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true')));
+        }
+      }else if(cell.pathStop){
         _unifiedMapController.addMarker(PredefinedMarkers.getPathStopMarker(MapLocation(latitude: cell.lat, longitude: cell.lng), GeoJsonUtils.buildKey(buildingID: cell.bid, floor: cell.floor.toString(), id: cell.node.toString(), path: 'true'), title: cell.name??""));
       }
       // if(cell.isFloorConnection){
@@ -543,8 +556,14 @@ class AnnotationController{
     final projected = _projectPointOntoPolyline(
       userLocation,
       _pathPoints,
+      searchFromIndex: _lastProjectionIndex,
     );
     if (projected == null) return;
+
+    // Progress is monotonic: never let the projection move backwards along the
+    // path. This stops the overlay from snapping onto a geographically-close
+    // but path-distant segment when the route loops or doubles back on itself.
+    _lastProjectionIndex = projected.segmentIndex;
 
     // Build the grey path: all points up to the projection index, then the
     // projected point itself so the line ends exactly under the user marker.
@@ -577,15 +596,22 @@ class AnnotationController{
   ({MapLocation point, int segmentIndex, double distanceMeters}) ?
   _projectPointOntoPolyline(
       MapLocation user,
-      List<MapLocation> polyline,
-      ) {
+      List<MapLocation> polyline, {
+        int searchFromIndex = 0,
+        // Allow a few segments of backward search to absorb GPS jitter without
+        // letting the projection jump all the way back to the path start.
+        int backwardTolerance = 2,
+      }) {
     if (polyline.length < 2) return null;
 
     MapLocation? bestPoint;
-    int bestIndex = 0;
+    int bestIndex = searchFromIndex.clamp(0, polyline.length - 2);
     double bestDist = double.infinity;
 
-    for (int i = 0; i < polyline.length - 1; i++) {
+    final start = (searchFromIndex - backwardTolerance)
+        .clamp(0, polyline.length - 2);
+
+    for (int i = start; i < polyline.length - 1; i++) {
       final a = polyline[i];
       final b = polyline[i + 1];
 

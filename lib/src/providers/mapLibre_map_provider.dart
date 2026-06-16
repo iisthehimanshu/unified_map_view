@@ -64,6 +64,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   final String _polylineSourceId = 'polylines-source';
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
+  final String _pathOutlineLayerId = 'path-solid-outline-polyline-layer';
   final String _pathDashedLayerId = 'path-dashed-polyline-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
   final String _greyOverlayLayerId = 'grey-overlay-polyline-layer';
@@ -1647,7 +1648,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           symbolSortKey: ["+", 5000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: 1.5,
-          iconAllowOverlap: false,
+          iconAllowOverlap: true,
           textAllowOverlap: false,
         ),
         filter: ["to-boolean", ["get", "isPriority"]],
@@ -2151,6 +2152,25 @@ class MaplibreMapProvider extends BaseMapProvider {
         filter: ["!", ["to-boolean", ["get", "path"]]],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
+      );
+
+      await controller.addLineLayer(
+        _polylineSourceId,
+        _pathOutlineLayerId,          // new layer id, e.g. 'path-solid-outline'
+        const LineLayerProperties(
+          lineColor: "#FFFFFF",        // white outline
+          lineWidth: 14,  // will be wider via lineGapWidth trick
+          lineOpacity: ["get", "lineOpacity"],
+          // lineGapWidth: ["get", "lineWidth"], // ← key: pushes the outline outward
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"],
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+        ],
+        enableInteraction: false,       // outline doesn't need to be tappable
+        belowLayerId: _pathSolidLayerId, // render BELOW the solid line
       );
 
       // Solid path lines

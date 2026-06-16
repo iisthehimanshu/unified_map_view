@@ -666,7 +666,7 @@ class UnifiedMarkerCreator {
   }
 
   Future<Uint8List> createStopMarkerIcon(String text) async {
-    double? size = 30;
+    double? size = 60;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
@@ -674,7 +674,7 @@ class UnifiedMarkerCreator {
     // White outer ring
     canvas.drawCircle(
       Offset(size / 2, size / 2),
-      15,
+      30,
       Paint()
         ..color = Colors.white
         ..style = PaintingStyle.fill,
@@ -683,7 +683,7 @@ class UnifiedMarkerCreator {
     // Blue inner circle
     canvas.drawCircle(
       Offset(size / 2, size / 2),
-      12,
+      24,
       Paint()
         ..color = Colors.blue
         ..style = PaintingStyle.fill,
@@ -695,7 +695,7 @@ class UnifiedMarkerCreator {
         text: text,
         style: TextStyle(
           color: Colors.white,
-          fontSize: 20,
+          fontSize: 22,
           fontWeight: FontWeight.w700,
         ),
       ),
