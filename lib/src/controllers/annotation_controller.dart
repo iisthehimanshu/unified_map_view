@@ -567,18 +567,16 @@ class AnnotationController{
     // keep the existing grey overlay (and projection index) untouched.
     if (projected.distanceMeters > 2.0) return;
 
-    // Record this projection in walk order. Progress is monotonic: a projection
-    // that lands on a later segment extends the history; one on the same segment
-    // just advances the tail; an earlier segment is GPS jitter and is ignored.
+    // Record this projection in walk order. A projection on a different segment
+    // (forward or backward) extends the history; one on the same segment just
+    // advances the tail along that segment.
     if (_projectionHistory.isEmpty ||
-        projected.segmentIndex > _projectionHistory.last.segmentIndex) {
+        projected.segmentIndex != _projectionHistory.last.segmentIndex) {
       _projectionHistory
           .add((point: projected.point, segmentIndex: projected.segmentIndex));
-    } else if (projected.segmentIndex == _projectionHistory.last.segmentIndex) {
+    } else {
       _projectionHistory[_projectionHistory.length - 1] =
           (point: projected.point, segmentIndex: projected.segmentIndex);
-    } else {
-      return; // backward jitter — nothing to redraw
     }
 
     _lastProjectionIndex = projected.segmentIndex;
@@ -591,16 +589,25 @@ class AnnotationController{
 
     // Stitch the grey path through every recorded projection, following the
     // path geometry between them: start at the first projection, then for each
-    // later projection insert the intermediate path vertices before the
-    // projection point itself. This keeps the line on the route instead of
-    // cutting straight from one projection to the next.
+    // subsequent projection insert the intermediate path vertices before the
+    // projection point itself. Walking backward inserts those vertices in
+    // reverse. This keeps the line on the route instead of cutting straight
+    // from one projection to the next.
     final greyPoints = <MapLocation>[_projectionHistory.first.point];
     var prevSegment = _projectionHistory.first.segmentIndex;
     for (var i = 1; i < _projectionHistory.length; i++) {
       final current = _projectionHistory[i];
       if (current.segmentIndex > prevSegment) {
+        // Forward: vertices after the previous segment up to the current one.
         greyPoints.addAll(
           _pathPoints.sublist(prevSegment + 1, current.segmentIndex + 1),
+        );
+      } else if (current.segmentIndex < prevSegment) {
+        // Backward: the same vertices traversed in reverse.
+        greyPoints.addAll(
+          _pathPoints
+              .sublist(current.segmentIndex + 1, prevSegment + 1)
+              .reversed,
         );
       }
       greyPoints.add(current.point);
@@ -633,9 +640,9 @@ class AnnotationController{
       MapLocation user,
       List<MapLocation> polyline, {
         int searchFromIndex = 0,
-        // Allow a few segments of backward search to absorb GPS jitter without
-        // letting the projection jump all the way back to the path start.
-        int backwardTolerance = 2,
+        // Allow backward search so the projection can follow the user when they
+        // retrace the route, without jumping all the way back to the path start.
+        int backwardTolerance = 20,
       }) {
     if (polyline.length < 2) return null;
 
