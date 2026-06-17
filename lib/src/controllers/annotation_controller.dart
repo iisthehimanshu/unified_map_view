@@ -38,6 +38,13 @@ class AnnotationController{
   /// connected cyclic points).
   int _lastProjectionIndex = 0;
 
+  /// Every accepted projection of the user onto [_pathPoints], in walk order.
+  /// The grey overlay is rebuilt by stitching these together *along the path*
+  /// (inserting the intermediate path vertices between consecutive
+  /// projections) so it never short-cuts straight from one projection to the
+  /// next.
+  final List<({MapLocation point, int segmentIndex})> _projectionHistory = [];
+
   User? _user;
 
   List<MapLocation>? _pinSelectionLocation;
@@ -163,6 +170,7 @@ class AnnotationController{
     _multiPath = null;
     _pathPoints.clear();
     _lastProjectionIndex = 0;
+    _projectionHistory.clear();
     return true;
   }
 
@@ -227,6 +235,7 @@ class AnnotationController{
     dev.log("_path in annotate path $_path");
     _pathPoints.clear();
     _lastProjectionIndex = 0;
+    _projectionHistory.clear();
     _unifiedMapController.removePolyline("path");
     _unifiedMapController.removePolyline('greyTraversed_');
 
@@ -558,23 +567,45 @@ class AnnotationController{
     // keep the existing grey overlay (and projection index) untouched.
     if (projected.distanceMeters > 2.0) return;
 
+    // Record this projection in walk order. Progress is monotonic: a projection
+    // that lands on a later segment extends the history; one on the same segment
+    // just advances the tail; an earlier segment is GPS jitter and is ignored.
+    if (_projectionHistory.isEmpty ||
+        projected.segmentIndex > _projectionHistory.last.segmentIndex) {
+      _projectionHistory
+          .add((point: projected.point, segmentIndex: projected.segmentIndex));
+    } else if (projected.segmentIndex == _projectionHistory.last.segmentIndex) {
+      _projectionHistory[_projectionHistory.length - 1] =
+          (point: projected.point, segmentIndex: projected.segmentIndex);
+    } else {
+      return; // backward jitter — nothing to redraw
+    }
+
+    _lastProjectionIndex = projected.segmentIndex;
+
     // Remove the previous grey overlay (if any).
     if (_greyPathPolylineId != null) {
       await _unifiedMapController.removePolyline(_greyPathPolylineId!);
       _greyPathPolylineId = null;
     }
 
-    // Progress is monotonic: never let the projection move backwards along the
-    // path. This stops the overlay from snapping onto a geographically-close
-    // but path-distant segment when the route loops or doubles back on itself.
-    _lastProjectionIndex = projected.segmentIndex;
-
-    // Build the grey path: all points up to the projection index, then the
-    // projected point itself so the line ends exactly under the user marker.
-    final greyPoints = <MapLocation>[
-      ..._pathPoints.sublist(0, projected.segmentIndex + 1),
-      projected.point,
-    ];
+    // Stitch the grey path through every recorded projection, following the
+    // path geometry between them: start at the first projection, then for each
+    // later projection insert the intermediate path vertices before the
+    // projection point itself. This keeps the line on the route instead of
+    // cutting straight from one projection to the next.
+    final greyPoints = <MapLocation>[_projectionHistory.first.point];
+    var prevSegment = _projectionHistory.first.segmentIndex;
+    for (var i = 1; i < _projectionHistory.length; i++) {
+      final current = _projectionHistory[i];
+      if (current.segmentIndex > prevSegment) {
+        greyPoints.addAll(
+          _pathPoints.sublist(prevSegment + 1, current.segmentIndex + 1),
+        );
+      }
+      greyPoints.add(current.point);
+      prevSegment = current.segmentIndex;
+    }
 
     if (greyPoints.length < 2) return;
 
