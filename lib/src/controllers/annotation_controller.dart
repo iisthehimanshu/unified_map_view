@@ -640,9 +640,6 @@ class AnnotationController{
       MapLocation user,
       List<MapLocation> polyline, {
         int searchFromIndex = 0,
-        // Allow backward search so the projection can follow the user when they
-        // retrace the route, without jumping all the way back to the path start.
-        int backwardTolerance = 20,
       }) {
     if (polyline.length < 2) return null;
 
@@ -650,10 +647,9 @@ class AnnotationController{
     int bestIndex = searchFromIndex.clamp(0, polyline.length - 2);
     double bestDist = double.infinity;
 
-    final start = (searchFromIndex - backwardTolerance)
-        .clamp(0, polyline.length - 2);
-
-    for (int i = start; i < polyline.length - 1; i++) {
+    // Search the entire path so the projection can follow the user in either
+    // direction (forward progress or retracing the route).
+    for (int i = 0; i < polyline.length - 1; i++) {
       final a = polyline[i];
       final b = polyline[i + 1];
 
