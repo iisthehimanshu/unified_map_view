@@ -113,6 +113,15 @@ class MaplibreMapProvider extends BaseMapProvider {
     -1,
   ];
 
+  /// Markers whose full marker only appears from zoom 18 (text markers with
+  /// collisionBase 0 and icon-with-sectionId markers with collisionBase 3000).
+  /// Used to pick the dot's opacity ramp; see [enableMarkerLayers].
+  static const List<dynamic> _kDotStepGroupExpression = [
+    "any",
+    ["==", ["get", "collisionBase"], 0],
+    ["==", ["get", "collisionBase"], 3000],
+  ];
+
   // ---------------------------------------------------------------------------
   // Styles
   // ---------------------------------------------------------------------------
@@ -1404,15 +1413,27 @@ class MaplibreMapProvider extends BaseMapProvider {
           // Mirror the per-type zoom visibility of the full markers: text (base
           // 0) and icon-with-sectionId (base 3000) only appear from zoom 18;
           // everything else fades in 12→14 like the normal icon markers.
+          // MapLibre only allows a `zoom` expression at the very top level, so
+          // we cannot nest `step`/`interpolate` over zoom inside a `case` (doing
+          // so makes NSExpression(mglJSONObject:) throw an uncaught NSException
+          // on iOS and aborts the app). Instead keep `interpolate` over zoom at
+          // the top and move the per-feature branch into the stop outputs:
+          //   • collisionBase 0/3000 → stays 0 until ~z18, then jumps to 1
+          //     (near-instant step, matching the previous `step` behaviour).
+          //   • everything else → fades in linearly 12→14, matching the
+          //     previous `interpolate`.
           iconOpacity: [
-            "case",
-            [
-              "any",
-              ["==", ["get", "collisionBase"], 0],
-              ["==", ["get", "collisionBase"], 3000],
-            ],
-            ["step", ["zoom"], 0.0, 18, 1.0],
-            ["interpolate", ["linear"], ["zoom"], 12.0, 0.0, 14.0, 1.0],
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0,
+            ["case", _kDotStepGroupExpression, 0.0, 0.0],
+            14.0,
+            ["case", _kDotStepGroupExpression, 0.0, 1.0],
+            17.999,
+            ["case", _kDotStepGroupExpression, 0.0, 1.0],
+            18.0,
+            ["case", _kDotStepGroupExpression, 1.0, 1.0],
           ],
         ),
         filter: [
