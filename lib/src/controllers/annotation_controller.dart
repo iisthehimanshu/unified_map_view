@@ -545,12 +545,6 @@ class AnnotationController{
   Future<void> _updateGreyTraversedPath(MapLocation userLocation) async {
     if (_pathPoints.length < 2) return;
 
-    // Remove the previous grey overlay (if any).
-    if (_greyPathPolylineId != null) {
-      await _unifiedMapController.removePolyline(_greyPathPolylineId!);
-      _greyPathPolylineId = null;
-    }
-
     print("userLocation $userLocation");
 
     final projected = _projectPointOntoPolyline(
@@ -559,6 +553,16 @@ class AnnotationController{
       searchFromIndex: _lastProjectionIndex,
     );
     if (projected == null) return;
+
+    // If the user is too far from the route, the projection isn't trustworthy —
+    // keep the existing grey overlay (and projection index) untouched.
+    if (projected.distanceMeters > 2.0) return;
+
+    // Remove the previous grey overlay (if any).
+    if (_greyPathPolylineId != null) {
+      await _unifiedMapController.removePolyline(_greyPathPolylineId!);
+      _greyPathPolylineId = null;
+    }
 
     // Progress is monotonic: never let the projection move backwards along the
     // path. This stops the overlay from snapping onto a geographically-close
