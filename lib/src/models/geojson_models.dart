@@ -222,6 +222,9 @@ class GeoJsonMarker {
   final String? title;
   final String? snippet;
   final String? assetPath; // Add icon name/identifier
+  /// Asset/url for the smaller "dot" icon shown when this marker loses a
+  /// collision (falls back to the default room dot when null).
+  final String? dotAssetPath;
   final String? iconName;
   final bool? priority;
   final Map<String, dynamic>? properties;
@@ -239,6 +242,7 @@ class GeoJsonMarker {
     this.title,
     this.snippet,
     this.assetPath,
+    this.dotAssetPath,
     this.iconName,
     this.priority,
     this.properties,
@@ -257,6 +261,7 @@ class GeoJsonMarker {
     String? title,
     String? snippet,
     String? assetPath,
+    String? dotAssetPath,
     String? iconName,
     bool? priority,
     Map<String, dynamic>? properties,
@@ -273,6 +278,7 @@ class GeoJsonMarker {
       title: title ?? this.title,
       snippet: snippet ?? this.snippet,
       assetPath: assetPath ?? this.assetPath,
+      dotAssetPath: dotAssetPath ?? this.dotAssetPath,
       iconName: iconName ?? this.iconName,
       priority: priority ?? this.priority,
       properties: properties ?? (this.properties != null
@@ -337,6 +343,7 @@ class GeoJsonMarker {
     Offset? anchor;
     String? parsedTitle;
     bool? customRendering;
+    String? dotAssetPath;
 
     if(feature.properties?["imageFile"] != null && feature.properties?["imageFile"].isNotEmpty){
       assetPath = "${AppConfig.baseUrl}/uploads/${feature.properties?["imageFile"]}";
@@ -346,6 +353,7 @@ class GeoJsonMarker {
       assetPath = feature.properties?["animalRef"]['icon'];
       textVisibility=true;
       customRendering=true;
+      dotAssetPath = LandmarkAssetType.pawDot.assetPath;
     }
 
     if(asset != null){
@@ -388,6 +396,7 @@ class GeoJsonMarker {
       textVisibility: textVisibility??true,
       priority: false,
       anchor: anchor,
+      dotAssetPath: dotAssetPath,
       customRendering: customRendering??false
     );
   }

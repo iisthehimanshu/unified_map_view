@@ -46,6 +46,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
   final String _overlapOverrideMarkerLayerId = 'overlap-override-markers-layer';
 
+  /// Collision-fallback "dot" layer. When a normal marker loses a collision it
+  /// would normally be hidden; instead we render a small dot at its location.
+  /// See [_collisionBase] / [enableMarkerLayers] for the ordering that makes a
+  /// loser fall back to a dot, and a dot-vs-dot loser hide entirely.
+  final String _dotMarkerLayerId = 'collision-dot-markers-layer';
+
+  /// Map image id + asset for the collision-fallback dot.
+  static const String _kDotImageId = '__collision_dot__';
+  static const String _kDotAssetPath =
+      'packages/unified_map_view/assets/markers/room_dot.png';
+
   /// Marker ids for which icon/text overlap is temporarily forced on. These
   /// markers are routed into a dedicated always-visible layer (and excluded
   /// from the collision-subject normal layers) so they are never hidden by
@@ -147,6 +158,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                     _customRenderingMarkerLayerId,
                     _priorityMarkerLayerId,
                     _rotationMarkerLayerId,
+                    _dotMarkerLayerId,
                   ],
                   null,
                 );
@@ -205,6 +217,8 @@ class MaplibreMapProvider extends BaseMapProvider {
               _isClusteringEnabled = false;
               _isPolygonLayersEnabled = false;
               _isPolylineLayersEnabled = false;
+              // Registered dot images are wiped too; allow re-registration.
+              _registeredDotImageIds.clear();
               _isCircleLayersEnabled = false;
 
               // Re-register all marker icons — style reload wipes addImage() calls
@@ -693,6 +707,23 @@ class MaplibreMapProvider extends BaseMapProvider {
     return 0;
   }
 
+  /// The per-layer base offset of the full marker's [symbolSortKey] for a
+  /// collision-participating marker. Mirrors the layer filters/bases in
+  /// [enableMarkerLayers] (text=0, fixed/bearing=1000, icon-withoutSectionId=
+  /// 2000, icon-withSectionId=3000, customRendering=4000). Used by the dot layer
+  /// so a feature's dot sorts right after its own full marker.
+  int _collisionBase({
+    required bool hasIcon,
+    required double bearing,
+    required bool customRendering,
+    required bool sectionId,
+  }) {
+    if (bearing != 0.0) return 1000; // Layer 4: fixed/bearing
+    if (!hasIcon) return 0; // Layer 1: text-only
+    if (customRendering) return 4000; // Layer 3: custom rendering
+    return sectionId ? 3000 : 2000; // Layer 2 / 2b: icon markers
+  }
+
   Future<void> setGeoJsonSource(
       dynamic controller,
       List<GeoJsonMarker> symbols,
@@ -714,6 +745,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null){
           entryDirection = (marker.properties?['entryDirection'] as num).toDouble();
         }
+
+        // Effective bearing matches the 'bearing' property written below, after
+        // the entryDirection override. A truthy (non-zero) bearing routes a
+        // marker into the fixed/bearing layer.
+        final double effectiveBearing = entryDirection ??
+            (marker.compassBasedRotation
+                ? 0.0
+                : ((marker.properties?["bearing"] ?? 0.0) as num).toDouble());
 
         return {
           'type': 'Feature',
@@ -743,10 +782,24 @@ class MaplibreMapProvider extends BaseMapProvider {
             'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering,
-            'overlapOverride': _overlapOverrideIds.contains(marker.id),
+            'overlapOverride': _overlapOverrideIds.any((id) => marker.id.contains(id)),
             // Numeric priority used by symbolSortKey: higher value → higher sort
             // precedence (wins collision). Negated inside the layer expression.
             _kPriorityKey: _markerPriority(marker),
+            // Per-feature base of the full marker's symbolSortKey. The dot layer
+            // reuses this (+ a fractional offset) so each feature's dot is
+            // placed right after its own full marker in the global collision
+            // pass, yielding the marker → dot → hidden fallback cascade.
+            'collisionBase': _collisionBase(
+              hasIcon: marker.assetPath != null,
+              bearing: effectiveBearing,
+              customRendering: marker.customRendering,
+              sectionId: hasSectionId,
+            ),
+            // Image id for this marker's collision-fallback dot. Per-marker dots
+            // are registered under their asset path; null falls back to the
+            // shared default room dot.
+            'dotIcon': marker.dotAssetPath ?? _kDotImageId,
             if(entryDirection != null)'bearing':entryDirection
           }
         };
@@ -1175,7 +1228,47 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   final creator = UnifiedMarkerCreator();
 
+  /// Dot image ids already registered with the current style (cleared on style
+  /// reload, which wipes addImage()). Avoids re-decoding shared dot assets.
+  final Set<String> _registeredDotImageIds = {};
+
+  /// Registers the default collision-fallback dot image. A style reload wipes
+  /// addImage() calls, so this is invoked again from [enableMarkerLayers].
+  Future<void> _loadDotImage(MapLibreMapController controller) async {
+    try {
+      final bd = await rootBundle.load(_kDotAssetPath);
+      await controller.addImage(_kDotImageId, bd.buffer.asUint8List());
+      _registeredDotImageIds.add(_kDotImageId);
+    } catch (e) {
+      print("_loadDotImage $e");
+    }
+  }
+
+  /// Registers a marker's custom dot image (under its asset path as the image
+  /// id) so the dot layer can reference it via the feature's `dotIcon` property.
+  Future<void> _loadMarkerDotIcon(
+      MapLibreMapController controller, GeoJsonMarker marker) async {
+    final path = marker.dotAssetPath;
+    if (path == null || _registeredDotImageIds.contains(path)) return;
+    try {
+      Uint8List? bytes;
+      if (path.startsWith('http')) {
+        bytes = await CacheController().fetchWithCache(path);
+      } else {
+        final bd = await rootBundle.load(path);
+        bytes = bd.buffer.asUint8List();
+      }
+      if (bytes != null) {
+        await controller.addImage(path, bytes);
+        _registeredDotImageIds.add(path);
+      }
+    } catch (e) {
+      print("_loadMarkerDotIcon $e");
+    }
+  }
+
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
+    await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
@@ -1282,6 +1375,57 @@ class MaplibreMapProvider extends BaseMapProvider {
         'type': 'FeatureCollection',
         'features': [],
       });
+
+      // Register the collision-fallback dot image (style reload wipes images).
+      await _loadDotImage(controller);
+
+      // Layer 0: Collision-fallback dots.
+      // One dot per collision-participating marker, drawn beneath the full
+      // markers. Its symbolSortKey places each dot immediately after its own
+      // full marker in MapLibre's single global collision pass:
+      //   full = collisionBase + (-priority);  dot = collisionBase + 0.6 + (-priority)
+      // Resulting cascade (all via native iconAllowOverlap:false placement):
+      //   • 2 markers collide → winner shows full; loser's full is hidden and
+      //     its small dot places in the gap (marker → dot).
+      //   • marker vs existing dot → the marker's full collides with the dot and
+      //     is hidden, so the marker also falls back to its dot.
+      //   • 2 dots collide → the lower-priority dot is hidden.
+      // The winner never shows a dot: its own dot collides with its own full.
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _dotMarkerLayerId,
+        SymbolLayerProperties(
+          symbolSortKey: ["+", ["get", "collisionBase"], 0.6, _kSortKeyExpression],
+          iconImage: ["get", "dotIcon"],
+          iconSize: 1.0,
+          iconAnchor: "center",
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
+          // Mirror the per-type zoom visibility of the full markers: text (base
+          // 0) and icon-with-sectionId (base 3000) only appear from zoom 18;
+          // everything else fades in 12→14 like the normal icon markers.
+          iconOpacity: [
+            "case",
+            [
+              "any",
+              ["==", ["get", "collisionBase"], 0],
+              ["==", ["get", "collisionBase"], 3000],
+            ],
+            ["step", ["zoom"], 0.0, 18, 1.0],
+            ["interpolate", ["linear"], ["zoom"], 12.0, 0.0, 14.0, 1.0],
+          ],
+        ),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+        ],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
 
       // Layer 1: Normal text markers (no icon, no bearing)
       await controller.addSymbolLayer(
@@ -1724,8 +1868,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["literal", [0, 1.2]],
             ["literal", [0, 1.2]]
           ],
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
         ),
         filter: [
           "all",
