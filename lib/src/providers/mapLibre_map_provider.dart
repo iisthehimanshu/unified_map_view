@@ -1850,7 +1850,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         _overlapOverrideMarkerLayerId,
         SymbolLayerProperties(
-          symbolSortKey: ["+", 11000, _kSortKeyExpression],
+          symbolSortKey: ["+", 15000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
           iconSize: 0.8,
           iconAnchor: ["get", "iconAnchor"],
