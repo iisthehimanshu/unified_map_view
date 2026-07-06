@@ -56,8 +56,8 @@ class BuildingData {
 
 class Building {
   final String id;
-  final String initialBuildingName;
-  final String initialVenueName;
+  final String? initialBuildingName;
+  final String? initialVenueName;
   final String buildingName;
   final String venueName;
   final String? venueCategory;
@@ -174,8 +174,8 @@ class Building {
 
 class Campus extends CampusResponse{
   final String id;
-  final String initialBuildingName;
-  final String initialVenueName;
+  final String? initialBuildingName;
+  final String? initialVenueName;
   final String buildingName;
   final String venueName;
   final String? venueCategory;

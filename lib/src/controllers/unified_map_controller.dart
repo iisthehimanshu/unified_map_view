@@ -538,13 +538,39 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> annotatePath({required List<String> bids, required int sourceFloor}) async {
+  Future<void> annotatePath({required List<String> bids, required int sourceFloor, bool isTour = false}) async {
     deSelectLocation();
+    _annotationController.isTourPath = isTour;
     if(RenderingTheme.current.isZoo)await currentProviderImplementation.addMapFade(_currentMapController);
     for (var bid in bids) {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }
     await _annotationController.annotatePath(sourceFloor);
+    notifyListeners();
+  }
+
+  /// Recolors the drawn path so the leg up to the [nextStopNumber]-th stop uses
+  /// [activeColor] and the remainder uses [upcomingColor], without moving the
+  /// camera or clearing the traversed overlay. Call each time the next stop
+  /// advances during multi-point navigation.
+  Future<void> recolorPathUpToStop(
+    int nextStopNumber, {
+    String activeColor = "#448AFF",
+    String upcomingColor = "#72a3f7",
+  }) async {
+    await _annotationController.recolorPathUpToStop(
+      nextStopNumber,
+      activeColor: activeColor,
+      upcomingColor: upcomingColor,
+    );
+    notifyListeners();
+  }
+
+  /// Repaints the whole path a single [color] and clears the traversed overlay,
+  /// returning it to its pre-navigation preview look. Call when guided
+  /// navigation is exited.
+  Future<void> resetPathColoring({String color = "#448AFF"}) async {
+    await _annotationController.resetPathColoring(color: color);
     notifyListeners();
   }
 

@@ -64,14 +64,14 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'NationalZoologicalPark',
+        venueName: 'RGCI',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
           bearing: 0.0,
           tilt: 0.0
         ),
-      url: "https://maps.iwayplus.in",
+      url: "https://dev.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
           MapProvider.mappls: MapplsMapProvider()}
@@ -101,7 +101,68 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   // }
 
   void localizeUser(){
-    _unifiedMapController.localizeUser(User(MapLocation(latitude: 17.443003846371283, longitude: 78.36624414341532), "69e88519412aec622fc75536", 0));
+    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.716439358009897, longitude: 77.1109546329173), "65d88662db333f894570bad3", 0));
+  }
+
+  void moveUser() {
+    // Restart any in-progress animation.
+    _moveUserTimer?.cancel();
+    if (path.length < 2) return;
+
+    // Build a smooth trail by interpolating extra points between each pair of
+    // consecutive path nodes, so the user glides along the route (and the grey
+    // traversed overlay gets frequent projection updates) instead of jumping.
+    const stepsPerSegment = 10;
+    final trail = <User>[];
+    for (var i = 0; i < path.length - 1; i++) {
+      final a = path[i];
+      final b = path[i + 1];
+      final aLat = (a['lat'] as num).toDouble();
+      final aLng = (a['lng'] as num).toDouble();
+      final bLat = (b['lat'] as num).toDouble();
+      final bLng = (b['lng'] as num).toDouble();
+      final bid = a['bid'] as String;
+      final floor = (a['floor'] as num).toInt();
+
+      for (var s = 0; s < stepsPerSegment; s++) {
+        final t = s / stepsPerSegment;
+        trail.add(
+          User(
+            MapLocation(
+              latitude: aLat + (bLat - aLat) * t,
+              longitude: aLng + (bLng - aLng) * t,
+            ),
+            bid,
+            floor,
+          ),
+        );
+      }
+    }
+    // Include the final node exactly.
+    final last = path.last;
+    trail.add(
+      User(
+        MapLocation(
+          latitude: (last['lat'] as num).toDouble(),
+          longitude: (last['lng'] as num).toDouble(),
+        ),
+        last['bid'] as String,
+        (last['floor'] as num).toInt(),
+      ),
+    );
+
+    var index = 0;
+    _moveUserTimer = Timer.periodic(const Duration(milliseconds: 300), (timer) {
+      if (index >= trail.length) {
+        timer.cancel();
+        return;
+      }
+      // Use localizeUser (not moveUser): the first call creates the user
+      // marker, and later calls with the same bid/floor route to moveUser
+      // internally, which is what draws the grey traversed path.
+      _unifiedMapController.localizeUser(trail[index]);
+      index++;
+    });
   }
 
   void _stopMovingUser() {
@@ -109,10 +170,10 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   }
 
   var path = [
-    {"node": 3897251, "x": 1187, "y": 1068, "lat": 17.443003846371283, "lng": 78.36624414341532, "ttsEnabled": true, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": true, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
-    {"node": 3780534, "x": 1206, "y": 1036, "lat": 17.44313680329257, "lng": 78.36623342162618, "ttsEnabled": false, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
-    {"node": 3780534, "x": 1206, "y": 1036, "lat": 17.443180266500633, "lng": 78.36628798157611, "ttsEnabled": false, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
-    {"node": 3036008, "x": 872, "y": 832, "lat": 17.44309958389197 ,"lng": 78.36628466337953, "ttsEnabled": true, "bid": "69e88519412aec622fc75536", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null, "destinationLat":17.44298967296045, "destinationLng": 78.36628052448958, "name":"Destination"}
+    {"node": 3897251, "x": 112, "y": 82, "lat": 28.716439358009897, "lng": 77.1109546329173, "ttsEnabled": true, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": true, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
+    {"node": 3780534, "x": 115, "y": 82, "lat": 28.71644644755438, "lng": 77.11096073708924, "ttsEnabled": false, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
+    {"node": 3780534, "x": 115, "y": 92, "lat": 28.716429974372552, "lng": 77.11098567502565, "ttsEnabled": false, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
+    {"node": 3036008, "x": 113, "y": 104, "lat": 28.716406312087642 ,"lng": 77.11101218917014, "ttsEnabled": true, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null, "destinationLat":28.716406312087642, "destinationLng": 77.11101218917014, "name":"Destination"}
   ];
 
   @override
@@ -188,7 +249,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                       child: ElevatedButton.icon(
                         onPressed: (){
                           _unifiedMapController.addPath(path: path);
-                          _unifiedMapController.annotatePath(bids: ["6998011da89f89231fabc59f"], sourceFloor: 0);
+                          _unifiedMapController.annotatePath(bids: ["65d88662db333f894570bad3"], sourceFloor: 0);
                         },
                         icon: const Icon(Icons.play_arrow, size: 16),
                         style: ElevatedButton.styleFrom(
@@ -211,6 +272,34 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                         foregroundColor: Colors.white,
                       ),
                       label: const Text('Clear'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: moveUser,
+                        icon: const Icon(Icons.directions_walk, size: 16),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.deepPurple,
+                          foregroundColor: Colors.white,
+                        ),
+                        label: const Text('Move User'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _stopMovingUser,
+                        icon: const Icon(Icons.stop, size: 16),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                        label: const Text('Stop'),
+                      ),
                     ),
                   ],
                 ),

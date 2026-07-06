@@ -32,6 +32,11 @@ class AnnotationController{
   List<MapLocation> _pathPoints = [];
   String? _greyPathPolylineId;
 
+  /// The floor most recently drawn by [annotatePath]. Reused by
+  /// [recolorPathUpToStop] so a recolor redraws the same floor without the
+  /// caller having to track it.
+  int _lastSourceFloor = 0;
+
   /// How far the user has progressed along [_pathPoints], as a segment index.
   /// Used to keep the grey "traversed" overlay monotonic so it can't jump
   /// across loops/self-intersections in the path (which produced lines that
@@ -230,14 +235,27 @@ class AnnotationController{
     return true;
   }
 
-  Future<bool> annotatePath(int sourceFloor) async {
+  /// Draws the stored [_path] on [sourceFloor].
+  ///
+  /// [fitCamera] refits the camera to the whole path when true (the default for
+  /// an initial draw); pass false for an in-place redraw (e.g. a recolor) so the
+  /// camera isn't yanked away from the user mid-navigation.
+  ///
+  /// [resetProjection] clears the grey "traversed" overlay and its projection
+  /// history when true (the default). Pass false to preserve the already-walked
+  /// greying across a redraw.
+  Future<bool> annotatePath(int sourceFloor,
+      {bool fitCamera = true, bool resetProjection = true}) async {
     if (_path == null) return false;
     dev.log("_path in annotate path $_path");
+    _lastSourceFloor = sourceFloor;
     _pathPoints.clear();
-    _lastProjectionIndex = 0;
-    _projectionHistory.clear();
+    if (resetProjection) {
+      _lastProjectionIndex = 0;
+      _projectionHistory.clear();
+      _unifiedMapController.removePolyline('greyTraversed_');
+    }
     _unifiedMapController.removePolyline("path");
-    _unifiedMapController.removePolyline('greyTraversed_');
 
     for (var entry in _path!.entries) {
       final bid = entry.key;
@@ -295,9 +313,66 @@ class AnnotationController{
     // Annotate turn highlights over the drawn path
     // await _annotateTurnHighlights(sourceFloor);
 
-    fitPathInScreen();
+    if (fitCamera) fitPathInScreen();
 
     return true;
+  }
+
+  /// Recolors the drawn path so that cells up to and including the
+  /// [nextStopNumber]-th [Cell.pathStop] marker use [activeColor] (the leg the
+  /// user is currently travelling) and every cell after it uses [upcomingColor]
+  /// (legs to be covered after the next stop). Redraws the path polylines in
+  /// place — no camera refit and the grey traversed overlay is preserved, so it
+  /// is safe to call mid-navigation each time the next stop advances.
+  ///
+  /// [nextStopNumber] is 1-based: 1 = the first stop, 2 = the second, etc. When
+  /// there are fewer than [nextStopNumber] stops ahead (heading to the final
+  /// destination) the whole path stays [activeColor].
+  Future<void> recolorPathUpToStop(
+    int nextStopNumber, {
+    String activeColor = "#448AFF",
+    String upcomingColor = "#9FB6D4",
+  }) async {
+    if (_path == null) return;
+
+    // Walk the stored path cells in draw order, colouring each cell and
+    // flipping to [upcomingColor] once the next stop's marker has been passed.
+    int stopsSeen = 0;
+    bool pastNextStop = false;
+    for (final floors in _path!.values) {
+      for (final segments in floors.values) {
+        for (final segment in segments) {
+          for (final cell in segment) {
+            cell.color = pastNextStop ? upcomingColor : activeColor;
+            if (cell.pathStop) {
+              stopsSeen++;
+              if (stopsSeen >= nextStopNumber) pastNextStop = true;
+            }
+          }
+        }
+      }
+    }
+
+    await annotatePath(_lastSourceFloor,
+        fitCamera: false, resetProjection: false);
+  }
+
+  /// Repaints the whole drawn path a single [color] and clears the grey
+  /// traversed overlay, returning the route to its pre-navigation preview look.
+  /// Used when guided navigation is exited. No camera refit.
+  Future<void> resetPathColoring({String color = "#448AFF"}) async {
+    if (_path == null) return;
+    for (final floors in _path!.values) {
+      for (final segments in floors.values) {
+        for (final segment in segments) {
+          for (final cell in segment) {
+            cell.color = color;
+          }
+        }
+      }
+    }
+    await annotatePath(_lastSourceFloor,
+        fitCamera: false, resetProjection: true);
   }
 
   /// Runs TurnHighlighter over the collected path points for [sourceFloor] and
@@ -375,6 +450,14 @@ class AnnotationController{
     double dy = end.latitude - start.latitude;
     double distance = math.sqrt(dx * dx + dy * dy);
 
+    // Degenerate case: start and end coincide (distance == 0). Dividing by
+    // distance below would yield NaN coordinates, which then poison the whole
+    // polyline GeoJSON source (setGeoJsonSource throws on NaN). Return a simple
+    // two-point line instead of a curve.
+    if (distance == 0) {
+      return [start, end];
+    }
+
     // Adjust curve height based on distance (20% of distance)
     double curveHeight = distance * 0.4;
 
@@ -433,8 +516,14 @@ class AnnotationController{
     await _unifiedMapController.addPolyline(polyline);
   }
 
+  /// Whether the currently drawn path belongs to a guided tour. Tours render
+  /// the start/end as tour "stop" markers; regular (including multi-point)
+  /// navigation renders normal source/destination markers even though it also
+  /// has [Cell.pathStop] waypoints. Set by [UnifiedMapController.annotatePath].
+  bool isTourPath = false;
+
   Future<void> _annotatePathMarkers(List<Cell> path) async {
-    bool isTour = path.where((cell)=>cell.pathStop).isNotEmpty;
+    bool isTour = isTourPath;
     for (var cell in path) {
       if(cell.isDestination){
         if(isTour){
@@ -554,8 +643,6 @@ class AnnotationController{
   Future<void> _updateGreyTraversedPath(MapLocation userLocation) async {
     if (_pathPoints.length < 2) return;
 
-    print("userLocation $userLocation");
-
     final projected = _projectPointOntoPolyline(
       userLocation,
       _pathPoints,
@@ -566,6 +653,16 @@ class AnnotationController{
     // If the user is too far from the route, the projection isn't trustworthy —
     // keep the existing grey overlay (and projection index) untouched.
     if (projected.distanceMeters > 2.0) return;
+
+    // Once we have an established position, reject a projection that jumps too
+    // many segments in a single update. Even inside the search window a nearby
+    // parallel segment can win; capping the per-update jump stops that spurious
+    // hit from being recorded (and stitched into grey) as walked route.
+    if (_projectionHistory.isNotEmpty &&
+        (projected.segmentIndex - _lastProjectionIndex).abs() >
+            _maxProjectionJump) {
+      return;
+    }
 
     // Record this projection in walk order. A projection on a different segment
     // (forward or backward) extends the history; one on the same segment just
@@ -588,13 +685,20 @@ class AnnotationController{
     }
 
     // Stitch the grey path through every recorded projection, following the
-    // path geometry between them: start at the first projection, then for each
-    // subsequent projection insert the intermediate path vertices before the
-    // projection point itself. Walking backward inserts those vertices in
-    // reverse. This keeps the line on the route instead of cutting straight
-    // from one projection to the next.
-    final greyPoints = <MapLocation>[_projectionHistory.first.point];
-    var prevSegment = _projectionHistory.first.segmentIndex;
+    // path geometry between them. The grey "traversed" line always begins at the
+    // real route start (_pathPoints.first): seed it with the vertices from the
+    // path start up to the first projection's segment, then the first projection
+    // point itself. Without this, everything between the route start and the
+    // first recorded projection would stay un-greyed. For each subsequent
+    // projection insert the intermediate path vertices before the projection
+    // point (reversed when walking backward) so the line stays on the route
+    // instead of cutting straight from one projection to the next.
+    final firstProjection = _projectionHistory.first;
+    final greyPoints = <MapLocation>[
+      ..._pathPoints.sublist(0, firstProjection.segmentIndex + 1),
+      firstProjection.point,
+    ];
+    var prevSegment = firstProjection.segmentIndex;
     for (var i = 1; i < _projectionHistory.length; i++) {
       final current = _projectionHistory[i];
       if (current.segmentIndex > prevSegment) {
@@ -634,7 +738,26 @@ class AnnotationController{
     await _unifiedMapController.addPolyline(greyPolyline);
   }
 
+  /// How many segments behind [searchFromIndex] the projection may look, to
+  /// allow the user to retrace a little of the route.
+  static const int _projectionBackWindow = 5;
+
+  /// How many segments ahead of [searchFromIndex] the projection may look, to
+  /// allow for forward progress between location updates.
+  static const int _projectionForwardWindow = 20;
+
+  /// Maximum number of segments a single projection may advance or retreat from
+  /// the last recorded position. Tighter than the search window, this rejects a
+  /// physically-close-but-index-distant segment that still fell inside it.
+  static const int _maxProjectionJump = 8;
+
   /// Result of projecting a point onto a polyline.
+  ///
+  /// The search is restricted to a window of segments around [searchFromIndex]
+  /// so that a segment which is physically close but far away by index (e.g. a
+  /// parallel corridor, switchback or self-intersection) can never win. That
+  /// prevents the grey overlay from filling in a huge stretch of route the user
+  /// never walked.
   ({MapLocation point, int segmentIndex, double distanceMeters}) ?
   _projectPointOntoPolyline(
       MapLocation user,
@@ -643,13 +766,18 @@ class AnnotationController{
       }) {
     if (polyline.length < 2) return null;
 
+    final lastSegment = polyline.length - 2;
+    final start =
+        (searchFromIndex - _projectionBackWindow).clamp(0, lastSegment);
+    final end =
+        (searchFromIndex + _projectionForwardWindow).clamp(0, lastSegment);
+
     MapLocation? bestPoint;
-    int bestIndex = searchFromIndex.clamp(0, polyline.length - 2);
+    int bestIndex = start;
     double bestDist = double.infinity;
 
-    // Search the entire path so the projection can follow the user in either
-    // direction (forward progress or retracing the route).
-    for (int i = 0; i < polyline.length - 1; i++) {
+    // Only search segments within the window around the last known position.
+    for (int i = start; i <= end; i++) {
       final a = polyline[i];
       final b = polyline[i + 1];
 
