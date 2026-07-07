@@ -44,6 +44,11 @@ class MarkerCacheKey {
   final double spacing;
   final Offset? customAnchor;
   final bool expandCanvasForRotation;
+  final FontWeight fontWeight;
+  final bool showPillBorder;
+  final bool pillShadow;
+  final Color pillColor;
+  final double? pillCornerRadius;
 
   MarkerCacheKey({
     required this.text,
@@ -58,6 +63,11 @@ class MarkerCacheKey {
     required this.spacing,
     this.customAnchor,
     required this.expandCanvasForRotation,
+    required this.fontWeight,
+    required this.showPillBorder,
+    required this.pillShadow,
+    required this.pillColor,
+    this.pillCornerRadius,
   });
 
   @override
@@ -75,7 +85,12 @@ class MarkerCacheKey {
         other.strokeWidth == strokeWidth &&
         other.spacing == spacing &&
         other.customAnchor == customAnchor &&
-        other.expandCanvasForRotation == expandCanvasForRotation;
+        other.expandCanvasForRotation == expandCanvasForRotation &&
+        other.fontWeight == fontWeight &&
+        other.showPillBorder == showPillBorder &&
+        other.pillShadow == pillShadow &&
+        other.pillColor == pillColor &&
+        other.pillCornerRadius == pillCornerRadius;
   }
 
   @override
@@ -93,6 +108,11 @@ class MarkerCacheKey {
       spacing,
       customAnchor,
       expandCanvasForRotation,
+      fontWeight,
+      showPillBorder,
+      pillShadow,
+      pillColor,
+      pillCornerRadius,
     );
   }
 }
@@ -148,6 +168,11 @@ class UnifiedMarkerCreator {
     double spacing = 0.0, // logical
     Offset? customAnchor, // normalized if provided
     bool expandCanvasForRotation = false,
+    FontWeight fontWeight = FontWeight.w500,
+    bool showPillBorder = true,
+    bool pillShadow = false,
+    Color pillColor = Colors.white,
+    double? pillCornerRadius, // logical dp; null → default stadium radius
     bool useCache = true, // New parameter to optionally disable cache
   }) async {
     // Create cache key
@@ -164,6 +189,11 @@ class UnifiedMarkerCreator {
       spacing: spacing,
       customAnchor: customAnchor,
       expandCanvasForRotation: expandCanvasForRotation,
+      fontWeight: fontWeight,
+      showPillBorder: showPillBorder,
+      pillShadow: pillShadow,
+      pillColor: pillColor,
+      pillCornerRadius: pillCornerRadius,
     );
 
     // Check cache first
@@ -188,6 +218,11 @@ class UnifiedMarkerCreator {
       spacing: spacing,
       customAnchor: customAnchor,
       expandCanvasForRotation: expandCanvasForRotation,
+      fontWeight: fontWeight,
+      showPillBorder: showPillBorder,
+      pillShadow: pillShadow,
+      pillColor: pillColor,
+      pillCornerRadius: pillCornerRadius,
     );
 
     // Store in cache
@@ -212,6 +247,11 @@ class UnifiedMarkerCreator {
     double spacing = 0.0, // logical
     Offset? customAnchor, // normalized if provided
     bool expandCanvasForRotation = false,
+    FontWeight fontWeight = FontWeight.w500,
+    bool showPillBorder = true,
+    bool pillShadow = false,
+    Color pillColor = Colors.white,
+    double? pillCornerRadius, // logical dp; null → default stadium radius
   }) async {
     final double ratio = ui.window.devicePixelRatio; // device pixel ratio
 
@@ -291,14 +331,14 @@ class UnifiedMarkerCreator {
       final fillStyle = TextStyle(
         fontFamily: 'PT_Sans',
         fontSize: fontSizePx,
-        fontWeight: FontWeight.w500,
+        fontWeight: fontWeight,
         color: textColor,
         height: 1.0,
       );
       final strokeStyle = TextStyle(
         fontFamily: 'PT_Sans',
         fontSize: fontSizePx,
-        fontWeight: FontWeight.w500,
+        fontWeight: fontWeight,
         color: strokeColor,
         height: 1.0,
       );
@@ -529,7 +569,9 @@ class UnifiedMarkerCreator {
       final textOffset = Offset(textX, textY);
 
       // Draw pill background
-      final double pillRadius = (textHeightPx + pillPaddingV * 1.2) / 2;
+      final double pillRadius = pillCornerRadius != null
+          ? pillCornerRadius * ratio
+          : (textHeightPx + pillPaddingV * 1.2) / 2;
 
       final Rect pillRect = Rect.fromLTWH(
         textX - pillPaddingH,
@@ -537,22 +579,38 @@ class UnifiedMarkerCreator {
         textWidthPx + pillPaddingH * 2,
         textHeightPx + pillPaddingV * 2,
       );
+      final RRect pillRRect =
+          RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius));
+
+      // Soft drop shadow beneath the card (gallery-style pill).
+      if (pillShadow) {
+        canvas.drawRRect(
+          pillRRect.shift(Offset(0, 1.5 * ratio)),
+          Paint()
+            ..color = const Color(0x33000000)
+            ..isAntiAlias = true
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3.0 * ratio),
+        );
+      }
+
       canvas.drawRRect(
-        RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
+        pillRRect,
         Paint()
-          ..color = Colors.white
+          ..color = pillColor
           ..isAntiAlias = true
           ..style = PaintingStyle.fill,
       );
 
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius)),
-        Paint()
-          ..color = Colors.black // your border color
-          ..isAntiAlias = true
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = strokeWidthPx * 0.8, // or any fixed px value
-      );
+      if (showPillBorder) {
+        canvas.drawRRect(
+          pillRRect,
+          Paint()
+            ..color = Colors.black // your border color
+            ..isAntiAlias = true
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = strokeWidthPx * 0.8, // or any fixed px value
+        );
+      }
 
       fillPainter.paint(canvas, textOffset);
     }
@@ -665,36 +723,291 @@ class UnifiedMarkerCreator {
     }
   }
 
-  Future<Uint8List> createStopMarkerIcon(String text) async {
-    double? size = 60;
+  /// Separate cache for museum POI markers so their keys never collide with the
+  /// pill-style [_markerCache] entries.
+  static final Map<String, MarkerIconWithAnchor> _poiCache = {};
 
+  /// Renders a museum "POI" marker as a single baked PNG:
+  ///   [ photo card with white frame ]
+  ///            \ /            (downward tail)
+  ///             •             (location dot — the anchor point)
+  ///           Title           (bold, white-haloed, smart-wrapped)
+  ///
+  /// The canvas is padded so the dot sits at the exact geometric centre, and the
+  /// returned anchor is (0.5, 0.5). This lets the MapLibre custom-render layer
+  /// (which only supports the "center"/"bottom" keyword anchors) place the dot
+  /// precisely on the coordinate at every zoom. Title text is baked in, matching
+  /// how the existing custom-rendering markers work.
+  Future<MarkerIconWithAnchor> createMuseumPoiMarker({
+    required String text,
+    String? imageSource,
+    Size cardSize = const Size(90, 76), // logical dp — outer white card
+    double frame = 5.0, // logical — white border thickness
+    double cornerRadius = 16.0,
+    double tailHeight = 12.0,
+    double tailWidth = 20.0,
+    double gapTailToDot = 5.0,
+    double dotOuterRadius = 8.0,
+    double dotInnerRadius = 4.5,
+    double gapDotToText = 7.0,
+    double fontSize = 15.0,
+    Color textColor = const Color(0xFF1A1A1A),
+    Color haloColor = const Color(0xFFFFFFFF),
+    double haloWidth = 3.0,
+    Color dotColor = const Color(0xFF8B1D1D),
+    bool selected = false,
+    Color selectedColor = const Color(0xFFCD084A),
+    bool useCache = true,
+  }) async {
+    final String cacheKey =
+        '$text|$imageSource|${cardSize.width}x${cardSize.height}|$fontSize|$selected';
+    if (useCache && _poiCache.containsKey(cacheKey)) {
+      return _poiCache[cacheKey]!;
+    }
+
+    // When selected, the card/tail frame, the dot core, and the title text all
+    // switch to the highlight colour.
+    final Color frameColor =
+        selected ? selectedColor : const Color(0xFFFFFFFF);
+    final Color effectiveDotColor = selected ? selectedColor : dotColor;
+    final Color effectiveTextColor = selected ? selectedColor : textColor;
+
+    final double ratio = ui.window.devicePixelRatio;
+
+    // Logical → pixel
+    final double cardW = cardSize.width * ratio;
+    final double cardH = cardSize.height * ratio;
+    final double framePx = frame * ratio;
+    final double cornerPx = cornerRadius * ratio;
+    final double tailHPx = tailHeight * ratio;
+    final double tailWPx = tailWidth * ratio;
+    final double gapTailDotPx = gapTailToDot * ratio;
+    final double dotOuterPx = dotOuterRadius * ratio;
+    final double dotInnerPx = dotInnerRadius * ratio;
+    final double gapDotTextPx = gapDotToText * ratio;
+    final double fontSizePx = fontSize * ratio;
+    final double haloPx = haloWidth * ratio;
+
+    // ── Title text painters (real outline via foreground stroke paint) ────────
+    final String formattedText = formatText(text, TextFormat.smartWrap);
+    TextPainter? fillPainter;
+    TextPainter? strokePainter;
+    double textW = 0, textH = 0;
+
+    if (formattedText.isNotEmpty) {
+      strokePainter = TextPainter(
+        text: TextSpan(
+          text: formattedText,
+          style: TextStyle(
+            fontFamily: 'PT_Sans',
+            fontSize: fontSizePx,
+            fontWeight: FontWeight.w700,
+            height: 1.05,
+            foreground: Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = haloPx
+              ..strokeJoin = StrokeJoin.round
+              ..color = haloColor,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      )..layout(minWidth: 0, maxWidth: 300.0 * ratio);
+
+      fillPainter = TextPainter(
+        text: TextSpan(
+          text: formattedText,
+          style: TextStyle(
+            fontFamily: 'PT_Sans',
+            fontSize: fontSizePx,
+            fontWeight: FontWeight.w700,
+            height: 1.05,
+            color: effectiveTextColor,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      )..layout(minWidth: 0, maxWidth: 300.0 * ratio);
+
+      textW = fillPainter.width;
+      textH = fillPainter.height;
+    }
+
+    // ── Vertical geometry, centred on the dot ─────────────────────────────────
+    // Distance from dot-centre up to the top of the canvas, and down to bottom.
+    final double aboveDot =
+        cardH + tailHPx + gapTailDotPx + dotOuterPx;
+    final double belowDot =
+        dotOuterPx + (textH > 0 ? gapDotTextPx + textH : 0);
+    final double halfMax = max(aboveDot, belowDot);
+
+    final double canvasHf = halfMax * 2;
+    final double canvasWf = max(cardW, textW) + haloPx * 2;
+
+    final int canvasW = max(1, canvasWf.ceil());
+    final int canvasH = max(1, canvasHf.ceil());
+
+    final double centerX = canvasWf / 2;
+    final double dotCenterY = halfMax;
+
+    final double cardX = centerX - cardW / 2;
+    final double cardTop = dotCenterY - aboveDot;
+    final double cardBottom = cardTop + cardH;
+
+    // ── Draw ──────────────────────────────────────────────────────────────────
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
-    // White outer ring
-    canvas.drawCircle(
-      Offset(size / 2, size / 2),
-      30,
-      Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.fill,
+    final cardRect = Rect.fromLTWH(cardX, cardTop, cardW, cardH);
+    final cardRRect =
+        RRect.fromRectAndRadius(cardRect, Radius.circular(cornerPx));
+
+    // Tail path (rounded triangle) pointing down toward the dot.
+    final tailPath = Path()
+      ..moveTo(centerX - tailWPx / 2, cardBottom - 1)
+      ..lineTo(centerX + tailWPx / 2, cardBottom - 1)
+      ..lineTo(centerX, cardBottom + tailHPx)
+      ..close();
+
+    // Soft drop shadow for the card + tail.
+    final shadowPaint = Paint()
+      ..color = const Color(0x33000000)
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3.0 * ratio);
+    canvas.drawRRect(cardRRect.shift(Offset(0, 1.5 * ratio)), shadowPaint);
+    canvas.drawPath(tailPath.shift(Offset(0, 1.5 * ratio)), shadowPaint);
+
+    final framePaint = Paint()
+      ..color = frameColor
+      ..isAntiAlias = true;
+    canvas.drawPath(tailPath, framePaint);
+    canvas.drawRRect(cardRRect, framePaint);
+
+    // Photo, cover-fit inside the inner (framed) rounded rect.
+    final innerRect = Rect.fromLTWH(
+      cardX + framePx,
+      cardTop + framePx,
+      cardW - framePx * 2,
+      cardH - framePx * 2,
+    );
+    final innerRRect = RRect.fromRectAndRadius(
+      innerRect,
+      Radius.circular(max(0, cornerPx - framePx * 0.6)),
     );
 
-    // Blue inner circle
+    ui.Image? photo;
+    if (imageSource != null && imageSource.isNotEmpty) {
+      try {
+        Uint8List? bytes;
+        if (imageSource.startsWith('http')) {
+          bytes = await CacheController().fetchWithCache(imageSource);
+        } else {
+          final bd = await rootBundle.load(imageSource);
+          bytes = bd.buffer.asUint8List();
+        }
+        if (bytes != null) {
+          final completer = Completer<ui.Image>();
+          ui.decodeImageFromList(bytes, (img) => completer.complete(img));
+          photo = await completer.future;
+        }
+      } catch (e) {
+        print('⚠️ POI image load failed: $e');
+        photo = null;
+      }
+    }
+
+    canvas.save();
+    canvas.clipRRect(innerRRect);
+    if (photo != null) {
+      final double imgW = photo.width.toDouble();
+      final double imgH = photo.height.toDouble();
+      // BoxFit.cover: scale up so the photo fills the box, crop the overflow.
+      final double scale = max(innerRect.width / imgW, innerRect.height / imgH);
+      final double srcW = innerRect.width / scale;
+      final double srcH = innerRect.height / scale;
+      final Rect srcRect = Rect.fromLTWH(
+        (imgW - srcW) / 2,
+        (imgH - srcH) / 2,
+        srcW,
+        srcH,
+      );
+      canvas.drawImageRect(
+        photo,
+        srcRect,
+        innerRect,
+        Paint()
+          ..isAntiAlias = true
+          ..filterQuality = FilterQuality.high,
+      );
+    } else {
+      canvas.drawRect(innerRect, Paint()..color = const Color(0xFFE0E0E0));
+    }
+    canvas.restore();
+
+    // Location dot (white ring + coloured core).
     canvas.drawCircle(
-      Offset(size / 2, size / 2),
-      24,
+      Offset(centerX, dotCenterY),
+      dotOuterPx,
       Paint()
-        ..color = Colors.blue
-        ..style = PaintingStyle.fill,
+        ..color = const Color(0xFFFFFFFF)
+        ..isAntiAlias = true,
+    );
+    canvas.drawCircle(
+      Offset(centerX, dotCenterY),
+      dotInnerPx,
+      Paint()
+        ..color = effectiveDotColor
+        ..isAntiAlias = true,
     );
 
-    // Segment number text (segmentIndex + 1 for 1-based display)
-    final textPainter = TextPainter(
+    // Title text, centred below the dot.
+    if (fillPainter != null && strokePainter != null) {
+      final double textTop = dotCenterY + dotOuterPx + gapDotTextPx;
+      final double textX = centerX - textW / 2;
+      strokePainter.paint(canvas, Offset(textX, textTop));
+      fillPainter.paint(canvas, Offset(textX, textTop));
+    }
+
+    final ui.Image finalImage =
+        await recorder.endRecording().toImage(canvasW, canvasH);
+    final ByteData? pngData =
+        await finalImage.toByteData(format: ui.ImageByteFormat.png);
+    if (pngData == null) {
+      throw Exception('Failed to encode museum POI marker to PNG.');
+    }
+
+    final result = MarkerIconWithAnchor(
+      pngData.buffer.asUint8List(),
+      const Offset(0.5, 0.5),
+    );
+    if (useCache) _poiCache[cacheKey] = result;
+    return result;
+  }
+
+  /// Path-stop marker: a circle carrying [text] (the stop number).
+  ///  • Non-museum: white ring + blue core + white number.
+  ///  • Museum: plain white circle + dark-maroon (#550005) number, and when
+  ///    [stopName] is provided it is drawn as a label below the circle.
+  ///
+  /// The circle is kept at the vertical centre of the canvas (extra transparent
+  /// padding is added above to balance the label below) so the priority layer's
+  /// default "center" anchor still lands the circle on the coordinate.
+  Future<Uint8List> createStopMarkerIcon(
+    String text, {
+    bool museum = false,
+    String stopName = "",
+  }) async {
+    const double diameter = 60;
+    const double radius = 30;
+    const double labelGap = 8; // circle → label
+    const Color museumColor = Color(0xFF550005);
+    final bool hasLabel = museum && stopName.trim().isNotEmpty;
+
+    // Number shown inside the circle.
+    final numberPainter = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
-          color: Colors.white,
+          color: museum ? museumColor : Colors.white,
           fontSize: 22,
           fontWeight: FontWeight.w700,
         ),
@@ -702,17 +1015,103 @@ class UnifiedMarkerCreator {
       textDirection: TextDirection.ltr,
     )..layout();
 
-    textPainter.paint(
+    // Stop-name label (museum only), dark maroon with a white halo for contrast.
+    TextPainter? labelFill;
+    TextPainter? labelHalo;
+    double labelW = 0, labelH = 0;
+    if (hasLabel) {
+      labelHalo = TextPainter(
+        text: TextSpan(
+          text: stopName,
+          style: TextStyle(
+            fontFamily: 'PT_Sans',
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            height: 1.1,
+            foreground: Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 3
+              ..strokeJoin = StrokeJoin.round
+              ..color = Colors.white,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      )..layout(minWidth: 0, maxWidth: 160);
+
+      labelFill = TextPainter(
+        text: TextSpan(
+          text: stopName,
+          style: const TextStyle(
+            fontFamily: 'PT_Sans',
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            height: 1.1,
+            color: museumColor,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+      )..layout(minWidth: 0, maxWidth: 160);
+
+      labelW = labelFill.width;
+      labelH = labelFill.height;
+    }
+
+    // Symmetric canvas so the circle centre is the canvas centre.
+    final double belowHalf =
+        hasLabel ? radius + labelGap + labelH : radius;
+    final double halfHeight = max(radius, belowHalf);
+    final double canvasW = max(diameter, labelW);
+    final double canvasH = halfHeight * 2;
+    final double centerX = canvasW / 2;
+    final double centerY = halfHeight;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // White outer circle (both themes).
+    canvas.drawCircle(
+      Offset(centerX, centerY),
+      radius,
+      Paint()
+        ..color = Colors.white
+        ..isAntiAlias = true
+        ..style = PaintingStyle.fill,
+    );
+
+    // Blue inner circle — omitted in the museum theme (outer circle only).
+    if (!museum) {
+      canvas.drawCircle(
+        Offset(centerX, centerY),
+        24,
+        Paint()
+          ..color = Colors.blue
+          ..isAntiAlias = true
+          ..style = PaintingStyle.fill,
+      );
+    }
+
+    // Stop number, centred in the circle.
+    numberPainter.paint(
       canvas,
       Offset(
-        (size / 2) - (textPainter.width / 2),
-        (size / 2) - (textPainter.height / 2),
+        centerX - numberPainter.width / 2,
+        centerY - numberPainter.height / 2,
       ),
     );
 
+    // Stop name, centred below the circle (museum only).
+    if (hasLabel) {
+      final double labelTop = centerY + radius + labelGap;
+      final double labelX = centerX - labelW / 2;
+      labelHalo!.paint(canvas, Offset(labelX, labelTop));
+      labelFill!.paint(canvas, Offset(labelX, labelTop));
+    }
+
     final image = await recorder
         .endRecording()
-        .toImage(size.toInt(), size.toInt());
+        .toImage(canvasW.ceil(), canvasH.ceil());
 
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     return byteData!.buffer.asUint8List();

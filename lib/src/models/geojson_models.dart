@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import 'package:unified_map_view/src/utils/LandmarkAssetType.dart';
 
+import '../enums/Theme.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../utils/renderingUtilities.dart';
@@ -356,12 +357,29 @@ class GeoJsonMarker {
       dotAssetPath = LandmarkAssetType.pawDot.assetPath;
     }
 
+    // Museum POI: same extraction flow as animalRef, only the on-map rendering
+    // differs (handled in the provider's _loadMarkerIcon via createMuseumPoiMarker).
+    // Gated behind the museum theme so other themes ignore poiRef features.
+    final poiPhotos = feature.properties?["poiRef"]?['photos'];
+    if(RenderingTheme.current.isMuseum && poiPhotos is List && poiPhotos.isNotEmpty && pick(poiPhotos.first) != null){
+      assetPath = poiPhotos.first;
+      textVisibility=true;
+      customRendering=true;
+      dotAssetPath = LandmarkAssetType.roomDot.assetPath;
+    }
+
     if(asset != null){
       assetPath ??= asset.assetPath;
       iconName = assetPath?.split('/').last.split('.').first;
       textVisibility = asset.textVisibility;
       anchor = asset.anchor;
       feature.properties?['bearing'] = null;
+      // Gallery landmarks bake their title into a bold white card (like animal/POI
+      // markers) instead of showing plain native map text, so route them through
+      // the custom-rendering pill path.
+      if(asset == LandmarkAssetType.gallery){
+        customRendering = true;
+      }
     }
 
     String? polyId = feature.properties?["polyId"];
@@ -373,6 +391,8 @@ class GeoJsonMarker {
     parsedTitle =
         pick(feature.properties?["animalRef"]?["render_name"]?[AppConfig.languageCode]) ??
             pick(feature.properties?["animalRef"]?["common_name"]?[AppConfig.languageCode]) ??
+            pick(feature.properties?["poiRef"]?["name"]?[AppConfig.languageCode]) ??
+            pick(feature.properties?["poiRef"]?["locationName"]?[AppConfig.languageCode]) ??
             pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
             pick(feature.properties?["sponsorRef"]?["name"]);
 

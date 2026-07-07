@@ -47,7 +47,8 @@ enum LandmarkAssetType {
   start,
   stop,
   roomDot,
-  pawDot
+  pawDot,
+  gallery
   ;
 
   String get assetPath {
@@ -146,6 +147,8 @@ enum LandmarkAssetType {
         return 'packages/unified_map_view/assets/markers/room_dot.png';
       case LandmarkAssetType.pawDot:
         return 'packages/unified_map_view/assets/markers/paw.png';
+      case LandmarkAssetType.gallery:
+        return 'packages/unified_map_view/assets/markers/Gallery.png';
     }
   }
 
@@ -201,6 +204,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.ramp:
       case LandmarkAssetType.mainEntry:
       case LandmarkAssetType.waterPoint:
+      case LandmarkAssetType.gallery:
         return true;
     }
   }
@@ -228,6 +232,7 @@ enum LandmarkAssetType {
       case LandmarkAssetType.stop:
       case LandmarkAssetType.roomDot:
       case LandmarkAssetType.pawDot:
+      case LandmarkAssetType.gallery:
         return const Offset(0.5, 0.5);
 
       case LandmarkAssetType.room:

@@ -168,7 +168,7 @@ class PredefinedMarkers{
     );
   }
 
-  static GeoJsonMarker getPathStopMarker(MapLocation location, String id, {String title = ""}){
+  static GeoJsonMarker getPathStopMarker(MapLocation location, String id, {String title = "", String stopName = ""}){
     return GeoJsonMarker(
         id: id,
         position: location,
@@ -184,6 +184,7 @@ class PredefinedMarkers{
         properties: {
           "fontSize":10.0,
           "pathStop": true,
+          "stopName": stopName,
         }
     );
   }

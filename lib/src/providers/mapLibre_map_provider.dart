@@ -13,6 +13,7 @@ import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
 import '../utils/renderingUtilities.dart';
+import '../enums/Theme.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -248,8 +249,20 @@ class MaplibreMapProvider extends BaseMapProvider {
               if (_rotatingSymbols.isNotEmpty) {
                 await setGeoJsonSource(_controller!, _rotatingSymbols, _rotationSourceId);
               }
-              // Re-push polygons, polylines, and circles that existed before reload
+              // Re-push polygons, polylines, and circles that existed before reload.
+              // Style reload wipes addImage() pattern bitmaps too, so re-register
+              // them BEFORE re-pushing the source — otherwise fill-pattern resolves
+              // to a missing image and the polygon renders grey.
               if (_polygons.isNotEmpty) {
+                await Future.wait(
+                  _polygons.map((polygon) async {
+                    try {
+                      await RenderingUtilities.registerLandmarkPattern(_controller!, polygon);
+                    } catch (e) {
+                      print('Warning: failed to re-register pattern for ${polygon.id}: $e');
+                    }
+                  }),
+                );
                 await _updatePolygonSource(_controller!);
               }
               if (_lines.isNotEmpty) {
@@ -791,6 +804,10 @@ class MaplibreMapProvider extends BaseMapProvider {
             'boundary':marker.properties?["type"]=="Boundary",
             'isSelected': marker.id == selectedMarkerId,
             'customRendering':marker.customRendering,
+            // POI markers bake a separate '<id>-selected' highlight image; this
+            // flag tells the selected-marker layer to use it.
+            'hasSelectedIcon': RenderingTheme.current.isMuseum &&
+                marker.properties?['poiRef'] != null,
             'overlapOverride': _overlapOverrideIds.any((id) => marker.id.contains(id)),
             // Numeric priority used by symbolSortKey: higher value → higher sort
             // precedence (wins collision). Negated inside the layer expression.
@@ -985,7 +1002,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         String? selectPolygonId,
       }) async {
     if (!_isPolygonLayersEnabled) {
-      print("Polygon layers not enabled yet");
       return;
     }
 
@@ -1070,6 +1086,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       };
     }).toList();
+
+    final patternKeys = features
+        .where((f) => (f['properties'] as Map)['hasPattern'] == true)
+        .map((f) => (f['properties'] as Map)['pattern'])
+        .toList();
 
     await controller.setGeoJsonSource(
       _polygonSourceId,
@@ -1194,7 +1215,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       };
     }).toList();
-
     await controller.setGeoJsonSource(
       _polylineSourceId,
       {
@@ -1281,35 +1301,84 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
+        // Museum POI marker: photo card + tail + dot + title, baked into one PNG.
+        // Anchor is (0.5, 0.5) so the "center" keyword anchor lands the dot on
+        // the coordinate. Same image is used for the zoomed-out "-small" variant
+        // so the anchor stays consistent across the custom-render layer's zoom
+        // icon swap.
+        if(RenderingTheme.current.isMuseum && marker.properties?['poiRef'] != null){
+          final poiMarker = await creator.createMuseumPoiMarker(
+            text: marker.textVisibility ? marker.title ?? "" : "",
+            imageSource: marker.assetPath,
+          );
+          await controller.addImage(marker.id, poiMarker.icon);
+          await controller.addImage("${marker.id}-small", poiMarker.icon);
+          // Highlighted (#CD084A) variant used by the selected-marker layer when
+          // this POI is tapped.
+          final poiSelected = await creator.createMuseumPoiMarker(
+            text: marker.textVisibility ? marker.title ?? "" : "",
+            imageSource: marker.assetPath,
+            selected: true,
+          );
+          await controller.addImage("${marker.id}-selected", poiSelected.icon);
+          marker.anchor = poiMarker.anchor;
+          return true;
+        }
         if(marker.properties?['pathStop']??false){
-          final Uint8List iconBytes = await creator.createStopMarkerIcon(marker.title??"");
+          final Uint8List iconBytes = await creator.createStopMarkerIcon(
+            marker.title??"",
+            museum: RenderingTheme.current.isMuseum,
+            stopName: marker.properties?['stopName'] ?? "",
+          );
           await controller.addImage(marker.id, iconBytes);
           return true;
         }else{
           double fontSize = marker.properties?["fontSize"]??14.5;
           Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+          // Gallery landmarks use a bold, shadowed, border-less translucent card
+          // on a slightly smaller icon.
+          final bool isGallery =
+              marker.assetPath?.contains('Gallery.png') ?? false;
+          final FontWeight pillWeight =
+              isGallery ? FontWeight.w700 : FontWeight.w500;
+          final double pillFontSize = isGallery ? 14.0 : fontSize;
+          final Size markerImageSize = isGallery
+              ? const Size(62, 62)
+              : (marker.imageSize ?? const Size(85, 85));
+          final Color pillColor =
+              isGallery ? Colors.white.withOpacity(0.82) : Colors.white;
           MarkerIconWithAnchor markerIconWithAnchorWithText =
           await creator.createUnifiedMarker(
-            imageSize: marker.imageSize ?? const Size(85, 85),
-            fontSize: fontSize,
+            imageSize: markerImageSize,
+            fontSize: pillFontSize,
             text: marker.textVisibility? marker.title??"":"",
             imageSource: marker.assetPath,
             layout: MarkerLayout.vertical,
             textFormat: TextFormat.smartWrap,
             textColor: const Color(0xff000000),
             customAnchor: customAnchor,
+            fontWeight: pillWeight,
+            showPillBorder: !isGallery,
+            pillShadow: isGallery,
+            pillColor: pillColor,
+            pillCornerRadius: isGallery ? 10.0 : null,
             expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
           );
           MarkerIconWithAnchor markerIconWithAnchorWithoutText =
           await creator.createUnifiedMarker(
-            imageSize: marker.imageSize ?? const Size(85, 85),
-            fontSize: fontSize,
+            imageSize: markerImageSize,
+            fontSize: pillFontSize,
             text: "",
             imageSource: marker.assetPath,
             layout: MarkerLayout.vertical,
             textFormat: TextFormat.smartWrap,
             textColor: const Color(0xff000000),
             customAnchor: customAnchor,
+            fontWeight: pillWeight,
+            showPillBorder: !isGallery,
+            pillShadow: isGallery,
+            pillColor: pillColor,
+            pillCornerRadius: isGallery ? 10.0 : null,
           );
           final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
           final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
@@ -1635,6 +1704,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          // When selected, the marker is drawn (and highlighted) by the selected
+          // layer instead; excluding it here avoids the base image colliding with
+          // or peeking out from behind the highlighted one.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["to-boolean", ["get", "customRendering"]],
           ["to-boolean", ["get", "icon"]],
         ],
@@ -1910,7 +1983,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         _selectedMarkerLayerId,
         SymbolLayerProperties(
           symbolSortKey: ["+", 8000, _kSortKeyExpression],
-          iconImage: ["get", "icon"],
+          iconImage: [
+            "case",
+            ["to-boolean", ["get", "hasSelectedIcon"]],
+            ["concat", ["get", "icon"], "-selected"],
+            ["get", "icon"],
+          ],
           iconSize: [
             "interpolate",
             ["linear"],

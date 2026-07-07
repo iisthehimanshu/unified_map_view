@@ -25,10 +25,11 @@ class Cell{
   double? destinationLat;
   double? destinationLng;
   String? name;
+  String? stopName;
   List<String>? stopItems;
   bool pathStop;
 
-  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.pathStop = false, this.stopItems, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType, this.color, this.destinationLat, this.destinationLng, this.name});
+  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.pathStop = false, this.stopItems, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType, this.color, this.destinationLat, this.destinationLng, this.name, this.stopName});
 
   Map<String, dynamic> toJson() => {
     'node': node,
@@ -60,6 +61,7 @@ class Cell{
     'destinationLat':destinationLat,
     'destinationLng':destinationLng,
     'name':name,
+    'stopName':stopName,
     'stopItems':stopItems,
     'pathStop':pathStop
   };
@@ -102,6 +104,7 @@ class Cell{
       destinationLat: json['destinationLat'],
       destinationLng: json['destinationLng'],
       name: json['name'],
+      stopName: json['stopName'],
         stopItems: json['stopItems'],
         pathStop: json['pathStop']??false
     );
