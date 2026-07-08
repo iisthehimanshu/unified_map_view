@@ -273,7 +273,7 @@ class AnnotationController{
 
           for (int i = 0; i < path.length; i++) {
             final point = path[i];
-            final color = point.color ?? "#448AFF"; // default color
+            final color = point.color ?? "#6B0D12"; // default color
 
             final mapLocation =
             MapLocation(latitude: point.lat, longitude: point.lng);

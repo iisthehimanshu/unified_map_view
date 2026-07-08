@@ -142,7 +142,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               tilt: config.initialLocation.tilt,
               bearing: config.initialLocation.bearing
           ),
-          // styleString: osmRasterStyle,
+          styleString: osmRasterStyle,
           onMapCreated: (MaplibreMapController controller) async {
             _config = config;
             _controller = controller;
@@ -286,6 +286,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                 final zoom = cameraPos.zoom;
                 print("tilt $tilt");
                 print("zoom $zoom");
+                print("bearing $bearing");
                 var unifiedCameraPosition = UnifiedCameraPosition(
                     mapLocation: MapLocation(
                       latitude: target.latitude,
@@ -1679,12 +1680,20 @@ class MaplibreMapProvider extends BaseMapProvider {
             16,
             ["get", "icon"],
           ],
+          // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
+          // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
+          // All other custom-rendering markers keep the original 14→0.2,
+          // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
+          // stays at the top level and the per-feature branch lives in the
+          // stop outputs (nesting zoom inside a `case` throws on iOS).
           iconSize: [
             "interpolate",
             ["linear"],
             ["zoom"],
-            14,  0.2,
-            18.3,  1.0,
+            14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
+            18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
+            18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
+            22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
           ],
           iconAnchor: ["get", "iconAnchor"],
           iconAllowOverlap: false,
@@ -2955,15 +2964,20 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const String osmRasterStyle = '''
 {
   "version": 8,
-  "name": "OSM Raster Slight Green",
+  "name": "CARTO Dark No Labels",
   "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   "sources": {
     "osm-tiles": {
       "type": "raster",
-      "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      "tiles": [
+        "https://a.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
+        "https://b.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
+        "https://c.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
+        "https://d.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png"
+      ],
       "tileSize": 256,
-      "attribution": "© OpenStreetMap contributors",
-      "maxzoom": 19
+      "attribution": "© OpenStreetMap contributors © CARTO",
+      "maxzoom": 20
     },
     "empty": {
       "type": "geojson",
@@ -2978,11 +2992,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       "minzoom": 0,
       "maxzoom": 23,
       "paint": {
-        "raster-saturation": -0.7,
-        "raster-contrast": 0.15,
-        "raster-brightness-min": 0.05,
-        "raster-brightness-max": 0.88,
-        "raster-hue-rotate": 20
+        "raster-brightness-min": 0.18,
+        "raster-brightness-max": 1.0
       }
     },
     {

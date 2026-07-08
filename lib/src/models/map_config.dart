@@ -33,7 +33,7 @@ class MapConfig {
     this.onMarkerTap,
     this.onPolygonTap,
     this.onPolylineTap,
-    this.immersive = false
+    this.immersive = true
 
   });
 
