@@ -4,7 +4,7 @@ enum RenderingTheme {
   monument;
   // Read from --dart-define
   static RenderingTheme get current {
-    const env = String.fromEnvironment('THEME', defaultValue: 'monument');
+    const env = String.fromEnvironment('THEME', defaultValue: 'zoo');
     return RenderingTheme.values.firstWhere(
           (e) => e.name == env,
       orElse: () => RenderingTheme.regular,
