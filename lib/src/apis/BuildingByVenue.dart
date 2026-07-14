@@ -17,13 +17,16 @@ class BuildingByVenue {
     // ── FIRST RUN: Seed from asset if DB is empty ──
     if (!buildingByVenueBox.containsKey(id)) {
       final seeded = await _seedFromAssetIfNeeded(id, buildingByVenueBox);
-      final internetAvailable = await checkInternetConnectivity();
       if (seeded) {
-        // Asset seeded — also trigger background API sync if internet available
+        // Asset seeded — data is already available, no need to block on a
+        // live connectivity check just to decide whether to kick off a
+        // fire-and-forget background sync (which checks connectivity itself).
         _backgroundSync(id, buildingByVenueBox);
         final responseBody = buildingByVenueBox.get(id)!.responseBody;
         return BuildingData.fromJson(responseBody);
-      }else if(internetAvailable){
+      }
+      final internetAvailable = await checkInternetConnectivity();
+      if(internetAvailable){
         return await _fetchFromApi(id, buildingByVenueBox);
       }else{
         throw("no preload & no DB data & no internet");

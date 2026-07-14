@@ -19,12 +19,15 @@ class GlobalGeoJSONVenueAPI {
     // ── FIRST RUN: Seed from asset if DB is empty ──
     if (!dbHasData) {
       final seeded = await _seedFromAssetIfNeeded(venueName, service);
-      final internetAvailable = await checkInternetConnectivity();
       if (seeded) {
-        // Asset seeded — trigger background API sync if internet available
+        // Asset seeded — data is already available, no need to block on a
+        // live connectivity check just to decide whether to kick off a
+        // fire-and-forget background sync (which checks connectivity itself).
         _backgroundSync(venueName, service);
         return service.getGeoData(venueName)?.responseBody;
-      }else if(internetAvailable){
+      }
+      final internetAvailable = await checkInternetConnectivity();
+      if(internetAvailable){
         return await _fetchFromApi(venueName, service);
       }else{
         throw("no preload & no DB data & no internet");

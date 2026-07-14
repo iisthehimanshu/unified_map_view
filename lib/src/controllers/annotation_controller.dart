@@ -60,9 +60,13 @@ class AnnotationController{
   }
 
   Future<void> _setVenue(String venueName) async {
-    final buildingData = await BuildingByVenue().fetchBuildingIDS(venueName);
-
-    final apiData = await GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
+    // Independent network/DB fetches — start both immediately and await them
+    // concurrently instead of one after another (was roughly doubling the
+    // bootstrap latency for no reason, since neither depends on the other).
+    final buildingDataFuture = BuildingByVenue().fetchBuildingIDS(venueName);
+    final apiDataFuture = GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
+    final buildingData = await buildingDataFuture;
+    final apiData = await apiDataFuture;
 
     if (apiData == null || apiData.isEmpty) {
       throw Exception('No GeoJSON data received from API');
