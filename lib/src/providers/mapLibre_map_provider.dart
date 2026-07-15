@@ -2949,7 +2949,8 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> selectLocation(controller, String polyID) async {
-    if (selectedLocation?.polyID == polyID) return;
+    final currentMarker = selectedLocation?.marker as GeoJsonMarker?;
+    if (selectedLocation?.polyID == polyID || (currentMarker != null && currentMarker.id.contains(polyID))) return;
     if (controller is! MaplibreMapController) {
       print('Error: Invalid controller type');
       return;
@@ -2960,9 +2961,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     try {
-      if (selectedLocation != null) {
-        await deSelectLocation(controller);
-      }
+      // We don't call deSelectLocation here to avoid redundant GeoJSON pushes.
+      // The new selection will naturally overwrite the old one in the sources below.
 
       GeoJsonPolygon? polygon;
       GeoJsonMarker? marker;
@@ -3005,12 +3005,19 @@ class MaplibreMapProvider extends BaseMapProvider {
         return;
       }
 
-      if (polygon != null) {
-        await _updatePolygonSource(controller, selectPolygonId: polygon.id);
-      }
+      selectedLocation = SelectedLocation(
+        polyID: polyIDInsideMarker,
+        polygon: polygon,
+        marker: marker,
+      );
 
+      // 1. Kick off visual updates immediately for tap feedback.
+      // We don't await these to let the camera start ASAP.
+      if (polygon != null) {
+        _updatePolygonSource(controller, selectPolygonId: polygon.id);
+      }
       if (marker != null) {
-        await setGeoJsonSource(
+        setGeoJsonSource(
           controller,
           _symbols,
           _clusterSourceId,
@@ -3018,16 +3025,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         );
       }
 
-      selectedLocation = SelectedLocation(
-        polyID: polyIDInsideMarker,
-        polygon: polygon,
-        marker: marker,
-      );
-
       MapLocation? center;
       double? targetZoom;
       CameraBound? bounds;
-
+      
+      // Calculate target camera position
       if (polygon != null && polygon.points.isNotEmpty) {
         double minLat = polygon.points.first.latitude;
         double maxLat = polygon.points.first.latitude;
@@ -3061,16 +3063,18 @@ class MaplibreMapProvider extends BaseMapProvider {
         targetZoom = 19;
       }
 
+      // 2. Start camera animation
       try {
         if (bounds != null) {
-          fitCameraToBounds(controller, bounds);
+          await fitCameraToBounds(controller, bounds);
         } else if (center != null && targetZoom != null) {
-          animateCamera(controller, center, targetZoom);
+          await animateCamera(controller, center, targetZoom);
         }
       } catch (e) {
         print('Warning: Failed to animate camera: $e');
       }
 
+      // 3. Trigger callbacks
       if (polygon != null) {
         _config.onPolygonTap?.call(
           coordinates: polygon.points,

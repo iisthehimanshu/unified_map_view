@@ -2304,7 +2304,8 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> selectLocation(controller, String polyID) async {
-    if(selectedLocation?.polyID == polyID) return;
+    final currentMarker = selectedLocation?.marker as GeoJsonMarker?;
+    if (selectedLocation?.polyID == polyID || (currentMarker != null && currentMarker.id.contains(polyID))) return;
     if (controller is! MapplsMapController) {
       print('Error: Invalid controller type');
       return;
@@ -2315,6 +2316,9 @@ class MapplsMapProvider extends BaseMapProvider {
     }
 
     try {
+      // We don't call deSelectLocation here to avoid redundant GeoJSON pushes.
+      // The new selection will naturally overwrite the old one in the sources below.
+
       GeoJsonPolygon? polygon;
       GeoJsonMarker? marker;
       // Try to find marker
@@ -2328,14 +2332,6 @@ class MapplsMapProvider extends BaseMapProvider {
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
         return;
-      }
-
-      if(marker != null){
-        // Deselect previous location if exists
-        if (selectedLocation != null) {
-          print("selectedLocation is ${selectedLocation.toString()}");
-          await deSelectLocation(controller);
-        }
       }
 
       String polyIDInsideMarker = polyID;
@@ -2372,7 +2368,28 @@ class MapplsMapProvider extends BaseMapProvider {
         return;
       }
 
-      // Calculate bounds and center
+      // Store selected location state
+      selectedLocation = SelectedLocation(
+        polyID: polyIDInsideMarker??polyID,
+        polygon: polygon,
+        marker: marker,
+      );
+
+      // 1. Kick off visual updates immediately for tap feedback.
+      // For Mappls, we just use the isSelected property to trigger the layer properties.
+      if (polygon != null) {
+        _updatePolygonSelectionState(controller, polygon.id, true);
+      }
+      if (marker != null) {
+        setGeoJsonSource(
+          controller,
+          _symbols,
+          _clusterSourceId,
+          selectedMarkerId: marker.id,
+        );
+      }
+
+      // Calculate bounds and center for camera animation
       MapLocation? center;
       double? targetZoom;
 
@@ -2384,14 +2401,8 @@ class MapplsMapProvider extends BaseMapProvider {
         double maxLng = polygon.points.first.longitude;
 
         for (final point in polygon.points) {
-          if (point.latitude < -90 || point.latitude > 90) {
-            print('Warning: Invalid latitude ${point.latitude}');
-            continue;
-          }
-          if (point.longitude < -180 || point.longitude > 180) {
-            print('Warning: Invalid longitude ${point.longitude}');
-            continue;
-          }
+          if (point.latitude < -90 || point.latitude > 90) continue;
+          if (point.longitude < -180 || point.longitude > 180) continue;
 
           minLat = min(minLat, point.latitude);
           maxLat = max(maxLat, point.latitude);
@@ -2422,58 +2433,25 @@ class MapplsMapProvider extends BaseMapProvider {
         targetZoom = 19; // Default zoom for marker-only view
       }
 
-      // Update polygon selection state if polygon exists
-      if (polygon != null) {
-        await _updatePolygonSelectionState(controller, polygon.id, true);
-      }
-
-      print("marker $marker");
-      // Handle marker styling if marker exists
-      if (marker != null) {
-        if(marker.assetPath == null){
-          try {
-            final genericMarker = PredefinedMarkers.getGenericMarker(marker);
-            print("genericMarker id ${genericMarker.id}");
-            await removeMarker(controller, polyID);
-            await addMarker(controller, genericMarker);
-          } catch (e) {
-            print('Warning: Failed to update marker styling: $e');
-          }
-        }else{
-          var copyMarker = marker?.copyWith(imageSize: Size(50, 50), textVisibility: true, priority: true);
-          print("copyMarker ${copyMarker?.assetPath}");
-          await removeMarker(controller, polyID);
-          await addMarker(controller, copyMarker!);
-        }
-      }
-
-
-      // Store selected location
-      selectedLocation = SelectedLocation(
-        polyID: polyIDInsideMarker??polyID,
-        polygon: polygon,
-        marker: marker,
-      );
-
       CameraBound? bounds;
       if(polygon != null && polygon.points.isNotEmpty){
         bounds = calculateBounds(controller, polygon.points);
       }
 
-      // Animate camera if we have a valid center
+      // 2. Animate camera. We await this to ensure the function completes as expected.
       if (bounds != null || (center != null && targetZoom != null)) {
         try {
           if(bounds != null){
-            fitCameraToBounds(controller, bounds);
+            await fitCameraToBounds(controller, bounds);
           }else if(center != null && targetZoom != null){
-            animateCamera(controller, center, targetZoom);
+            await animateCamera(controller, center, targetZoom);
           }
         } catch (e) {
           print('Warning: Failed to animate camera: $e');
         }
       }
 
-      // Trigger callback if polygon exists
+      // 3. Trigger callbacks
       if (polygon != null) {
         _config.onPolygonTap?.call(
           coordinates: polygon.points,
