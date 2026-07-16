@@ -3065,7 +3065,15 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       // 2. Start camera animation
       try {
-        if (bounds != null) {
+        // For an animal icon that also has an enclosure polygon, sequence the
+        // camera: first zoom in on the tapped animal icon, then fit its polygon.
+        final bool sequentialAnimalFit =
+            marker != null && _isAnimalMarker(marker) && bounds != null;
+
+        if (sequentialAnimalFit) {
+          await animateCamera(controller, marker!.position, 18);
+          await fitCameraToBounds(controller, bounds!);
+        } else if (bounds != null) {
           await fitCameraToBounds(controller, bounds);
         } else if (center != null && targetZoom != null) {
           await animateCamera(controller, center, targetZoom);
