@@ -3071,7 +3071,18 @@ class MaplibreMapProvider extends BaseMapProvider {
             marker != null && _isAnimalMarker(marker) && bounds != null;
 
         if (sequentialAnimalFit) {
-          await animateCamera(controller, marker!.position, 18);
+          // Phase 1: glide in on the tapped animal icon with an explicit,
+          // eased duration so it reads as a deliberate focus rather than a snap.
+          await controller.animateCamera(
+            CameraUpdate.newLatLngZoom(
+              LatLng(marker!.position.latitude, marker.position.longitude),
+              18,
+            ),
+            duration: const Duration(milliseconds: 900),
+          );
+          // Brief hold so the eye settles on the animal before we pull back.
+          await Future.delayed(const Duration(milliseconds: 450));
+          // Phase 2: slow, eased pull-back that fits the whole enclosure.
           await fitCameraToBounds(controller, bounds!);
         } else if (bounds != null) {
           await fitCameraToBounds(controller, bounds);
