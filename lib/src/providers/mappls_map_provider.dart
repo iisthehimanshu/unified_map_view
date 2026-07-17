@@ -2389,6 +2389,20 @@ class MapplsMapProvider extends BaseMapProvider {
         );
       }
 
+      // 2. Notify listeners before the camera moves so panels open on tap
+      // rather than after the animation settles.
+      if (polygon != null) {
+        _config.onPolygonTap?.call(
+          coordinates: polygon.points,
+          polygonId: polyID,
+        );
+      } else if (marker != null) {
+        _config.onMarkerTap?.call(
+          coordinates: marker.position,
+          markerId: polyID,
+        );
+      }
+
       // Calculate bounds and center for camera animation
       MapLocation? center;
       double? targetZoom;
@@ -2438,7 +2452,7 @@ class MapplsMapProvider extends BaseMapProvider {
         bounds = calculateBounds(controller, polygon.points);
       }
 
-      // 2. Animate camera. We await this to ensure the function completes as expected.
+      // 3. Animate camera. We await this to ensure the function completes as expected.
       if (bounds != null || (center != null && targetZoom != null)) {
         try {
           if(bounds != null){
@@ -2449,19 +2463,6 @@ class MapplsMapProvider extends BaseMapProvider {
         } catch (e) {
           print('Warning: Failed to animate camera: $e');
         }
-      }
-
-      // 3. Trigger callbacks
-      if (polygon != null) {
-        _config.onPolygonTap?.call(
-          coordinates: polygon.points,
-          polygonId: polyID,
-        );
-      }else if(marker != null){
-        _config.onMarkerTap?.call(
-          coordinates: marker.position,
-          markerId: polyID,
-        );
       }
     } catch (e, stackTrace) {
       print('Error selecting location: $e');

@@ -3025,10 +3025,24 @@ class MaplibreMapProvider extends BaseMapProvider {
         );
       }
 
+      // 2. Notify listeners before the camera moves so panels open on tap
+      // rather than after the animation settles.
+      if (polygon != null) {
+        _config.onPolygonTap?.call(
+          coordinates: polygon.points,
+          polygonId: polyID,
+        );
+      } else if (marker != null) {
+        _config.onMarkerTap?.call(
+          coordinates: marker.position,
+          markerId: polyID,
+        );
+      }
+
       MapLocation? center;
       double? targetZoom;
       CameraBound? bounds;
-      
+
       // Calculate target camera position
       if (polygon != null && polygon.points.isNotEmpty) {
         double minLat = polygon.points.first.latitude;
@@ -3063,7 +3077,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         targetZoom = 19;
       }
 
-      // 2. Start camera animation
+      // 3. Start camera animation
       try {
         // For an animal icon that also has an enclosure polygon, sequence the
         // camera: first zoom in on the tapped animal icon, then fit its polygon.
@@ -3091,19 +3105,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
       } catch (e) {
         print('Warning: Failed to animate camera: $e');
-      }
-
-      // 3. Trigger callbacks
-      if (polygon != null) {
-        _config.onPolygonTap?.call(
-          coordinates: polygon.points,
-          polygonId: polyID,
-        );
-      } else if (marker != null) {
-        _config.onMarkerTap?.call(
-          coordinates: marker.position,
-          markerId: polyID,
-        );
       }
     } catch (e, stackTrace) {
       print('Error selecting location: $e\n$stackTrace');
