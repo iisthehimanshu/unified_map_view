@@ -614,8 +614,8 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> moveUser(MapLocation location,  {Duration duration = const Duration(milliseconds: 300), bool compensateForDistance = false}) async {
-    await _annotationController.moveUser(location, duration: duration, compensateForDistance: compensateForDistance);
+  Future<void> moveUser(MapLocation location, int floor, {Duration duration = const Duration(milliseconds: 300), bool compensateForDistance = false}) async {
+    await _annotationController.moveUser(location, floor, duration: duration, compensateForDistance: compensateForDistance);
     notifyListeners();
   }
 

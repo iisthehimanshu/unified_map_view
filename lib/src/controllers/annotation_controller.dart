@@ -600,7 +600,7 @@ class AnnotationController{
       if(changeFloor){
         await changeBuildingFloor(user.bid, user.floor);
       }
-      moveUser(user.location);
+      moveUser(user.location, user.floor);
       return;
     }
     await clearUser();
@@ -624,9 +624,14 @@ class AnnotationController{
     await _unifiedMapController.removeMarker("user");
   }
 
-  Future<void> moveUser(MapLocation location, {Duration duration = const Duration(milliseconds: 300), bool compensateForDistance = false}) async {
+  Future<void> moveUser(MapLocation location, int floor, {Duration duration = const Duration(milliseconds: 300), bool compensateForDistance = false}) async {
     print("_userMoveUser $_user $location");
     if (_user == null) return;
+    if(_user?.floor != floor){
+      await localizeUser(User(location, _user!.bid, floor));
+      await annotatePath(floor);
+      return;
+    }
     if(compensateForDistance){
       MapLocation previousLocation = _user!.location;
       double distance = MapCalculations.distanceInMeters(previousLocation, location);
