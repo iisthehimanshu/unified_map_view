@@ -22,6 +22,7 @@ class AnnotationController{
   int? _focusBuildingSelectedFloor;
 
   String? get focusedBuilding => _focusedBuilding;
+  String? get focusedBuildingName => _venueData.buildingNameForId(_focusedBuilding);
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
   Map<String, int> get selectedFloor => _venueData.selectedFloor;
@@ -121,6 +122,74 @@ class AnnotationController{
     }else{
 
     }
+  }
+
+  /// Moves every building to [floor] at once, independent of which building is
+  /// currently focused. A building that has walkable content on [floor] renders
+  /// that content; a building that has none renders only its `Boundary` polygon
+  /// from its highest floor so its footprint stays visible. The campus is not
+  /// re-fitted/re-rendered — only per-building annotations are swapped.
+  Future<void> changeAllBuildingsFloor(int floor) async {
+    final campusId = _venueData.campusBuildingId;
+    for (final buildingID in _venueData.availableFloors.keys) {
+      // The campus holds the base map; never floor-swap or clear it.
+      if (buildingID == campusId) continue;
+      if (_venueData.selectedFloor[buildingID] == floor) continue;
+
+      final floorData =
+          _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
+
+      // Swap only this building's floor annotations. `exclude: 'boundary'`
+      // keeps the persistent campus footprint so the campus is never cleared.
+      // The floor-fallback outline below is *not* a 'boundary' id, so it is
+      // removed here too and never stacks across switches.
+      _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
+      _unifiedMapController.removePolyline(buildingID);
+      _unifiedMapController.removeMarker(buildingID);
+      _unifiedMapController.removeCircle(buildingID);
+
+      final featuresToRender =
+          floorData.isNotEmpty ? floorData : _floorFallbackBoundary(buildingID);
+
+      if (featuresToRender.isNotEmpty) {
+        await _unifiedMapController.addGeoJsonFeatures(
+            GeoJsonFeatureCollection(features: featuresToRender));
+      }
+
+      if (_user != null && _user!.bid == buildingID && _user!.floor == floor) {
+        String id = GeoJsonUtils.buildKey(
+            buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
+        GeoJsonMarker userMarker =
+            PredefinedMarkers.getUserMarker(_user!.location, id);
+        GeoJsonCircle userCircle =
+            PredefinedCircles.getGenericMarker(_user!.location, id);
+        await _unifiedMapController.removeMarker("user");
+        await _unifiedMapController.removeCircle("user");
+        await _unifiedMapController.addUserMarker(userMarker);
+        await _unifiedMapController.addCircle(userCircle);
+        localizeUser(_user!);
+      }
+    }
+
+    // Reflect the tapped floor on the focused-building floor selector.
+    _focusBuildingSelectedFloor = floor;
+  }
+
+  /// Highest-floor `Boundary` polygon(s) for [buildingID], re-tagged with a
+  /// non-`boundary` id so they render as a swappable fallback outline (removed
+  /// on the next floor switch) instead of a persistent campus boundary.
+  List<GeoJsonFeature> _floorFallbackBoundary(String buildingID) {
+    return _venueData
+        .highestFloorBoundaryFeatures(buildingID)
+        .asMap()
+        .entries
+        .map((entry) => GeoJsonFeature(
+              buildingId: entry.value.buildingId,
+              id: 'floorFallback_${buildingID}_${entry.key}',
+              geometry: entry.value.geometry,
+              properties: entry.value.properties,
+            ))
+        .toList();
   }
 
   Future<void> switchToLocationFloor(String polyId) async {

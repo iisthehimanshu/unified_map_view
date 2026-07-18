@@ -33,6 +33,16 @@ class VenueData{
   Map<String, List<int>> get availableFloors => _availableFloors;
   Map<String, int> get selectedFloor => _selectedFloor;
 
+  String? buildingNameForId(String? buildingId) {
+    if (buildingId == null) return null;
+    final buildings = buildingData.buildings;
+    if (buildings == null) return null;
+    for (final building in buildings) {
+      if (building.id == buildingId) return building.buildingName;
+    }
+    return null;
+  }
+
   void extractBuildingWiseData(Map<String, dynamic> json){
     GlobalAppGeoJsonDataModel globalAppGeoJsonDataModel = GlobalAppGeoJsonDataModel.fromJson(json);
     _availableFloors.clear();
@@ -147,6 +157,81 @@ class VenueData{
   List<GeoJsonFeature> setBuildingFloor({required String buildingId, required int floor}){
     _selectedFloor[buildingId] = floor;
     return _getFeaturesForBuildingAndFloor(buildingId, floor);
+  }
+
+  /// The id of the campus "building" from the building-by-venue data. The
+  /// campus carries the base map (roads, greenery, overall outline) and must
+  /// never be floor-swapped, so callers skip it.
+  String? get campusBuildingId {
+    final campus = buildingData.campus;
+    return campus is Campus ? campus.id : null;
+  }
+
+  /// Returns the boundary outline feature(s) to show for [buildingId] when its
+  /// tapped floor has no walkable content, so the building's footprint stays
+  /// visible. Prefers GeoJSON `Boundary` polygons on the highest floor; if the
+  /// venue has none, falls back to the building footprint from the
+  /// building-by-venue data.
+  List<GeoJsonFeature> highestFloorBoundaryFeatures(String buildingId) {
+    final model = GlobalAppGeoJsonDataModel.fromJson(json);
+
+    final boundaries = (model.data ?? []).where((feature) =>
+        feature.buildingID == buildingId &&
+        feature.properties?["type"] == "Boundary" &&
+        feature.properties?["floor"] is int).toList();
+
+    if (boundaries.isNotEmpty) {
+      final int maxFloor = boundaries
+          .map((feature) => feature.properties!["floor"] as int)
+          .reduce((a, b) => a > b ? a : b);
+
+      return boundaries
+          .where((feature) => feature.properties!["floor"] == maxFloor)
+          .map((feature) => GeoJsonFeature.fromJson(feature.toJson()))
+          .toList();
+    }
+
+    final footprint = _buildingFootprintFeature(buildingId);
+    return footprint == null ? [] : [footprint];
+  }
+
+  /// Builds a `Boundary`-typed polygon from the building-by-venue footprint
+  /// coordinates for [buildingId]. Boundary coords come as [lat, lng]; GeoJSON
+  /// geometry needs [lng, lat] with a closed ring.
+  GeoJsonFeature? _buildingFootprintFeature(String buildingId) {
+    final buildings = buildingData.buildings;
+    if (buildings == null) return null;
+
+    List<List<double>>? boundary;
+    for (final building in buildings) {
+      if (building.id == buildingId) {
+        boundary = building.boundary;
+        break;
+      }
+    }
+    if (boundary == null || boundary.length < 3) return null;
+
+    final ring = boundary.map((point) => [point[1], point[0]]).toList();
+    if (ring.first[0] != ring.last[0] || ring.first[1] != ring.last[1]) {
+      ring.add(ring.first);
+    }
+
+    final floors = _availableFloors[buildingId];
+    final int? highestFloor =
+        (floors != null && floors.isNotEmpty) ? floors.last : null;
+
+    return GeoJsonFeature(
+      buildingId: buildingId,
+      id: 'footprint_$buildingId',
+      geometry: GeoJsonGeometry(
+        type: GeoJsonGeometryType.polygon,
+        coordinates: [ring],
+      ),
+      properties: {
+        'type': 'Boundary',
+        if (highestFloor != null) 'floor': highestFloor,
+      },
+    );
   }
 
   GeoJsonFeature? findLocation(String polyId){

@@ -513,6 +513,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Annotation Controller
   String? get focusedBuilding => _annotationController.focusedBuilding;
+  String? get focusedBuildingName => _annotationController.focusedBuildingName;
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
   Map<String,int> get selectedFloor => _annotationController.selectedFloor;
@@ -520,6 +521,15 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
+    await _annotationController.annotatePath(floor);
+    notifyListeners();
+  }
+
+  /// Moves every building to [floor] at once regardless of which building is
+  /// focused. Buildings without content on [floor] fall back to their
+  /// highest-floor `Boundary` outline. Does not re-render the campus.
+  Future<void> changeAllBuildingsFloor({required int floor}) async {
+    await _annotationController.changeAllBuildingsFloor(floor);
     await _annotationController.annotatePath(floor);
     notifyListeners();
   }

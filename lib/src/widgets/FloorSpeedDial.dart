@@ -4,7 +4,7 @@ import 'package:flutter_speed_dial/flutter_speed_dial.dart';
 
 import '../../unified_map_view.dart';
 
-class FloorSpeedDial extends StatelessWidget {
+class FloorSpeedDial extends StatefulWidget {
   final UnifiedMapController controller;
   final Color color;
 
@@ -13,6 +13,16 @@ class FloorSpeedDial extends StatelessWidget {
     required this.controller,
     this.color = Colors.blue,
   });
+
+  @override
+  State<FloorSpeedDial> createState() => _FloorSpeedDialState();
+}
+
+class _FloorSpeedDialState extends State<FloorSpeedDial> {
+  bool _isOpen = false;
+
+  UnifiedMapController get controller => widget.controller;
+  Color get color => widget.color;
 
   @override
   Widget build(BuildContext context) {
@@ -29,17 +39,32 @@ class FloorSpeedDial extends StatelessWidget {
     }
 
     double spacing = MediaQuery.of(context).size.height * 0.015;
+    final buildingName = controller.focusedBuildingName;
+    final hasBuildingName = buildingName != null && buildingName.isNotEmpty;
 
     return SafeArea(
-      child: SpeedDial(
-        activeIcon: Icons.close,
-        backgroundColor: color,
-        foregroundColor: Colors.white,
-        activeBackgroundColor: color,
-        overlayOpacity: 0.2,
-        spacing: spacing,
-        children: floorsChildren,
-        child: _floorLabel(selectedFloor, color: Colors.white),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Building name sits to the left of the (close) button while open.
+          if (_isOpen && hasBuildingName) ...[
+            Flexible(child: _buildingNameLabel(buildingName)),
+            const SizedBox(width: 12),
+          ],
+          SpeedDial(
+            activeIcon: Icons.close,
+            backgroundColor: color,
+            foregroundColor: Colors.white,
+            activeBackgroundColor: color,
+            overlayOpacity: 0.2,
+            spacing: spacing,
+            onOpen: () => setState(() => _isOpen = true),
+            onClose: () => setState(() => _isOpen = false),
+            children: floorsChildren,
+            child: _floorLabel(selectedFloor, color: Colors.white),
+          ),
+        ],
       ),
     );
   }
@@ -60,13 +85,34 @@ class FloorSpeedDial extends StatelessWidget {
         ),
         backgroundColor: isSelected ? Colors.blue : Colors.white,
         onTap: () {
-          controller.changeBuildingFloor(
-            buildingID: controller.focusedBuilding!,
-            floor: floor,
-          );
+          controller.changeAllBuildingsFloor(floor: floor);
         },
       );
     }).toList();
+  }
+
+  Widget _buildingNameLabel(String name) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 4,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Text(
+        name,
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          color: Colors.black,
+        ),
+      ),
+    );
   }
 
   Widget _floorLabel(int floor, {Color? color}) {
