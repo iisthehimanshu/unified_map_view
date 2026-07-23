@@ -153,7 +153,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
             // Handle feature taps (polygons & markers)
             // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
-            controller.onFeatureTapped.add((Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation) async {
+            controller.onFeatureTapped.add((dynamic id, Point<double> point, LatLng coordinates, String layerId) async {
               print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
               // if (_symbols
               //     .where((s) => s.id.toLowerCase().contains("path"))
