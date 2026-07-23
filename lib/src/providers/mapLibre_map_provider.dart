@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
@@ -31,6 +32,11 @@ class MaplibreMapProvider extends BaseMapProvider {
   final List<GeoJsonMarker> _rotatingSymbols = [];
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _lines = [];
+
+  /// Raw GeoJSON point-feature maps whose properties carry a "3dRef"
+  /// part list — rendered as extruded 3D furniture. Kept so the source
+  /// can be re-pushed after a style reload.
+  final List<Map<String, dynamic>> _furnitureItems = [];
 
   late MapConfig _config;
 
@@ -83,6 +89,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
+  final String _furnitureSourceId = 'furniture-source';
+  final String _furnitureLayerId = 'furniture-layer';
+
   final String _polylineSourceId = 'polylines-source';
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
   final String _pathOutlineLayerId = 'path-solid-outline-polyline-layer';
@@ -94,6 +103,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isPolygonLayersEnabled = false;
   bool _isPolylineLayersEnabled = false;
   bool _isCircleLayersEnabled = false;
+  bool _isFurnitureLayerEnabled = false;
 
   Size? _screenSize;
   double? _fadeOutZoom;
@@ -236,6 +246,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               // addImage() registration needs to happen again).
               _loadedAnimalIcons.clear();
               _isCircleLayersEnabled = false;
+              _isFurnitureLayerEnabled = false;
 
               // Re-register all marker icons — style reload wipes addImage() calls
               for (final marker in [..._symbols, ..._rotatingSymbols]) {
@@ -276,6 +287,10 @@ class MaplibreMapProvider extends BaseMapProvider {
               }
               if (_circles.isNotEmpty) {
                 await _setGeoJsonCircle(_controller!);
+              }
+              if (_furnitureItems.isNotEmpty) {
+                await _enableFurnitureLayer(_controller!);
+                await _updateFurnitureSource(_controller!);
               }
               _screenSize = MediaQuery.of(context).size;
               await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
@@ -1144,6 +1159,243 @@ class MaplibreMapProvider extends BaseMapProvider {
         print('Error clearing polygons: $e');
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Furniture / 3D objects (fill-extrusion)
+  //
+  // Point features whose properties carry a "3dRef" map get their
+  // "3dRef.3d" part list (boxes/cylinders/spheres in local meters)
+  // converted into per-part GeoJSON polygons anchored at the point's
+  // real-world lng/lat and rendered as a fill-extrusion layer.
+  // ---------------------------------------------------------------------------
+
+  static const double _metersPerDegLat = 111320.0;
+
+  /// Points used to approximate a cylinder/sphere footprint circle.
+  static const int _circleSegments = 16;
+
+  /// "3dRef" may arrive as a Map or as a JSON-encoded string depending on
+  /// how the API serialized the property — accept both.
+  Map<String, dynamic>? _furnitureRefOf(Map<String, dynamic> props) {
+    final raw = props['3dRef'];
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    if (raw is String && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  @override
+  Future<void> addFurniture(
+      dynamic controller, List<Map<String, dynamic>> items) async {
+    if (controller is! MapLibreMapController) return;
+    try {
+      final furnitureItems = items.where((item) {
+        final props = item['properties'] as Map<String, dynamic>? ?? {};
+        return _furnitureRefOf(props) != null;
+      }).toList();
+      print('addFurniture: ${furnitureItems.length}/${items.length} items '
+          'carry a usable 3dRef');
+      if (furnitureItems.isEmpty) return;
+
+      _furnitureItems.addAll(furnitureItems);
+      await _enableFurnitureLayer(controller);
+      await _updateFurnitureSource(controller);
+    } catch (e) {
+      print('Error adding furniture: $e');
+    }
+  }
+
+  @override
+  Future<void> removeFurniture(dynamic controller, String buildingId) async {
+    if (controller is! MapLibreMapController) return;
+    try {
+      _furnitureItems.removeWhere((item) => item['buildingId'] == buildingId);
+      if (_isFurnitureLayerEnabled) {
+        await _updateFurnitureSource(controller);
+      }
+    } catch (e) {
+      print('Error removing furniture: $e');
+    }
+  }
+
+  @override
+  Future<void> clearFurniture(dynamic controller) async {
+    if (controller is! MapLibreMapController) return;
+    try {
+      _furnitureItems.clear();
+      if (_isFurnitureLayerEnabled) {
+        await _updateFurnitureSource(controller);
+      }
+    } catch (e) {
+      print('Error clearing furniture: $e');
+    }
+  }
+
+  Future<void> _enableFurnitureLayer(MapLibreMapController controller) async {
+    if (_isFurnitureLayerEnabled) return;
+
+    await controller.addSource(
+      _furnitureSourceId,
+      GeojsonSourceProperties(
+        data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
+        // With the defaults (maxzoom: 18, tolerance: 0.375px) the
+        // GeoJSON source is internally tiled only up to zoom 18 and
+        // every polygon gets Douglas-Peucker simplified by roughly a
+        // few cm at this latitude. Small parts (chair legs ~0.075m,
+        // arm posts ~0.05m) fall at or below that threshold and get
+        // simplified into degenerate/zero-area polygons — they
+        // silently vanish. Raising maxzoom past the max camera zoom
+        // and disabling simplification keeps every part intact.
+        maxzoom: 24,
+        tolerance: 0,
+        buffer: 256,
+      ),
+    );
+
+    await controller.addFillExtrusionLayer(
+      _furnitureSourceId,
+      _furnitureLayerId,
+      const FillExtrusionLayerProperties(
+        fillExtrusionColor: ['get', 'color'],
+        fillExtrusionBase: ['get', 'base'],
+        fillExtrusionHeight: ['get', 'height'],
+      ),
+    );
+
+    _isFurnitureLayerEnabled = true;
+  }
+
+  Future<void> _updateFurnitureSource(MapLibreMapController controller) async {
+    final features = <Map<String, dynamic>>[
+      for (final item in _furnitureItems)
+        ..._buildFurniturePartFeatures(item),
+    ];
+    print('furniture: ${_furnitureItems.length} items -> '
+        '${features.length} extrusion features');
+
+    await controller.setGeoJsonSource(
+      _furnitureSourceId,
+      {'type': 'FeatureCollection', 'features': features},
+    );
+  }
+
+  /// Turns one furniture item's "3dRef.3d" part list into GeoJSON
+  /// Polygon features with per-part base/height/color, anchored at the
+  /// item's own real-world lng/lat (geometry.coordinates), ready for a
+  /// fill-extrusion layer.
+  List<Map<String, dynamic>> _buildFurniturePartFeatures(
+      Map<String, dynamic> item) {
+    final geometry = item['geometry'] as Map<String, dynamic>?;
+    final props = item['properties'] as Map<String, dynamic>? ?? {};
+    final ref = _furnitureRefOf(props);
+    if (geometry == null || ref == null) return const [];
+
+    final coords = geometry['coordinates'] as List?;
+    if (coords == null || coords.length < 2) return const [];
+    final anchorLng = double.tryParse('${coords[0]}');
+    final anchorLat = double.tryParse('${coords[1]}');
+    if (anchorLng == null || anchorLat == null) return const [];
+
+    // Placement rotation comes from "3dModelAngle" (sits alongside
+    // "3dRef" in properties) rather than "3dRef.rotation_y", which is
+    // just the 3d object's own default/reference orientation.
+    // "3dModelAngle" is defined 180deg opposite to the rotation
+    // convention used below (every object was showing back-to-front),
+    // so the offset corrects for that.
+    final rotationDeg =
+        (double.tryParse('${props['3dModelAngle'] ?? 0}') ?? 0.0) + 180.0;
+    final rotationRad = rotationDeg * pi / 180.0;
+    final cosT = cos(rotationRad);
+    final sinT = sin(rotationRad);
+
+    final anchorLatRad = anchorLat * pi / 180.0;
+    final metersPerDegLng = _metersPerDegLat * cos(anchorLatRad);
+
+    final parts = (ref['3d'] as List?) ?? const [];
+    final result = <Map<String, dynamic>>[];
+
+    for (final raw in parts) {
+      if (raw is! Map) continue;
+      final p = Map<String, dynamic>.from(raw);
+      final shape = p['shape'] as String? ?? 'box';
+      // Spheres describe size via "r" (radius) instead of "h" — treat
+      // their vertical extent as the full diameter, centered on oy.
+      final h = shape == 'sphere'
+          ? (double.tryParse('${p['r'] ?? 0}') ?? 0.0) * 2
+          : (double.tryParse('${p['h'] ?? 0}') ?? 0.0);
+      final oy = double.tryParse('${p['oy'] ?? 0}') ?? 0.0;
+
+      final localCorners = _footprintFor(p);
+      if (localCorners.isEmpty) continue;
+
+      final ring = localCorners.map((c) {
+        final x = c[0];
+        final z = c[1];
+        // Rotate around the item's own anchor point (matches how
+        // rotation_y rotates the whole part group in a three.js-style
+        // scene graph).
+        final rx = x * cosT - z * sinT;
+        final rz = x * sinT + z * cosT;
+        final lng = anchorLng + rx / metersPerDegLng;
+        final lat = anchorLat + rz / _metersPerDegLat;
+        return [lng, lat];
+      }).toList();
+      ring.add(ring.first); // close the ring
+
+      result.add({
+        'type': 'Feature',
+        'geometry': {
+          'type': 'Polygon',
+          'coordinates': [ring],
+        },
+        'properties': {
+          'color': p['color'] ?? '#888888',
+          'base': oy - h / 2,
+          'height': oy + h / 2,
+        },
+      });
+    }
+
+    return result;
+  }
+
+  /// Returns the local (pre-rotation) footprint corner points for one
+  /// 3d part, in meters. "box" -> 4 rectangle corners. "cylinder" /
+  /// "sphere" -> N points around a circle of radius r.
+  ///
+  /// Note: fill-extrusion can only produce flat-topped vertical
+  /// columns, so a "sphere" renders as a cylinder of the same radius
+  /// spanning its full diameter — not a true dome. That's a hard
+  /// limit of this technique, not a bug.
+  List<List<double>> _footprintFor(Map<String, dynamic> p) {
+    final shape = p['shape'] as String? ?? 'box';
+    final ox = double.tryParse('${p['ox'] ?? 0}') ?? 0.0;
+    final oz = double.tryParse('${p['oz'] ?? 0}') ?? 0.0;
+
+    if (shape == 'cylinder' || shape == 'sphere') {
+      final r = double.tryParse('${p['r'] ?? 0}') ?? 0.0;
+      return List.generate(_circleSegments, (i) {
+        final angle = 2 * pi * i / _circleSegments;
+        return [ox + r * cos(angle), oz + r * sin(angle)];
+      });
+    }
+
+    // default: box — w/d taken exactly as given in the JSON, no
+    // unit scaling or minimum-size flooring. The footprint is the
+    // horizontal w x d rectangle only; h feeds base/height later.
+    final w = double.tryParse('${p['w'] ?? 0}') ?? 0.0;
+    final d = double.tryParse('${p['d'] ?? 0}') ?? 0.0;
+    return [
+      [ox - w / 2, oz - d / 2],
+      [ox + w / 2, oz - d / 2],
+      [ox + w / 2, oz + d / 2],
+      [ox - w / 2, oz + d / 2],
+    ];
   }
 
   // ---------------------------------------------------------------------------

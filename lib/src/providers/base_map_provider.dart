@@ -83,6 +83,20 @@ abstract class BaseMapProvider {
   /// Clear all polygons
   Future<void> clearPolygons(dynamic controller);
 
+  /// Render point features carrying a "3dRef" part list as extruded 3D
+  /// furniture/objects. Items are raw GeoJSON feature maps
+  /// ({geometry, properties}). Default is a no-op so providers without
+  /// fill-extrusion support don't have to implement it.
+  Future<void> addFurniture(
+      dynamic controller, List<Map<String, dynamic>> items) async {}
+
+  /// Remove one building's furniture (floor switch), matched on the
+  /// item's 'buildingId'.
+  Future<void> removeFurniture(dynamic controller, String buildingId) async {}
+
+  /// Remove all furniture/3D objects added via [addFurniture].
+  Future<void> clearFurniture(dynamic controller) async {}
+
   /// Add a polyline to the map
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline);
   Future<void> addPolylines(dynamic controller, List<GeoJsonPolyline> polylines);
