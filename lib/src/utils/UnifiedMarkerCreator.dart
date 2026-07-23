@@ -158,6 +158,7 @@ class UnifiedMarkerCreator {
   Future<MarkerIconWithAnchor> createUnifiedMarker({
     required String text,
     String? imageSource,
+    Uint8List? imageBytes, // pre-fetched (and optionally pre-resized) source photo bytes; skips the internal fetch when provided
     MarkerLayout layout = MarkerLayout.vertical,
     TextFormat textFormat = TextFormat.smartWrap,
     Size imageSize = const Size(35, 35), // logical dp
@@ -208,6 +209,7 @@ class UnifiedMarkerCreator {
     final marker = await _generateMarker(
       text: text,
       imageSource: imageSource,
+      imageBytes: imageBytes,
       layout: layout,
       textFormat: textFormat,
       imageSize: imageSize,
@@ -237,6 +239,7 @@ class UnifiedMarkerCreator {
   Future<MarkerIconWithAnchor> _generateMarker({
     required String text,
     String? imageSource,
+    Uint8List? imageBytes,
     MarkerLayout layout = MarkerLayout.vertical,
     TextFormat textFormat = TextFormat.smartWrap,
     Size imageSize = const Size(35, 35), // logical dp
@@ -269,15 +272,17 @@ class UnifiedMarkerCreator {
     ui.Image? markerImage;
     Size actualImageSizePx = Size(imageWidthPx, imageHeightPx);
 
-    if (imageSource != null && imageSource.isNotEmpty) {
+    if (imageBytes != null || (imageSource != null && imageSource.isNotEmpty)) {
       try {
-        Uint8List? bytes;
-        if (imageSource.startsWith('http')) {
-          final response = await CacheController().fetchWithCache(imageSource!);
-          bytes = response;
-        } else {
-          final bd = await rootBundle.load(imageSource);
-          bytes = bd.buffer.asUint8List();
+        Uint8List? bytes = imageBytes;
+        if (bytes == null) {
+          if (imageSource!.startsWith('http')) {
+            final response = await CacheController().fetchWithCache(imageSource);
+            bytes = response;
+          } else {
+            final bd = await rootBundle.load(imageSource);
+            bytes = bd.buffer.asUint8List();
+          }
         }
 
         if (bytes != null) {
@@ -319,9 +324,8 @@ class UnifiedMarkerCreator {
       throw Exception('imageOnly requires a valid image source');
     }
 
-    // Prepare text painters (measured in pixels)
+    // Prepare text painter (measured in pixels)
     TextPainter? fillPainter;
-    TextPainter? strokePainter;
     double textWidthPx = 0;
     double textHeightPx = 0;
     final double pillPaddingH = fontSizePx * 0.9;
@@ -335,22 +339,9 @@ class UnifiedMarkerCreator {
         color: textColor,
         height: 1.0,
       );
-      final strokeStyle = TextStyle(
-        fontFamily: 'PT_Sans',
-        fontSize: fontSizePx,
-        fontWeight: fontWeight,
-        color: strokeColor,
-        height: 1.0,
-      );
 
       fillPainter = TextPainter(
         text: TextSpan(text: formattedText, style: fillStyle),
-        textDirection: TextDirection.ltr,
-        textAlign: TextAlign.center,
-      );
-
-      strokePainter = TextPainter(
-        text: TextSpan(text: formattedText, style: strokeStyle),
         textDirection: TextDirection.ltr,
         textAlign: TextAlign.center,
       );
@@ -360,7 +351,6 @@ class UnifiedMarkerCreator {
       // Choose a generous maximum width in pixels (e.g., 300 dp * ratio)
       final double maxTextWidthPx = (300.0 * ratio);
       fillPainter.layout(minWidth: 0, maxWidth: maxTextWidthPx);
-      strokePainter.layout(minWidth: 0, maxWidth: maxTextWidthPx);
 
       textWidthPx = fillPainter.width;
       textHeightPx = fillPainter.height;
@@ -562,10 +552,8 @@ class UnifiedMarkerCreator {
       // );
     }
 
-    // Draw text stroke then fill with improved quality
-    if (fillPainter != null &&
-        strokePainter != null &&
-        layout != MarkerLayout.imageOnly) {
+    // Draw pill + text with improved quality
+    if (fillPainter != null && layout != MarkerLayout.imageOnly) {
       final textOffset = Offset(textX, textY);
 
       // Draw pill background
@@ -741,6 +729,7 @@ class UnifiedMarkerCreator {
   Future<MarkerIconWithAnchor> createMuseumPoiMarker({
     required String text,
     String? imageSource,
+    Uint8List? imageBytes, // pre-fetched source photo bytes; skips the internal fetch when provided
     Size cardSize = const Size(90, 76), // logical dp — outer white card
     double frame = 5.0, // logical — white border thickness
     double cornerRadius = 16.0,
@@ -895,14 +884,16 @@ class UnifiedMarkerCreator {
     );
 
     ui.Image? photo;
-    if (imageSource != null && imageSource.isNotEmpty) {
+    if (imageBytes != null || (imageSource != null && imageSource.isNotEmpty)) {
       try {
-        Uint8List? bytes;
-        if (imageSource.startsWith('http')) {
-          bytes = await CacheController().fetchWithCache(imageSource);
-        } else {
-          final bd = await rootBundle.load(imageSource);
-          bytes = bd.buffer.asUint8List();
+        Uint8List? bytes = imageBytes;
+        if (bytes == null) {
+          if (imageSource!.startsWith('http')) {
+            bytes = await CacheController().fetchWithCache(imageSource);
+          } else {
+            final bd = await rootBundle.load(imageSource);
+            bytes = bd.buffer.asUint8List();
+          }
         }
         if (bytes != null) {
           final completer = Completer<ui.Image>();

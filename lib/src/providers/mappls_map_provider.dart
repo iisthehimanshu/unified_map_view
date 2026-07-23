@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mappls_gl/mappls_gl.dart';
@@ -10,6 +11,7 @@ import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/models/camera_position.dart';
 import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../database/cache/cache_controller.dart';
+import '../utils/LandmarkAssetType.dart';
 import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
@@ -144,6 +146,10 @@ class MapplsMapProvider extends BaseMapProvider {
               _isPolygonLayersEnabled = false;
               _isPolylineLayersEnabled = false;
               _isCircleLayersEnabled = false;
+              // Registered animal icons are wiped too (the composited bytes in
+              // _animalIconCache are still valid and get reused, only the
+              // addImage() registration needs to happen again).
+              _loadedAnimalIcons.clear();
 
               // Re-register all marker icons — style reload wipes addImage() calls
               for (final marker in [..._symbols, ..._rotatingSymbols]) {
@@ -442,31 +448,39 @@ class MapplsMapProvider extends BaseMapProvider {
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
     print("markers $markers");
     if (controller is MapplsMapController) {
+      final animalMarkers = <GeoJsonMarker>[];
+      final otherMarkers = <GeoJsonMarker>[];
       for (var marker in markers) {
-        try{
-          Uint8List? iconBytes;
-          if(marker.assetPath != null){
-            if (marker.assetPath!.startsWith('http')) {
-              final response = await CacheController().fetchWithCache(marker.assetPath!);
-              iconBytes = response;
-            } else {
-              final bd = await rootBundle.load(marker.assetPath!);
-              iconBytes = bd.buffer.asUint8List();
-            }
-            if (iconBytes != null) {
-              await controller.addImage(marker.id, iconBytes);
-            }
-          }
-        }catch(e){
-          print("error in addMarkers $e");
+        if (_isAnimalMarker(marker)) {
+          // Animal icons are batch-loaded below (cached/deduped by content,
+          // downscaled, loaded in parallel); skip the generic per-marker path.
+          animalMarkers.add(marker);
+        } else {
+          otherMarkers.add(marker);
         }
-        _loadMarkerIcon(controller, marker);
         _symbols.add(marker);
       }
+      // Load every non-animal marker's icon concurrently instead of one at a
+      // time — _loadMarkerIcon already fetches/decodes/registers everything
+      // this loop used to redundantly fetch a second time, so there's no
+      // separate per-marker fetch here anymore, just the fan-out await.
+      await Future.wait(otherMarkers.map((marker) async {
+        try {
+          await _loadMarkerIcon(controller, marker);
+        } catch (e) {
+          print("error in addMarkers $e");
+        }
+      }));
       try {
+        // Pushed immediately so non-animal markers appear right away; animal
+        // markers reference their shared icon id, which _batchLoadAnimalIcons
+        // registers below (paw placeholder first, then the real photo).
         setGeoJsonSource(controller, _symbols, _clusterSourceId);
       } catch (e) {
         print("error adding markers $e");
+      }
+      if (animalMarkers.isNotEmpty) {
+        await _batchLoadAnimalIcons(controller, animalMarkers);
       }
     }
   }
@@ -581,7 +595,8 @@ class MapplsMapProvider extends BaseMapProvider {
                 marker.title ?? "", TextFormat.smartWrap)
                 : '',
             'id': marker.id,
-            if (marker.assetPath != null) 'icon': marker.id,
+            if (marker.assetPath != null)
+              'icon': _isAnimalMarker(marker) ? _animalImageId(marker) : marker.id,
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             'bearing': marker.compassBasedRotation
@@ -974,38 +989,300 @@ class MapplsMapProvider extends BaseMapProvider {
 
   final creator = UnifiedMarkerCreator();
 
+  /// Longest-edge cap (px) an animal photo is downscaled to before its icon
+  /// is registered with the map style, regardless of the source photo's
+  /// native resolution.
+  static const int _animalMaxIconSize = 80;
+
+  /// Composited animal-icon bytes, keyed by [_animalIconKey] (photo URL +
+  /// baked title). An enclosure of animals that share a photo and species
+  /// name (e.g. every lion in one enclosure) bakes the composite once, no
+  /// matter how many separate markers point at it.
+  final Map<String, Uint8List> _animalIconCache = {};
+
+  /// Content keys from [_animalIconCache] that have actually been registered
+  /// with the current style via addImage(). Cleared on style reload (which
+  /// wipes addImage()), independently of the byte cache above. Markers whose
+  /// key is already in here reuse the shared image id instead of triggering
+  /// another decode/addImage round trip.
+  final Set<String> _loadedAnimalIcons = {};
+
+  bool _isAnimalMarker(GeoJsonMarker marker) =>
+      marker.customRendering && marker.properties?['animalRef'] != null;
+
+  /// Content key an animal marker's baked icon depends on: its photo plus
+  /// whatever title gets baked into the pill (empty when hidden). Two
+  /// markers with the same key produce byte-identical composites.
+  String _animalIconKey(GeoJsonMarker marker) =>
+      '${marker.assetPath}|${marker.textVisibility ? (marker.title ?? '') : ''}';
+
+  /// Registered image id shared by every animal marker with the same
+  /// [_animalIconKey] — one GPU texture per unique photo+title instead of
+  /// one per marker. The same id is used for both the paw placeholder and
+  /// the final photo, so the feature's `icon` property never has to change.
+  String _animalImageId(GeoJsonMarker marker) =>
+      'animal-${_animalIconKey(marker).hashCode}';
+
+  /// Downscales [bytes] so its longest edge is at most [maxSize] px, encoding
+  /// the result back to PNG. Returns the original bytes unchanged if they're
+  /// already small enough — avoids pushing whatever resolution the source
+  /// photo happens to be up to the GPU.
+  Future<Uint8List> _resizeImageBytes(Uint8List bytes, int maxSize) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final int width = frame.image.width;
+    final int height = frame.image.height;
+    if (width <= maxSize && height <= maxSize) return bytes;
+    final double scale = maxSize / (width > height ? width : height);
+    final int targetWidth = (width * scale).round().clamp(1, maxSize);
+    final int targetHeight = (height * scale).round().clamp(1, maxSize);
+    final resizedCodec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
+    final resizedFrame = await resizedCodec.getNextFrame();
+    final byteData =
+        await resizedFrame.image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData?.buffer.asUint8List() ?? bytes;
+  }
+
+  /// Builds (or reuses) an animal marker's composited icon and registers it
+  /// under a content-derived id shared by every marker with the same photo
+  /// and baked title. A paw placeholder is registered under that same id
+  /// first (fast, local asset) so the marker isn't blank while the real
+  /// photo is fetched/decoded/composited, then overwritten once ready.
+  /// Returns true if a new (real) image was registered (i.e. the caller
+  /// needs to re-push the GeoJSON source).
+  Future<bool> _loadAnimalIcon(
+      MapplsMapController controller, GeoJsonMarker marker) async {
+    if (marker.assetPath == null) return false;
+    final String contentKey = _animalIconKey(marker);
+    final String imageId = _animalImageId(marker);
+    marker.anchor ??= const Offset(0.5, 0.5);
+    if (_loadedAnimalIcons.contains(contentKey)) {
+      return false;
+    }
+    try {
+      Uint8List? composite = _animalIconCache[contentKey];
+      Uint8List? smallComposite = _animalIconCache['$contentKey|small'];
+      if (composite == null || smallComposite == null) {
+        try {
+          final bd = await rootBundle.load(LandmarkAssetType.pawDot.assetPath);
+          final pawBytes = bd.buffer.asUint8List();
+          await Future.wait([
+            controller.addImage(imageId, pawBytes),
+            controller.addImage('$imageId-small', pawBytes),
+          ]);
+        } catch (e) {
+          print("_loadAnimalIcon placeholder $e");
+        }
+
+        // Fetch the source photo once and cap its resolution before it's
+        // ever decoded for compositing — a 4000x3000 zoo photo shouldn't be
+        // pushed through the pipeline at full size just to be shrunk to an
+        // 80px icon a moment later.
+        Uint8List? rawBytes;
+        if (marker.assetPath!.startsWith('http')) {
+          rawBytes = await CacheController().fetchWithCache(marker.assetPath!);
+        } else {
+          final bd = await rootBundle.load(marker.assetPath!);
+          rawBytes = bd.buffer.asUint8List();
+        }
+        if (rawBytes == null) return false;
+        final Uint8List resizedSource =
+            await _resizeImageBytes(rawBytes, _animalMaxIconSize);
+
+        final double fontSize = marker.properties?["fontSize"] ?? 14.5;
+        final Offset customAnchor =
+            marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+        final Size iconSize =
+            Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
+        // The text and text-less variants are independent bakes of the same
+        // resized source bytes — run them concurrently instead of back to
+        // back so the second bake's decode/canvas/encode work overlaps the
+        // first's await gaps rather than waiting for it to fully finish.
+        final iconResults = await Future.wait([
+          creator.createUnifiedMarker(
+            imageSize: iconSize,
+            fontSize: fontSize,
+            text: marker.textVisibility ? (marker.title ?? "") : "",
+            imageSource: marker.assetPath,
+            imageBytes: resizedSource,
+            layout: MarkerLayout.vertical,
+            textFormat: TextFormat.smartWrap,
+            textColor: const Color(0xff000000),
+            customAnchor: customAnchor,
+            expandCanvasForRotation:
+                (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
+          ),
+          creator.createUnifiedMarker(
+            imageSize: iconSize,
+            fontSize: fontSize,
+            text: "",
+            imageSource: marker.assetPath,
+            imageBytes: resizedSource,
+            layout: MarkerLayout.vertical,
+            textFormat: TextFormat.smartWrap,
+            textColor: const Color(0xff000000),
+            customAnchor: customAnchor,
+          ),
+        ]);
+        final withTextIcon = iconResults[0];
+        final withoutTextIcon = iconResults[1];
+        composite = withTextIcon.icon;
+        smallComposite = withoutTextIcon.icon;
+        marker.anchor = withTextIcon.anchor;
+        _animalIconCache[contentKey] = composite;
+        _animalIconCache['$contentKey|small'] = smallComposite;
+      }
+      // Independent platform-channel registrations — dispatch together.
+      await Future.wait([
+        controller.addImage(imageId, composite),
+        controller.addImage('$imageId-small', smallComposite),
+      ]);
+      _loadedAnimalIcons.add(contentKey);
+      return true;
+    } catch (e) {
+      print("_loadAnimalIcon $e");
+      return false;
+    }
+  }
+
+  /// Loads every animal marker's icon in parallel (instead of one at a time)
+  /// so a whole enclosure's worth of photos decode concurrently. Markers show
+  /// the paw placeholder until this resolves. Markers are grouped by content
+  /// key first so 30 lions sharing one photo dispatch a single
+  /// _loadAnimalIcon call instead of 30 concurrent, mutually unaware ones
+  /// that would all miss the cache and redo the same work. The source is
+  /// only re-pushed if at least one icon was newly registered, guarding
+  /// against a no-op re-render/flicker when every marker's icon was already
+  /// loaded from a previous call.
+  Future<void> _batchLoadAnimalIcons(
+      MapplsMapController controller, List<GeoJsonMarker> animalMarkers) async {
+    final Map<String, List<GeoJsonMarker>> groups = {};
+    for (final marker in animalMarkers) {
+      groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
+    }
+
+    bool anyChanged = false;
+    await Future.wait(groups.values.map((group) async {
+      try {
+        final changed = await _loadAnimalIcon(controller, group.first);
+        for (final marker in group.skip(1)) {
+          marker.anchor = group.first.anchor;
+        }
+        if (changed) {
+          anyChanged = true;
+          // Reveal icons as they finish instead of waiting for the whole
+          // batch — throttled so 20 photos landing within the same tick
+          // don't each trigger their own setGeoJsonSource round trip.
+          _scheduleAnimalIconRefresh(controller);
+        }
+      } catch (e) {
+        print("_batchLoadAnimalIcons $e");
+      }
+    }));
+    if (anyChanged) {
+      // Every icon in this batch has now resolved — flush right away rather
+      // than waiting out the throttle window for the last stragglers.
+      _pushAnimalIconRefresh(controller);
+    }
+  }
+
+  /// Debounce state for progressive animal-icon reveal. setGeoJsonSource
+  /// doesn't do an incremental update — it re-serializes and re-pushes
+  /// *every* marker on the map (not just animals) and makes the native side
+  /// re-layout the whole symbol layer, so it's expensive. Pushing once per
+  /// icon (or even throttled to ~150ms) still fired that full rebuild many
+  /// times over the course of a batch and visibly janked the map. Instead,
+  /// completions are batched with a trailing debounce: a push only fires
+  /// [_animalIconRefreshQuiet] after completions stop arriving, so a burst
+  /// of icons finishing close together (the common case, since they're all
+  /// fetched in parallel) collapses into a single push.
+  /// [_animalIconRefreshMaxWait] caps how long a slow trickle of completions
+  /// can go without any visual feedback at all.
+  Timer? _animalIconRefreshTimer;
+  DateTime? _animalIconRefreshWindowStart;
+  static const Duration _animalIconRefreshQuiet = Duration(milliseconds: 500);
+  static const Duration _animalIconRefreshMaxWait = Duration(milliseconds: 1500);
+
+  void _scheduleAnimalIconRefresh(MapplsMapController controller) {
+    _animalIconRefreshWindowStart ??= DateTime.now();
+    _animalIconRefreshTimer?.cancel();
+    if (DateTime.now().difference(_animalIconRefreshWindowStart!) >=
+        _animalIconRefreshMaxWait) {
+      _pushAnimalIconRefresh(controller);
+      return;
+    }
+    _animalIconRefreshTimer =
+        Timer(_animalIconRefreshQuiet, () => _pushAnimalIconRefresh(controller));
+  }
+
+  void _pushAnimalIconRefresh(MapplsMapController controller) {
+    _animalIconRefreshTimer?.cancel();
+    _animalIconRefreshTimer = null;
+    _animalIconRefreshWindowStart = null;
+    try {
+      setGeoJsonSource(controller, _symbols, _clusterSourceId);
+    } catch (e) {
+      print("error refreshing animal markers $e");
+    }
+  }
+
   Future<bool> _loadMarkerIcon(MapplsMapController controller, GeoJsonMarker marker) async {
+    if (_isAnimalMarker(marker)) {
+      return _loadAnimalIcon(controller, marker);
+    }
     if (marker.assetPath == null) return false;
     try {
       if (marker.customRendering) {
         Offset customAnchor = marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
-        MarkerIconWithAnchor markerIconWithAnchorWithText =
-        await creator.createUnifiedMarker(
-          imageSize: marker.imageSize ?? const Size(85, 85),
-          fontSize: 14.5,
-          text: marker.textVisibility? marker.title??"":"",
-          imageSource: marker.assetPath,
-          layout: MarkerLayout.vertical,
-          textFormat: TextFormat.smartWrap,
-          textColor: const Color(0xff000000),
-          customAnchor: customAnchor,
-          expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
-        );
-        MarkerIconWithAnchor markerIconWithAnchorWithoutText =
-        await creator.createUnifiedMarker(
-          imageSize: marker.imageSize ?? const Size(85, 85),
-          fontSize: 14.5,
-          text: "",
-          imageSource: marker.assetPath,
-          layout: MarkerLayout.vertical,
-          textFormat: TextFormat.smartWrap,
-          textColor: const Color(0xff000000),
-          customAnchor: customAnchor,
-        );
+        // Fetch the source photo once and share it between the with-text and
+        // without-text bakes below (each used to independently fetch the
+        // same URL/asset, doubling network+disk work per marker).
+        Uint8List? sourceBytes;
+        if (marker.assetPath!.startsWith('http')) {
+          sourceBytes = await CacheController().fetchWithCache(marker.assetPath!);
+        } else {
+          final bd = await rootBundle.load(marker.assetPath!);
+          sourceBytes = bd.buffer.asUint8List();
+        }
+        // The two bakes are independent — run them concurrently instead of
+        // back to back.
+        final iconResults = await Future.wait([
+          creator.createUnifiedMarker(
+            imageSize: marker.imageSize ?? const Size(85, 85),
+            fontSize: 14.5,
+            text: marker.textVisibility? marker.title??"":"",
+            imageSource: marker.assetPath,
+            imageBytes: sourceBytes,
+            layout: MarkerLayout.vertical,
+            textFormat: TextFormat.smartWrap,
+            textColor: const Color(0xff000000),
+            customAnchor: customAnchor,
+            expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
+          ),
+          creator.createUnifiedMarker(
+            imageSize: marker.imageSize ?? const Size(85, 85),
+            fontSize: 14.5,
+            text: "",
+            imageSource: marker.assetPath,
+            imageBytes: sourceBytes,
+            layout: MarkerLayout.vertical,
+            textFormat: TextFormat.smartWrap,
+            textColor: const Color(0xff000000),
+            customAnchor: customAnchor,
+          ),
+        ]);
+        final markerIconWithAnchorWithText = iconResults[0];
+        final markerIconWithAnchorWithoutText = iconResults[1];
         final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
         final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
-        await controller.addImage(marker.id, iconBytes);
-        await controller.addImage("${marker.id}-small", iconBytes2);
+        await Future.wait([
+          controller.addImage(marker.id, iconBytes),
+          controller.addImage("${marker.id}-small", iconBytes2),
+        ]);
         marker.anchor = markerIconWithAnchorWithText.anchor;
         return true;
       } else {
@@ -2027,7 +2304,8 @@ class MapplsMapProvider extends BaseMapProvider {
 
   @override
   Future<void> selectLocation(controller, String polyID) async {
-    if(selectedLocation?.polyID == polyID) return;
+    final currentMarker = selectedLocation?.marker as GeoJsonMarker?;
+    if (selectedLocation?.polyID == polyID || (currentMarker != null && currentMarker.id.contains(polyID))) return;
     if (controller is! MapplsMapController) {
       print('Error: Invalid controller type');
       return;
@@ -2038,6 +2316,9 @@ class MapplsMapProvider extends BaseMapProvider {
     }
 
     try {
+      // We don't call deSelectLocation here to avoid redundant GeoJSON pushes.
+      // The new selection will naturally overwrite the old one in the sources below.
+
       GeoJsonPolygon? polygon;
       GeoJsonMarker? marker;
       // Try to find marker
@@ -2051,14 +2332,6 @@ class MapplsMapProvider extends BaseMapProvider {
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
         return;
-      }
-
-      if(marker != null){
-        // Deselect previous location if exists
-        if (selectedLocation != null) {
-          print("selectedLocation is ${selectedLocation.toString()}");
-          await deSelectLocation(controller);
-        }
       }
 
       String polyIDInsideMarker = polyID;
@@ -2095,7 +2368,42 @@ class MapplsMapProvider extends BaseMapProvider {
         return;
       }
 
-      // Calculate bounds and center
+      // Store selected location state
+      selectedLocation = SelectedLocation(
+        polyID: polyIDInsideMarker??polyID,
+        polygon: polygon,
+        marker: marker,
+      );
+
+      // 1. Kick off visual updates immediately for tap feedback.
+      // For Mappls, we just use the isSelected property to trigger the layer properties.
+      if (polygon != null) {
+        _updatePolygonSelectionState(controller, polygon.id, true);
+      }
+      if (marker != null) {
+        setGeoJsonSource(
+          controller,
+          _symbols,
+          _clusterSourceId,
+          selectedMarkerId: marker.id,
+        );
+      }
+
+      // 2. Notify listeners before the camera moves so panels open on tap
+      // rather than after the animation settles.
+      if (polygon != null) {
+        _config.onPolygonTap?.call(
+          coordinates: polygon.points,
+          polygonId: polyID,
+        );
+      } else if (marker != null) {
+        _config.onMarkerTap?.call(
+          coordinates: marker.position,
+          markerId: polyID,
+        );
+      }
+
+      // Calculate bounds and center for camera animation
       MapLocation? center;
       double? targetZoom;
 
@@ -2107,14 +2415,8 @@ class MapplsMapProvider extends BaseMapProvider {
         double maxLng = polygon.points.first.longitude;
 
         for (final point in polygon.points) {
-          if (point.latitude < -90 || point.latitude > 90) {
-            print('Warning: Invalid latitude ${point.latitude}');
-            continue;
-          }
-          if (point.longitude < -180 || point.longitude > 180) {
-            print('Warning: Invalid longitude ${point.longitude}');
-            continue;
-          }
+          if (point.latitude < -90 || point.latitude > 90) continue;
+          if (point.longitude < -180 || point.longitude > 180) continue;
 
           minLat = min(minLat, point.latitude);
           maxLat = max(maxLat, point.latitude);
@@ -2145,68 +2447,22 @@ class MapplsMapProvider extends BaseMapProvider {
         targetZoom = 19; // Default zoom for marker-only view
       }
 
-      // Update polygon selection state if polygon exists
-      if (polygon != null) {
-        await _updatePolygonSelectionState(controller, polygon.id, true);
-      }
-
-      print("marker $marker");
-      // Handle marker styling if marker exists
-      if (marker != null) {
-        if(marker.assetPath == null){
-          try {
-            final genericMarker = PredefinedMarkers.getGenericMarker(marker);
-            print("genericMarker id ${genericMarker.id}");
-            await removeMarker(controller, polyID);
-            await addMarker(controller, genericMarker);
-          } catch (e) {
-            print('Warning: Failed to update marker styling: $e');
-          }
-        }else{
-          var copyMarker = marker?.copyWith(imageSize: Size(50, 50), textVisibility: true, priority: true);
-          print("copyMarker ${copyMarker?.assetPath}");
-          await removeMarker(controller, polyID);
-          await addMarker(controller, copyMarker!);
-        }
-      }
-
-
-      // Store selected location
-      selectedLocation = SelectedLocation(
-        polyID: polyIDInsideMarker??polyID,
-        polygon: polygon,
-        marker: marker,
-      );
-
       CameraBound? bounds;
       if(polygon != null && polygon.points.isNotEmpty){
         bounds = calculateBounds(controller, polygon.points);
       }
 
-      // Animate camera if we have a valid center
+      // 3. Animate camera. We await this to ensure the function completes as expected.
       if (bounds != null || (center != null && targetZoom != null)) {
         try {
           if(bounds != null){
-            fitCameraToBounds(controller, bounds);
+            await fitCameraToBounds(controller, bounds);
           }else if(center != null && targetZoom != null){
-            animateCamera(controller, center, targetZoom);
+            await animateCamera(controller, center, targetZoom);
           }
         } catch (e) {
           print('Warning: Failed to animate camera: $e');
         }
-      }
-
-      // Trigger callback if polygon exists
-      if (polygon != null) {
-        _config.onPolygonTap?.call(
-          coordinates: polygon.points,
-          polygonId: polyID,
-        );
-      }else if(marker != null){
-        _config.onMarkerTap?.call(
-          coordinates: marker.position,
-          markerId: polyID,
-        );
       }
     } catch (e, stackTrace) {
       print('Error selecting location: $e');
