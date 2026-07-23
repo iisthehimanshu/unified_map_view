@@ -33,7 +33,7 @@ dependencies:
   unified_map_view:
     path: ../
   connectivity_plus: ^7.3.0
-  maplibre_gl: ^0.26.2
+  maplibre_gl: ^0.21.0
   mappls_gl: ^1.2.0
 
   # The following adds the Cupertino Icons font to your application.

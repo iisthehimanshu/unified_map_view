@@ -78,9 +78,26 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     );
     
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
-    // Future.delayed(const Duration(seconds: 2), () {
-    //   _addUserMarker();
-    // });
+    // TEST: drop a lone plain-asset icon marker to isolate icon rendering in maplibre 0.26
+    Future.delayed(const Duration(seconds: 6), () {
+      _addTestMarker();
+    });
+  }
+
+  Future<void> _addTestMarker() async {
+    final testMarker = GeoJsonMarker(
+      id: "test-icon-marker",
+      // Inside the visible venue cluster so it shows in the default onReady view.
+      position: MapLocation(latitude: 15.520980, longitude: 73.830470),
+      title: "TEST",
+      assetPath: 'packages/unified_map_view/assets/markers/generic_marker.png',
+      iconName: "Test",
+      imageSize: const Size(48, 48),
+      textVisibility: true,
+      customRendering: false,
+    );
+    await _unifiedMapController.addMarker(testMarker);
+    print("TEST-MARKER added generic_marker.png at 15.520980,73.830470");
   }
 
   // Future<void> _addUserMarker() async {
