@@ -25,7 +25,7 @@ import 'package:http/http.dart' as http;
 /// MapLibre GL implementation of BaseMapProvider
 /// Supports MapLibre — an open-source vector map rendering engine
 class MaplibreMapProvider extends BaseMapProvider {
-  MaplibreMapController? _controller;
+  MapLibreMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
   final List<GeoJsonCircle> _circles = [];
   final List<GeoJsonMarker> _rotatingSymbols = [];
@@ -133,7 +133,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
     return Stack(
       children: [
-        MaplibreMap(
+        MapLibreMap(
           trackCameraPosition: true,
           initialCameraPosition: CameraPosition(
               target: LatLng(
@@ -145,7 +145,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               bearing: config.initialLocation.bearing
           ),
           styleString: osmRasterStyle,
-          onMapCreated: (MaplibreMapController controller) async {
+          onMapCreated: (MapLibreMapController controller) async {
             _config = config;
             _controller = controller;
 
@@ -153,7 +153,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
             // Handle feature taps (polygons & markers)
             // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
-            controller.onFeatureTapped.add((dynamic id, Point<double> point, LatLng coordinates, String layerId) async {
+            controller.onFeatureTapped.add((Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation) async {
               print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
               // if (_symbols
               //     .where((s) => s.id.toLowerCase().contains("path"))
@@ -333,7 +333,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> moveCamera(
       dynamic controller, MapLocation location, double zoom) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       await controller.moveCamera(
         CameraUpdate.newLatLngZoom(
           LatLng(location.latitude, location.longitude),
@@ -352,7 +352,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         double? tilt,
         Duration? duration
       }) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       if (bearing != null && tilt != null) {
         await controller.animateCamera(
             CameraUpdate.newCameraPosition(
@@ -383,7 +383,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> setContentInsets(dynamic controller, EdgeInsets insets, {bool animated = true}) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       await controller.updateContentInsets(insets, animated);
     }
   }
@@ -393,7 +393,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         required bool isEnabled,
         double? tiltWhen3D,
       }) async {
-    if (controller is! MaplibreMapController) return;
+    if (controller is! MapLibreMapController) return;
     if (_config.immersive == isEnabled) return;
 
     _config = _config.copyWith(immersive: isEnabled);
@@ -451,7 +451,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<MapLocation?> getCurrentLocation(dynamic controller) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         final cameraPosition = controller.cameraPosition;
         if (cameraPosition == null) return null;
@@ -469,7 +469,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> setMapStyle(dynamic controller, String? styleJson) async {
-    if (controller is MaplibreMapController && styleJson != null) {
+    if (controller is MapLibreMapController && styleJson != null) {
       // await controller.setStyleString(styleJson);
     }
   }
@@ -480,7 +480,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addCircle(controller, GeoJsonCircle circle) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       _circles.removeWhere((c) => c.id == circle.id);
       _circles.add(circle);
       try {
@@ -496,7 +496,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removeCircle(controller, String id) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       _circles.removeWhere((c) => c.id.toLowerCase().contains(id));
       try {
         await _setGeoJsonCircle(controller);
@@ -506,7 +506,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> _setGeoJsonCircle(MaplibreMapController controller) async {
+  Future<void> _setGeoJsonCircle(MapLibreMapController controller) async {
     try {
       final features = _circles.map((circle) {
         return {
@@ -538,7 +538,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _circleExpanding = true;
 
   void _startCircleAnimation(
-      MaplibreMapController controller, GeoJsonCircle circle) {
+      MapLibreMapController controller, GeoJsonCircle circle) {
     _circleAnimationTimer?.cancel();
     var circleRadius = circle.properties?['radius'] ?? 5.0;
     _circleAnimationTimer =
@@ -582,7 +582,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> localizeUser(controller, GeoJsonMarker marker) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       if (_rotatingSymbols
           .where((e) => e.id.toLowerCase().contains("user"))
           .isNotEmpty) {
@@ -602,7 +602,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker, {String? selectedMarkerId}) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       await _loadMarkerIcon(controller, marker);
       _symbols.add(marker);
       try {
@@ -616,7 +616,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
     print("markers $markers");
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       final animalMarkers = <GeoJsonMarker>[];
       final otherMarkers = <GeoJsonMarker>[];
       for (var marker in markers) {
@@ -657,12 +657,12 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> moveUser(controller, String id, MapLocation location, Duration duration) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       await _animateMarkerToPosition(controller, id, location, duration);
     }
   }
 
-  Future<void> _updateUserLocation(MaplibreMapController controller) async {
+  Future<void> _updateUserLocation(MapLibreMapController controller) async {
     final features = _rotatingSymbols
         .map((marker) => {
       'type': 'Feature',
@@ -691,7 +691,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _animateMarkerToPosition(
-      MaplibreMapController controller,
+      MapLibreMapController controller,
       String id,
       MapLocation targetLocation,
       Duration duration
@@ -768,7 +768,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       String sourceID,
       {String? selectedMarkerId}
       ) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       if (!_isClusteringEnabled) {
         print("Clustering not enabled yet");
         return;
@@ -865,7 +865,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   double? _currentHeading;
 
   void _startCompassListening(
-      MaplibreMapController controller, String sourceID) {
+      MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
     _compassSub = FlutterCompass.events?.listen((event) async {
       if (event.heading == null) return;
@@ -906,7 +906,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// [clearAllMarkersAllowOverlap].
   @override
   Future<void> setMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {
-    if (controller is! MaplibreMapController) return;
+    if (controller is! MapLibreMapController) return;
     if (markerIds.isEmpty) return;
     _overlapOverrideIds.addAll(markerIds);
     await setGeoJsonSource(controller, _symbols, _clusterSourceId);
@@ -915,7 +915,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Turn the temporary overlap override back OFF for the given marker ids.
   @override
   Future<void> clearMarkersAllowOverlap(dynamic controller, List<String> markerIds) async {
-    if (controller is! MaplibreMapController) return;
+    if (controller is! MapLibreMapController) return;
     if (markerIds.isEmpty) return;
     _overlapOverrideIds.removeAll(markerIds);
     await setGeoJsonSource(controller, _symbols, _clusterSourceId);
@@ -924,7 +924,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Turn the temporary overlap override OFF for every marker it was set on.
   @override
   Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {
-    if (controller is! MaplibreMapController) return;
+    if (controller is! MapLibreMapController) return;
     if (_overlapOverrideIds.isEmpty) return;
     _overlapOverrideIds.clear();
     await setGeoJsonSource(controller, _symbols, _clusterSourceId);
@@ -932,7 +932,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         _symbols.removeWhere(
                 (marker) => marker.id.toLowerCase().contains(markerId));
@@ -958,7 +958,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> clearMarkers(dynamic controller) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         _symbols.clear();
         setGeoJsonSource(controller, [], _clusterSourceId);
@@ -975,7 +975,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolygon(dynamic controller, GeoJsonPolygon polygon) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         _polygons.add(polygon);
         await RenderingUtilities.registerLandmarkPattern(controller, polygon);
@@ -988,7 +988,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addSection(controller, GeoJsonPolygon polygon) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         _polygons.add(polygon);
         await _updatePolygonSource(controller);
@@ -1001,7 +1001,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> addPolygons(
       dynamic controller, List<GeoJsonPolygon> polygons) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         _polygons.addAll(polygons);
         await Future.wait(
@@ -1017,7 +1017,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _updatePolygonSource(
-      MaplibreMapController controller, {
+      MapLibreMapController controller, {
         String? selectPolygonId,
       }) async {
     if (!_isPolygonLayersEnabled) {
@@ -1123,7 +1123,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> removePolygon(dynamic controller, String polygonId,
       {String? exclude}) async {
-    if (controller is! MaplibreMapController) return;
+    if (controller is! MapLibreMapController) return;
 
     _polygons.removeWhere((polygon) {
       final id = polygon.id;
@@ -1136,7 +1136,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> clearPolygons(dynamic controller) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         _polygons.clear();
         await _updatePolygonSource(controller);
@@ -1152,7 +1152,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addPolyline(dynamic controller, GeoJsonPolyline polyline) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       bool isWaypoint = false;
       if (polyline.properties?["lineCategory"] != null) {
         isWaypoint =
@@ -1176,7 +1176,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> addPolylines(
       controller, List<GeoJsonPolyline> polylines) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       for (var polyline in polylines) {
         bool isWaypoint = false;
         if (polyline.properties?["lineCategory"] != null) {
@@ -1202,7 +1202,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> _updatePolylineSource(MaplibreMapController controller) async {
+  Future<void> _updatePolylineSource(MapLibreMapController controller) async {
     if (!_isPolylineLayersEnabled) {
       print("Polyline layers not enabled yet");
       return;
@@ -1245,7 +1245,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> removePolyline(dynamic controller, String polylineId) async {
-    if (controller is! MaplibreMapController) return;
+    if (controller is! MapLibreMapController) return;
 
     _lines.removeWhere((line) => line.id.contains(polylineId));
     await _updatePolylineSource(controller);
@@ -1253,7 +1253,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> clearPolylines(dynamic controller) async {
-    if (controller is MaplibreMapController) {
+    if (controller is MapLibreMapController) {
       try {
         _lines.clear();
         await _updatePolylineSource(controller);
@@ -1352,7 +1352,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// and baked title. Returns true if a new image was actually registered
   /// with the style (i.e. the caller needs to re-push the GeoJSON source).
   Future<bool> _loadAnimalIcon(
-      MaplibreMapController controller, GeoJsonMarker marker) async {
+      MapLibreMapController controller, GeoJsonMarker marker) async {
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
 
@@ -1447,7 +1447,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// guarding against a no-op re-render/flicker when every marker's icon was
   /// already loaded from a previous call.
   Future<void> _batchLoadAnimalIcons(
-      MaplibreMapController controller, List<GeoJsonMarker> animalMarkers) async {
+      MapLibreMapController controller, List<GeoJsonMarker> animalMarkers) async {
     final Map<String, List<GeoJsonMarker>> groups = {};
     for (final marker in animalMarkers) {
       groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
@@ -1498,7 +1498,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const Duration _animalIconRefreshQuiet = Duration(milliseconds: 500);
   static const Duration _animalIconRefreshMaxWait = Duration(milliseconds: 1500);
 
-  void _scheduleAnimalIconRefresh(MaplibreMapController controller) {
+  void _scheduleAnimalIconRefresh(MapLibreMapController controller) {
     _animalIconRefreshWindowStart ??= DateTime.now();
     _animalIconRefreshTimer?.cancel();
     if (DateTime.now().difference(_animalIconRefreshWindowStart!) >=
@@ -1510,7 +1510,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         Timer(_animalIconRefreshQuiet, () => _pushAnimalIconRefresh(controller));
   }
 
-  void _pushAnimalIconRefresh(MaplibreMapController controller) {
+  void _pushAnimalIconRefresh(MapLibreMapController controller) {
     _animalIconRefreshTimer?.cancel();
     _animalIconRefreshTimer = null;
     _animalIconRefreshWindowStart = null;
@@ -1711,7 +1711,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   // Layer initialisation
   // ---------------------------------------------------------------------------
 
-  Future<void> enableCircleLayers(MaplibreMapController controller) async {
+  Future<void> enableCircleLayers(MapLibreMapController controller) async {
     try {
       await controller.addGeoJsonSource(_circleSourceId, {
         'type': 'FeatureCollection',
@@ -2323,7 +2323,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> enablePolygonLayers(MaplibreMapController controller) async {
+  Future<void> enablePolygonLayers(MapLibreMapController controller) async {
     try {
       await controller.addGeoJsonSource(_polygonSourceId, {
         'type': 'FeatureCollection',
@@ -2551,7 +2551,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _refreshPatchAboveOpacity(
-      MaplibreMapController controller, {
+      MapLibreMapController controller, {
         Size? screenSize,
       }) async {
     final boundaryPolygons = _polygons.where((p) =>
@@ -2690,7 +2690,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _refreshMarkerLayerMinZooms(
-      MaplibreMapController controller,
+      MapLibreMapController controller,
       double fadeOutZoom,
       ) async {
     final fadeInEnd = fadeOutZoom;
@@ -2787,7 +2787,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     return fitZoom.clamp(1.0, 22.0);
   }
 
-  Future<void> enablePolylineLayers(MaplibreMapController controller) async {
+  Future<void> enablePolylineLayers(MapLibreMapController controller) async {
     try {
       await controller.addGeoJsonSource(_polylineSourceId, {
         'type': 'FeatureCollection',
@@ -2973,7 +2973,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> selectLocation(controller, String polyID) async {
     final currentMarker = selectedLocation?.marker as GeoJsonMarker?;
     if (selectedLocation?.polyID == polyID || (currentMarker != null && currentMarker.id.contains(polyID))) return;
-    if (controller is! MaplibreMapController) {
+    if (controller is! MapLibreMapController) {
       print('Error: Invalid controller type');
       return;
     }
@@ -3135,7 +3135,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _updatePolygonSelectionState(
-      MaplibreMapController controller,
+      MapLibreMapController controller,
       String selectPolygonId,
       bool isSelected,
       ) async {
@@ -3144,7 +3144,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> deSelectLocation(dynamic controller) async {
-    if (controller is! MaplibreMapController) {
+    if (controller is! MapLibreMapController) {
       print('Error: Invalid controller type in deSelectLocation');
       return;
     }
