@@ -26,46 +26,51 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
 
   @override
   Widget build(BuildContext context) {
-    if (controller.focusedBuildingAvailableFloors == null ||
-        controller.focusBuildingSelectedFloor == null) {
-      return const SizedBox.shrink();
-    }
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        if (controller.focusedBuildingAvailableFloors == null ||
+            controller.focusBuildingSelectedFloor == null) {
+          return const SizedBox.shrink();
+        }
 
-    var selectedFloor = controller.focusBuildingSelectedFloor!;
-    List<SpeedDialChild> floorsChildren = floorChildren();
+        var selectedFloor = controller.focusBuildingSelectedFloor!;
+        List<SpeedDialChild> floorsChildren = floorChildren();
 
-    if (floorsChildren.isEmpty || floorsChildren.length == 1) {
-      return const SizedBox.shrink();
-    }
+        if (floorsChildren.isEmpty || floorsChildren.length == 1) {
+          return const SizedBox.shrink();
+        }
 
-    double spacing = MediaQuery.of(context).size.height * 0.015;
-    final buildingName = controller.focusedBuildingName;
-    final hasBuildingName = buildingName != null && buildingName.isNotEmpty;
+        double spacing = MediaQuery.of(context).size.height * 0.015;
+        final buildingName = controller.focusedBuildingName;
+        final hasBuildingName = buildingName != null && buildingName.isNotEmpty;
 
-    return SafeArea(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Building name sits to the left of the (close) button while open.
-          if (_isOpen && hasBuildingName) ...[
-            Flexible(child: _buildingNameLabel(buildingName)),
-            const SizedBox(width: 12),
-          ],
-          SpeedDial(
-            activeIcon: Icons.close,
-            backgroundColor: color,
-            foregroundColor: Colors.white,
-            activeBackgroundColor: color,
-            overlayOpacity: 0.2,
-            spacing: spacing,
-            onOpen: () => setState(() => _isOpen = true),
-            onClose: () => setState(() => _isOpen = false),
-            children: floorsChildren,
-            child: _floorLabel(selectedFloor, color: Colors.white),
+        return SafeArea(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Building name sits to the left of the (close) button while open.
+              if (_isOpen && hasBuildingName) ...[
+                Flexible(child: _buildingNameLabel(buildingName)),
+                const SizedBox(width: 12),
+              ],
+              SpeedDial(
+                activeIcon: Icons.close,
+                backgroundColor: color,
+                foregroundColor: Colors.white,
+                activeBackgroundColor: color,
+                overlayOpacity: 0.2,
+                spacing: spacing,
+                onOpen: () => setState(() => _isOpen = true),
+                onClose: () => setState(() => _isOpen = false),
+                children: floorsChildren,
+                child: _floorLabel(selectedFloor, color: Colors.white),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
