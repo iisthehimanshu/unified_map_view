@@ -109,9 +109,17 @@ class VenueData{
       final name = feature.properties?["name"];
       final lowerName = name?.toLowerCase() ?? '';
 
-      return feature.buildingID == buildingId &&
-          feature.properties?["floor"] == floor &&
-          name != null &&
+      if (feature.buildingID != buildingId ||
+          feature.properties?["floor"] != floor) {
+        return false;
+      }
+
+      // Features carrying a "3dRef" part list (rendered as extruded 3D
+      // furniture) often have no name — e.g. waypoint points hosting a 3d
+      // object — so they bypass the name-based filtering below.
+      if (feature.properties?['3dRef'] != null) return true;
+
+      return name != null &&
           !lowerName.contains('non walkable') &&
           !lowerName.contains('iw');
     }).toList();

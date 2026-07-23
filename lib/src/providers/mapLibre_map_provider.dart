@@ -1390,12 +1390,32 @@ class MaplibreMapProvider extends BaseMapProvider {
     // horizontal w x d rectangle only; h feeds base/height later.
     final w = double.tryParse('${p['w'] ?? 0}') ?? 0.0;
     final d = double.tryParse('${p['d'] ?? 0}') ?? 0.0;
+
+    // Optional per-part "ry": the part's own yaw around its center
+    // (e.g. wall niches at ry 90/270, amalaka lobes at ry 30/60...),
+    // applied before the whole-item 3dModelAngle rotation.
+    final ryDeg = double.tryParse('${p['ry'] ?? 0}') ?? 0.0;
+    if (ryDeg == 0) {
+      return [
+        [ox - w / 2, oz - d / 2],
+        [ox + w / 2, oz - d / 2],
+        [ox + w / 2, oz + d / 2],
+        [ox - w / 2, oz + d / 2],
+      ];
+    }
+    final ryRad = ryDeg * pi / 180.0;
+    final cosR = cos(ryRad);
+    final sinR = sin(ryRad);
     return [
-      [ox - w / 2, oz - d / 2],
-      [ox + w / 2, oz - d / 2],
-      [ox + w / 2, oz + d / 2],
-      [ox - w / 2, oz + d / 2],
-    ];
+      [-w / 2, -d / 2],
+      [w / 2, -d / 2],
+      [w / 2, d / 2],
+      [-w / 2, d / 2],
+    ].map((c) {
+      final x = c[0];
+      final z = c[1];
+      return [ox + x * cosR - z * sinR, oz + x * sinR + z * cosR];
+    }).toList();
   }
 
   // ---------------------------------------------------------------------------
