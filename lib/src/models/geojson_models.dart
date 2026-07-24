@@ -310,12 +310,6 @@ class GeoJsonMarker {
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
-
-    // Waypoint points are routing helpers, not landmarks. They previously
-    // never reached rendering (no "name" -> filtered out in VenueData), but
-    // ones carrying a "3dRef" now pass through for the 3D furniture layer —
-    // they still must not drop a marker icon.
-    if (feature.properties?["lineCategory"] == "waypoint") return null;
     if(feature.properties?["landmarkId"] == "69662a60a8a7487d6e1ba3c3"){
       print("getAssetForLandmark isGlobal ${feature.properties}");
     }

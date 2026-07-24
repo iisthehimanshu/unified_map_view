@@ -90,7 +90,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
   final String _furnitureSourceId = 'furniture-source';
+
+  /// 3D extruded furniture (shown in immersive/3D mode).
   final String _furnitureLayerId = 'furniture-layer';
+
+  /// Flat footprint of the same furniture (shown in 2D mode instead of
+  /// the extrusion).
+  final String _furnitureFillLayerId = 'furniture-fill-layer';
+
+  /// Furniture is fine detail, so it only appears once zoomed in past the
+  /// section/sub-section view. Zoom out to where sections show and it hides.
+  static const double _furnitureMinZoom = 17.5;
 
   final String _polylineSourceId = 'polylines-source';
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
@@ -104,6 +114,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isPolylineLayersEnabled = false;
   bool _isCircleLayersEnabled = false;
   bool _isFurnitureLayerEnabled = false;
+
+  /// Whether the furniture fill-extrusion layer currently exists on the map.
+  /// It is added only in 3D mode and removed entirely when switching to 2D.
+  bool _isFurnitureExtrusionAdded = false;
 
   Size? _screenSize;
   double? _fadeOutZoom;
@@ -247,6 +261,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               _loadedAnimalIcons.clear();
               _isCircleLayersEnabled = false;
               _isFurnitureLayerEnabled = false;
+              _isFurnitureExtrusionAdded = false;
 
               // Re-register all marker icons — style reload wipes addImage() calls
               for (final marker in [..._symbols, ..._rotatingSymbols]) {
@@ -448,6 +463,24 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
       );
     } catch (_) {}
+
+    // Furniture: extrude in 3D, flat fill in 2D. Switching to 2D removes the
+    // extrusion layer entirely (not just hides it); switching back re-adds it.
+    if (_isFurnitureLayerEnabled) {
+      if (isEnabled) {
+        await _addFurnitureExtrusionLayer(controller);
+      } else {
+        await _removeFurnitureExtrusionLayer(controller);
+      }
+      try {
+        await controller.setLayerProperties(
+          _furnitureFillLayerId,
+          FillLayerProperties(
+            visibility: isEnabled ? "none" : "visible",
+          ),
+        );
+      } catch (_) {}
+    }
 
     // Rebuild polygon source so height/base_height are removed in 2D.
     await _updatePolygonSource(
@@ -1257,6 +1290,33 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
+    // Flat footprint — visible only in 2D mode. Uses the same per-part
+    // "color" so the object reads as a top-down floor-plan silhouette.
+    await controller.addFillLayer(
+      _furnitureSourceId,
+      _furnitureFillLayerId,
+      FillLayerProperties(
+        fillColor: ['get', 'color'],
+        fillOutlineColor: ['get', 'color'],
+        visibility: _config.immersive ? "none" : "visible",
+      ),
+      minzoom: _furnitureMinZoom,
+    );
+
+    _isFurnitureLayerEnabled = true;
+
+    // The 3D extrusion layer only exists in immersive mode — in 2D there is
+    // no extrusion layer at all, just the flat fill above.
+    if (_config.immersive) {
+      await _addFurnitureExtrusionLayer(controller);
+    }
+  }
+
+  /// Adds the furniture fill-extrusion layer (3D). No-op if already present
+  /// or if the base furniture source/fill layer hasn't been created yet.
+  Future<void> _addFurnitureExtrusionLayer(
+      MapLibreMapController controller) async {
+    if (!_isFurnitureLayerEnabled || _isFurnitureExtrusionAdded) return;
     await controller.addFillExtrusionLayer(
       _furnitureSourceId,
       _furnitureLayerId,
@@ -1265,9 +1325,20 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillExtrusionBase: ['get', 'base'],
         fillExtrusionHeight: ['get', 'height'],
       ),
+      minzoom: _furnitureMinZoom,
     );
+    _isFurnitureExtrusionAdded = true;
+  }
 
-    _isFurnitureLayerEnabled = true;
+  /// Removes the furniture fill-extrusion layer entirely (used when switching
+  /// to 2D). The source and flat fill layer stay in place.
+  Future<void> _removeFurnitureExtrusionLayer(
+      MapLibreMapController controller) async {
+    if (!_isFurnitureExtrusionAdded) return;
+    try {
+      await controller.removeLayer(_furnitureLayerId);
+    } catch (_) {}
+    _isFurnitureExtrusionAdded = false;
   }
 
   Future<void> _updateFurnitureSource(MapLibreMapController controller) async {
