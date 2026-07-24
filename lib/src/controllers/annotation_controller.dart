@@ -28,6 +28,8 @@ class AnnotationController{
   Map<String, int> get selectedFloor => _venueData.selectedFloor;
   List<int> get floorsContainingPath => extractFloorsContainingPath(_path).toList();
 
+  int getFloorRenderLevel(int floor, String bid) => _venueData.getFloorRenderLevel(floor, bid);
+
   Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
   List<MapLocation> _pathPoints = [];

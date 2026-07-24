@@ -40,16 +40,20 @@ class FloorConfigs {
   String? sId;
   int? floorNumber;
   String? floorName;
+  String? buildingId;
   double? initialOrientation;
+  int? floorRenderLevel;
 
   FloorConfigs(
-      {this.sId, this.floorNumber, this.floorName, this.initialOrientation});
+      {this.sId, this.floorNumber, this.floorName, this.initialOrientation, this.floorRenderLevel, this.buildingId});
 
   FloorConfigs.fromJson(Map<dynamic, dynamic> json) {
     sId = json['_id'];
     floorNumber = json['floorNumber'];
     floorName = json['floorName'];
     initialOrientation = json['initialOrientation'] != null ? (json['initialOrientation'].toDouble()): null;
+    floorRenderLevel = json["floorHeight"];
+    buildingId = json["buildingId"];
   }
 
   Map<dynamic, dynamic> toJson() {
@@ -58,6 +62,8 @@ class FloorConfigs {
     data['floorNumber'] = this.floorNumber;
     data['floorName'] = this.floorName;
     data['initialOrientation'] = this.initialOrientation;
+    data['floorHeight'] = this.floorRenderLevel;
+    data['buildingId'] = this.buildingId;
     return data;
   }
 }

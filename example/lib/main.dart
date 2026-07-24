@@ -64,7 +64,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'DEPwd',
+        venueName: 'ApolloHospital',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
@@ -79,9 +79,9 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
     // TEST: drop a lone plain-asset icon marker to isolate icon rendering in maplibre 0.26
-    Future.delayed(const Duration(seconds: 6), () {
-      _addTestMarker();
-    });
+    // Future.delayed(const Duration(seconds: 6), () {
+    //   _addTestMarker();
+    // });
   }
 
   Future<void> _addTestMarker() async {

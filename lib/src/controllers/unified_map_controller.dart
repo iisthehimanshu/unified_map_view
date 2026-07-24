@@ -527,6 +527,10 @@ class UnifiedMapController extends ChangeNotifier {
   Map<String,int> get selectedFloor => _annotationController.selectedFloor;
   List<int> get floorsContainingPath => _annotationController.floorsContainingPath;
 
+  /// Maps an actual [floor] level to the render level (`floorRenderLevel`) that
+  /// should be displayed to the user, falling back to [floor] when unmapped.
+  int getFloorRenderLevel(int floor, String bid) => _annotationController.getFloorRenderLevel(floor, bid);
+
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
     await _annotationController.annotatePath(floor);

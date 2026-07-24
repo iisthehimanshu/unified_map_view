@@ -154,6 +154,24 @@ class VenueData{
     return 0.0;
   }
 
+  /// Maps an actual [floor] level to the level number that should be shown to
+  /// the user, using `floorRenderLevel` from the matching floor config. Falls
+  /// back to [floor] itself when there is no config or no render level.
+  int getFloorRenderLevel(int floor, String bid) {
+    final model = GlobalAppGeoJsonDataModel.fromJson(json);
+
+    final configs = model.floorConfigs;
+    if (configs == null || configs.isEmpty) return floor;
+
+    for (final f in configs) {
+      if (f.floorRenderLevel == floor && f.buildingId == bid) {
+        return f.floorNumber ?? floor;
+      }
+    }
+
+    return floor;
+  }
+
   List<GeoJsonFeature> setBuildingFloor({required String buildingId, required int floor}){
     _selectedFloor[buildingId] = floor;
     return _getFeaturesForBuildingAndFloor(buildingId, floor);

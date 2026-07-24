@@ -65,7 +65,7 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
                 onOpen: () => setState(() => _isOpen = true),
                 onClose: () => setState(() => _isOpen = false),
                 children: floorsChildren,
-                child: _floorLabel(selectedFloor, color: Colors.white),
+                child: _floorLabel(selectedFloor, controller.focusedBuilding??"", color: Colors.white),
               ),
             ],
           ),
@@ -85,7 +85,7 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
       return SpeedDialChild(
         shape: const CircleBorder(),
         child: _floorLabel(
-          floor,
+          floor, controller.focusedBuilding??"",
           color: isSelected ? Colors.white : Colors.black,
         ),
         backgroundColor: isSelected ? Colors.blue : Colors.white,
@@ -120,9 +120,12 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
     );
   }
 
-  Widget _floorLabel(int floor, {Color? color}) {
+  Widget _floorLabel(int floor, String bid, {Color? color}) {
+    // Show the user-facing render level (matched to floorNumber in floorConfig),
+    // while the actual level is still used for floor changes.
+    final renderLevel = controller.getFloorRenderLevel(floor, bid);
     return Text(
-      floor == 0 ? 'G' : floor.toString(),
+      renderLevel == 0 ? 'G' : renderLevel.toString(),
       style: TextStyle(
         fontWeight: FontWeight.bold,
         color: color ?? Colors.black,
