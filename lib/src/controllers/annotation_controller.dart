@@ -114,6 +114,7 @@ class AnnotationController{
       _unifiedMapController.removePolyline(buildingID);
       _unifiedMapController.removeMarker(buildingID);
       _unifiedMapController.removeCircle(buildingID);
+      _unifiedMapController.removeFurniture(buildingID);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
     }
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
@@ -153,6 +154,7 @@ class AnnotationController{
       _unifiedMapController.removePolyline(buildingID);
       _unifiedMapController.removeMarker(buildingID);
       _unifiedMapController.removeCircle(buildingID);
+      _unifiedMapController.removeFurniture(buildingID);
 
       final featuresToRender =
           floorData.isNotEmpty ? floorData : _floorFallbackBoundary(buildingID);

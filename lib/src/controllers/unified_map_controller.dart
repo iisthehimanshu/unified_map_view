@@ -335,7 +335,58 @@ class UnifiedMapController extends ChangeNotifier {
     await addMarkers(sectionMarkers);
     await addMarkers(subSectionMarkers);
 
+    // Point features carrying a "3dRef" part list are also rendered as
+    // extruded 3D furniture (in addition to their marker, if any).
+    final furnitureItems = <Map<String, dynamic>>[];
+    for (final f in collection.features) {
+      if (f.geometry.type != GeoJsonGeometryType.point) continue;
+      if (f.properties?['3dRef'] == null) continue;
+      // Point coordinates arrive nested ([[lng, lat]]) from the API models
+      // (GlobalAppGeoGeometry wraps them) — unwrap the same way
+      // GeoJsonMarker.fromFeature does with coordinates[0].
+      dynamic coords = f.geometry.coordinates;
+      if (coords is List && coords.isNotEmpty && coords.first is List) {
+        coords = coords.first;
+      }
+      if (coords is! List || coords.length < 2) continue;
+      furnitureItems.add({
+        // Kept so removeFurniture(buildingId) can clear one building's
+        // furniture on a floor switch, mirroring removeMarker/removePolygon.
+        'buildingId': f.buildingId,
+        'geometry': {'coordinates': coords},
+        'properties': f.properties,
+      });
+    }
+    if (furnitureItems.isNotEmpty) {
+      await addFurniture(furnitureItems);
+    }
+
     notifyListeners();
+  }
+
+  /// Render point features carrying a "3dRef" part list as extruded 3D
+  /// furniture/objects. Items are raw GeoJSON feature maps
+  /// ({geometry, properties}).
+  Future<void> addFurniture(List<Map<String, dynamic>> items) async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.addFurniture(
+          _currentMapController, items);
+    }
+  }
+
+  /// Remove one building's furniture (e.g. on a floor switch).
+  Future<void> removeFurniture(String buildingId) async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.removeFurniture(
+          _currentMapController, buildingId);
+    }
+  }
+
+  /// Remove all furniture/3D objects added via [addFurniture].
+  Future<void> clearFurniture() async {
+    if (_currentMapController != null) {
+      await currentProviderImplementation.clearFurniture(_currentMapController);
+    }
   }
 
   Future<void> selectLocation({required String polyID}) async {
