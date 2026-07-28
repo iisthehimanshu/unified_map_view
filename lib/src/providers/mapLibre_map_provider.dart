@@ -1276,17 +1276,32 @@ class MaplibreMapProvider extends BaseMapProvider {
       _furnitureSourceId,
       GeojsonSourceProperties(
         data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
-        // With the defaults (maxzoom: 18, tolerance: 0.375px) the
-        // GeoJSON source is internally tiled only up to zoom 18 and
-        // every polygon gets Douglas-Peucker simplified by roughly a
-        // few cm at this latitude. Small parts (chair legs ~0.075m,
-        // arm posts ~0.05m) fall at or below that threshold and get
-        // simplified into degenerate/zero-area polygons — they
-        // silently vanish. Raising maxzoom past the max camera zoom
-        // and disabling simplification keeps every part intact.
-        maxzoom: 24,
+        // Furniture parts are centimetre-scale, which puts them right on the
+        // edge of what a tiled GeoJSON source can represent. Two separate
+        // mechanisms erase them, and both have to stay disabled.
+        //
+        // 1. tolerance MUST stay 0. It is not just Douglas-Peucker: for any
+        //    tile below maxzoom, geojson-vt drops a polygon ring outright when
+        //    its area is under (tolerance / (2^z * extent))^2. At z18 that
+        //    threshold is a ~1.4cm square, at z17 a ~2.8cm square — so thin
+        //    parts silently disappear, and reappear once you zoom to maxzoom
+        //    where the tolerance is forced to 0. That is exactly the
+        //    "random parts missing" symptom. Simplification would save nothing
+        //    here anyway: these rings are 4-16 points each.
+        //
+        // 2. maxzoom controls the quantisation grid of the deepest tile, since
+        //    coordinates are rounded to `extent` steps. At the default 18 a
+        //    step is ~3.7cm and a 5cm post collapses to zero area. At 22 a step
+        //    is ~2.3mm, fine enough for anything in these models, while still
+        //    stopping the source from building real tiles for two more zoom
+        //    levels on every pan the way 24 did.
+        maxzoom: 22,
         tolerance: 0,
-        buffer: 256,
+        // Default. Furniture parts are sub-metre, so the doubled 256 buffer
+        // was only duplicating geometry into neighbouring tiles. Buffer only
+        // controls how much neighbouring geometry a tile carries, so lowering
+        // it cannot drop a part — a clipped fill is re-closed at the seam.
+        buffer: 128,
       ),
     );
 

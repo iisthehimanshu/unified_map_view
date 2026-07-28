@@ -7,6 +7,12 @@ import '../utils/renderingUtilities.dart';
 class VenueData{
   VenueData._internal(this.venueName, this.json, this.buildingData) {
     venueLatLng = MapLocation(latitude: buildingData.buildings!.first.coordinates.first, longitude: buildingData.buildings!.first.coordinates.last);
+    // The venue response is parsed exactly once. Re-parsing it per call was
+    // walking every feature of every floor (and doing a jsonEncode/jsonDecode
+    // round-trip per feature's properties), which froze the UI thread when a
+    // lookup happened inside a widget build — see [getFloorRenderLevel].
+    _model = GlobalAppGeoJsonDataModel.fromJson(json);
+    _buildFloorConfigIndex();
     extractBuildingWiseData(json);
     findBuildingCenters();
   }
@@ -30,6 +36,42 @@ class VenueData{
   BuildingData buildingData;
   Map<String, MapLocation> buildingCenters = {};
 
+  /// The venue response parsed once, at construction. Every lookup below reads
+  /// from this instead of calling [GlobalAppGeoJsonDataModel.fromJson] again.
+  late final GlobalAppGeoJsonDataModel _model;
+
+  /// buildingId -> (floorRenderLevel -> floorNumber), from `floorConfigs`.
+  /// The value stays nullable so a config with a null `floorNumber` still
+  /// occupies its slot and falls back to the requested floor, exactly as the
+  /// previous first-match linear scan did.
+  final Map<String, Map<int, int?>> _renderLevelToFloorNumber = {};
+
+  /// floorNumber -> initialOrientation, from `floorConfigs`.
+  final Map<int, double> _floorOrientations = {};
+
+  /// Flattens `floorConfigs` into the two lookup maps above. Both keep the
+  /// first matching config for a key, preserving the first-match-wins
+  /// behaviour of the linear scans these replace.
+  void _buildFloorConfigIndex() {
+    final configs = _model.floorConfigs;
+    if (configs == null) return;
+    for (final f in configs) {
+      final buildingId = f.buildingId;
+      final renderLevel = f.floorRenderLevel;
+      if (buildingId != null && renderLevel != null) {
+        _renderLevelToFloorNumber
+            .putIfAbsent(buildingId, () => {})
+            .putIfAbsent(renderLevel, () => f.floorNumber);
+      }
+
+      final floorNumber = f.floorNumber;
+      if (floorNumber != null) {
+        _floorOrientations.putIfAbsent(
+            floorNumber, () => f.initialOrientation ?? 0.0);
+      }
+    }
+  }
+
   Map<String, List<int>> get availableFloors => _availableFloors;
   Map<String, int> get selectedFloor => _selectedFloor;
 
@@ -43,8 +85,10 @@ class VenueData{
     return null;
   }
 
+  /// [json] is kept for API compatibility but is no longer re-parsed here —
+  /// it is the same response already parsed into [_model] at construction.
   void extractBuildingWiseData(Map<String, dynamic> json){
-    GlobalAppGeoJsonDataModel globalAppGeoJsonDataModel = GlobalAppGeoJsonDataModel.fromJson(json);
+    GlobalAppGeoJsonDataModel globalAppGeoJsonDataModel = _model;
     _availableFloors.clear();
     _selectedFloor.clear();
 
@@ -101,11 +145,9 @@ class VenueData{
       String buildingId,
       int floor,
       ) {
-    GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
+    if (_model.data == null) return [];
 
-    if (model.data == null) return [];
-
-    final filteredData = model.data!.where((feature) {
+    final filteredData = _model.data!.where((feature) {
       final name = feature.properties?["name"];
       final lowerName = name?.toLowerCase() ?? '';
 
@@ -144,40 +186,32 @@ class VenueData{
       }
     }
 
-    return filteredData.map((f) => GeoJsonFeature.fromJson(f.toJson())).toList();
+    return filteredData.map((f) {
+      final featureJson = f.toJson();
+      // toJson() hands back the cached model's own properties map, and the
+      // render pipeline mutates properties (it clears 'bearing'). Copy it so a
+      // floor render can't write into the venue data — re-parsing per call used
+      // to give each caller a fresh map.
+      final props = featureJson['properties'];
+      if (props is Map<String, dynamic>) {
+        featureJson['properties'] = Map<String, dynamic>.from(props);
+      }
+      return GeoJsonFeature.fromJson(featureJson);
+    }).toList();
   }
 
   double getFloorOrientation(int floor) {
-    final model = GlobalAppGeoJsonDataModel.fromJson(json);
-
-    final configs = model.floorConfigs;
-    if (configs == null || configs.isEmpty) return 0.0;
-
-    for (final f in configs) {
-      if (f.floorNumber == floor) {
-        return f.initialOrientation ?? 0.0;
-      }
-    }
-
-    return 0.0;
+    return _floorOrientations[floor] ?? 0.0;
   }
 
   /// Maps an actual [floor] level to the level number that should be shown to
   /// the user, using `floorRenderLevel` from the matching floor config. Falls
   /// back to [floor] itself when there is no config or no render level.
+  ///
+  /// Called from widget builds (the floor speed dial rebuilds on every
+  /// controller notification), so this must stay a plain map lookup.
   int getFloorRenderLevel(int floor, String bid) {
-    final model = GlobalAppGeoJsonDataModel.fromJson(json);
-
-    final configs = model.floorConfigs;
-    if (configs == null || configs.isEmpty) return floor;
-
-    for (final f in configs) {
-      if (f.floorRenderLevel == floor && f.buildingId == bid) {
-        return f.floorNumber ?? floor;
-      }
-    }
-
-    return floor;
+    return _renderLevelToFloorNumber[bid]?[floor] ?? floor;
   }
 
   List<GeoJsonFeature> setBuildingFloor({required String buildingId, required int floor}){
