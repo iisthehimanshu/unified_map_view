@@ -326,10 +326,12 @@ class GeoJsonMarker {
       return null;
     }
 
-    // Features carrying a "3dRef" part list are drawn as extruded 3D furniture
-    // (see UnifiedMapController.addFurniture) — they must not also get an icon,
-    // dot, or label on top of the 3D object.
-    if (feature.properties?["3dRef"] != null) {
+    // Features flagged "hideElement" get no marker at all — no icon, dot or
+    // name. Used e.g. for points drawn as extruded 3D furniture (see
+    // UnifiedMapController.addFurniture), where a marker on top of the 3D
+    // object is unwanted.
+    final hideElement = feature.properties?["hideElement"];
+    if (hideElement == true || hideElement == "true") {
       return null;
     }
 
