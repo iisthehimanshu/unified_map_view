@@ -2,10 +2,11 @@ import 'package:unified_map_view/src/apimodels/BuildingData.dart';
 import 'package:unified_map_view/src/apimodels/GlobalAppGeoJsonDataModel.dart';
 
 import '../../unified_map_view.dart';
+import '../models/furniture_model.dart';
 import '../utils/renderingUtilities.dart';
 
 class VenueData{
-  VenueData._internal(this.venueName, this.json, this.buildingData) {
+  VenueData._internal(this.venueName, this.json, this.buildingData, {this.furnitureData = const []}) {
     venueLatLng = MapLocation(latitude: buildingData.buildings!.first.coordinates.first, longitude: buildingData.buildings!.first.coordinates.last);
     // The venue response is parsed exactly once. Re-parsing it per call was
     // walking every feature of every floor (and doing a jsonEncode/jsonDecode
@@ -21,8 +22,8 @@ class VenueData{
   static VenueData? _instance;
 
   // Public factory constructor
-  factory VenueData(String venueName, Map<String, dynamic> json, BuildingData buildingData) {
-    _instance = VenueData._internal(venueName, json, buildingData);
+  factory VenueData(String venueName, Map<String, dynamic> json, BuildingData buildingData, {List<FurnitureModel> furnitureData = const []}) {
+    _instance = VenueData._internal(venueName, json, buildingData, furnitureData: furnitureData);
     return _instance!;
   }
   static VenueData? get instance => _instance;
@@ -30,6 +31,7 @@ class VenueData{
   String venueName;
   MapLocation venueLatLng = MapLocation(latitude: 21.7679, longitude: 78.8718);
   Map<String, dynamic> json;
+  List<FurnitureModel> furnitureData;
 
   Map<String,int> _selectedFloor = {};
   Map<String,List<int>> _availableFloors = {};

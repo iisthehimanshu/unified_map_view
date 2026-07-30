@@ -8,6 +8,7 @@ import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import '../apis/BuildingByVenue.dart';
+import '../apis/FurnitureAPI.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
 import '../config.dart';
 import '../models/Cell.dart';
@@ -68,14 +69,17 @@ class AnnotationController{
     // bootstrap latency for no reason, since neither depends on the other).
     final buildingDataFuture = BuildingByVenue().fetchBuildingIDS(venueName);
     final apiDataFuture = GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
+    final furnitureDataFuture = FurnitureAPI().fetchFurniture(venueName);
+
     final buildingData = await buildingDataFuture;
     final apiData = await apiDataFuture;
+    final furnitureData = await furnitureDataFuture;
 
     if (apiData == null || apiData.isEmpty) {
       throw Exception('No GeoJSON data received from API');
     }
     print("apiD Data recieved at ${DateTime.now()}");
-    _venueData = VenueData(venueName, apiData,buildingData);
+    _venueData = VenueData(venueName, apiData, buildingData, furnitureData: furnitureData);
     await renderVenue();
   }
 
