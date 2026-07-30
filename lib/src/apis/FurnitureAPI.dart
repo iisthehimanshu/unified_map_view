@@ -15,7 +15,7 @@ class FurnitureAPI {
 
       if (response.statusCode == 200) {
         final Map<String, dynamic> body = jsonDecode(response.body);
-        final List<dynamic> data = body['dataa'];
+        final List<dynamic> data = body['data'];
         return data.map((item) => FurnitureModel.fromJson(item)).toList();
       } else {
         print('Error fetching furniture: ${response.statusCode}');
