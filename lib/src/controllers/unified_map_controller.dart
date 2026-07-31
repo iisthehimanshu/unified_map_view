@@ -335,11 +335,13 @@ class UnifiedMapController extends ChangeNotifier {
     await addMarkers(sectionMarkers);
     await addMarkers(subSectionMarkers);
 
-    // Point features carrying a "3dRef" part list are also rendered as
-    // extruded 3D furniture (in addition to their marker, if any).
+    // Point features carrying a "3dRef" part list are rendered as extruded 3D
+    // furniture. Whether they also get a marker is decided by the
+    // "hideElement" property (see GeoJsonMarker.fromFeature).
     final furnitureItems = <Map<String, dynamic>>[];
     for (final f in collection.features) {
       if (f.geometry.type != GeoJsonGeometryType.point) continue;
+
       if (f.properties?['3dRef'] == null) continue;
       // Point coordinates arrive nested ([[lng, lat]]) from the API models
       // (GlobalAppGeoGeometry wraps them) — unwrap the same way
