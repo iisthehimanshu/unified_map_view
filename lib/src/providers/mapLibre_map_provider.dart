@@ -16,6 +16,7 @@ import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
 import '../utils/renderingUtilities.dart';
 import '../enums/Theme.dart';
+import '../VenueManager/VenueData.dart';
 import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
@@ -1214,6 +1215,16 @@ class MaplibreMapProvider extends BaseMapProvider {
     final raw = props['3dRef'];
     if (raw is Map) return Map<String, dynamic>.from(raw);
     if (raw is String && raw.isNotEmpty) {
+      // 1. Try to match by ID in the fetched furniture data
+      final furnitureData = VenueData.instance?.furnitureData;
+      if (furnitureData != null) {
+        try {
+          final model = furnitureData.firstWhere((m) => m.id == raw);
+          return model.toJson();
+        } catch (_) {}
+      }
+
+      // 2. Fall back to parsing as JSON string (original behavior)
       try {
         final decoded = jsonDecode(raw);
         if (decoded is Map) return Map<String, dynamic>.from(decoded);
@@ -1301,7 +1312,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         // was only duplicating geometry into neighbouring tiles. Buffer only
         // controls how much neighbouring geometry a tile carries, so lowering
         // it cannot drop a part — a clipped fill is re-closed at the seam.
-        buffer: 128,
+        buffer: 256,
       ),
     );
 
