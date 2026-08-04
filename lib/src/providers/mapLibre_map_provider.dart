@@ -116,6 +116,12 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isCircleLayersEnabled = false;
   bool _isFurnitureLayerEnabled = false;
 
+  /// Whether [_clusterSourceId]/[_rotationSourceId] currently exist natively.
+  /// A style reload wipes every source, so anything pushing GeoJSON from a
+  /// timer/stream (compass ticks, marker animation) must check this first —
+  /// otherwise the native controller NPEs on a null source.
+  bool _markerSourcesReady = false;
+
   /// Whether the furniture fill-extrusion layer currently exists on the map.
   /// It is added only in 3D mode and removed entirely when switching to 2D.
   bool _isFurnitureExtrusionAdded = false;
@@ -252,6 +258,9 @@ class MaplibreMapProvider extends BaseMapProvider {
               // Style reload wipes ALL sources, layers, and addImage() calls —
               // reset flags so enableXxxLayers() re-creates everything cleanly.
               _isClusteringEnabled = false;
+              // Sources are gone until enableMarkerLayers() re-adds them below;
+              // block async GeoJSON pushes for the whole rebuild window.
+              _markerSourcesReady = false;
               _isPolygonLayersEnabled = false;
               _isPolylineLayersEnabled = false;
               // Registered dot images are wiped too; allow re-registration.
@@ -556,6 +565,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _setGeoJsonCircle(MapLibreMapController controller) async {
+    // The 60fps move animation pushes this source every frame, so it lands mid
+    // style reload, when the source has been wiped and not yet re-added.
+    if (!_isCircleLayersEnabled) return;
     try {
       final features = _circles.map((circle) {
         return {
@@ -590,13 +602,43 @@ class MaplibreMapProvider extends BaseMapProvider {
       MapLibreMapController controller, GeoJsonCircle circle) {
     _circleAnimationTimer?.cancel();
     var circleRadius = circle.properties?['radius'] ?? 5.0;
+
+    // DIAGNOSTIC (temporary — revert once measured): paint the circle once at a
+    // static mid-pulse size and skip the periodic timer entirely. Each timer
+    // tick's setLayerProperties makes MapLibre re-parse the whole style on the
+    // render thread, which showed up as exactly 10 [ParseStyle] logs/sec while
+    // standing still. If panning is smooth with this in place, that timer is
+    // the cause. Delete this block to restore the pulse.
+    const bool kDisableCirclePulseForDiagnostics = true;
+    if (kDisableCirclePulseForDiagnostics) {
+      const double staticRadius = 12.0;
+      const double opacity = 1.0 - ((staticRadius - 5.0) / 15.0) * 0.7;
+      controller
+          .setLayerProperties(
+            _normalCircleLayerId,
+            CircleLayerProperties(
+              circleRadius: staticRadius,
+              circleColor: '#4CAF50',
+              circleOpacity: opacity * 0.3,
+              circleStrokeWidth: 2.0,
+              circleStrokeColor: '#4CAF50',
+              circleStrokeOpacity: opacity * 0.8,
+            ),
+          )
+          .catchError((_) {});
+      return;
+    }
+
+    // 20Hz of `setLayerProperties` ran forever once the user marker appeared.
+    // Halved to 10Hz with a doubled step, so the pulse keeps its period while
+    // sending half the platform-channel calls.
     _circleAnimationTimer =
-        Timer.periodic(const Duration(milliseconds: 50), (timer) async {
+        Timer.periodic(const Duration(milliseconds: 100), (timer) async {
           if (_circleExpanding) {
-            circleRadius += 0.5;
+            circleRadius += 1.0;
             if (circleRadius >= 20.0) _circleExpanding = false;
           } else {
-            circleRadius -= 0.5;
+            circleRadius -= 1.0;
             if (circleRadius <= 5.0) _circleExpanding = true;
           }
 
@@ -712,6 +754,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _updateUserLocation(MapLibreMapController controller) async {
+    // Animation ticks can land mid style reload, when the source doesn't exist.
+    if (!_markerSourcesReady) return;
     final features = _rotatingSymbols
         .map((marker) => {
       'type': 'Feature',
@@ -739,13 +783,22 @@ class MaplibreMapProvider extends BaseMapProvider {
     });
   }
 
+  /// Incremented on every new animation so an in-flight loop can detect it has
+  /// been superseded. Without this, a fix arriving before the previous glide
+  /// finishes leaves two loops writing interpolated positions into the *same*
+  /// marker object, fighting each other and doubling the channel traffic.
+  int _markerAnimationToken = 0;
+
   Future<void> _animateMarkerToPosition(
       MapLibreMapController controller,
       String id,
       MapLocation targetLocation,
       Duration duration
       ) async {
-    const fps = 60;
+    // Each step costs two `setGeoJsonSource` round trips, which alone overrun a
+    // 60fps budget — the loop could never hold that rate. 30 is the honest
+    // number and halves the traffic competing with map gestures.
+    const fps = 30;
     final steps = (duration.inMilliseconds / (1000 / fps)).round();
 
     final markers =
@@ -754,6 +807,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     _circles.where((c) => c.id.toLowerCase().contains(id));
 
     if (markers.isEmpty) return;
+
+    final token = ++_markerAnimationToken;
 
     final marker = markers.first;
     GeoJsonCircle? circle;
@@ -764,7 +819,10 @@ class MaplibreMapProvider extends BaseMapProvider {
     final endLat = targetLocation.latitude;
     final endLng = targetLocation.longitude;
 
+    if (startLat == endLat && startLng == endLng) return;
+
     for (int i = 1; i <= steps; i++) {
+      if (token != _markerAnimationToken) return;
       final progress = i / steps;
       final currentLat = startLat + (endLat - startLat) * progress;
       final currentLng = startLng + (endLng - startLng) * progress;
@@ -779,6 +837,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       await Future.delayed(Duration(milliseconds: 1000 ~/ fps));
     }
 
+    if (token != _markerAnimationToken) return;
     marker.position = targetLocation;
     if (circle != null) circle.position = targetLocation;
     await _updateUserLocation(controller);
@@ -919,6 +978,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     _compassSub = FlutterCompass.events?.listen((event) async {
       if (event.heading == null) return;
       _currentHeading = event.heading;
+      // A style reload wipes the rotation source; compass events keep arriving
+      // during the rebuild, and pushing then NPEs natively on a null source.
+      if (!_markerSourcesReady) return;
       final cameraPos = controller.cameraPosition;
       if (cameraPos == null) return;
 
@@ -943,10 +1005,16 @@ class MaplibreMapProvider extends BaseMapProvider {
       })
           .toList();
 
-      await controller.setGeoJsonSource(sourceID, {
-        "type": "FeatureCollection",
-        "features": features,
-      });
+      try {
+        await controller.setGeoJsonSource(sourceID, {
+          "type": "FeatureCollection",
+          "features": features,
+        });
+      } catch (e) {
+        // Lost the race with a style reload / map teardown: the next compass
+        // event repaints once the source is back.
+        print("compass setGeoJsonSource skipped: $e");
+      }
     });
   }
 
@@ -2121,6 +2189,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         'type': 'FeatureCollection',
         'features': [],
       });
+
+      // Both sources exist again — async pushes (compass, animation) may resume.
+      _markerSourcesReady = true;
 
       // Register the collision-fallback dot image (style reload wipes images).
       await _loadDotImage(controller);
@@ -3667,6 +3738,8 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   void dispose() {
+    _markerSourcesReady = false;
+    _isCircleLayersEnabled = false;
     _compassSub?.cancel();
     _compassSub = null;
     _circleAnimationTimer?.cancel();
