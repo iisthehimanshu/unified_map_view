@@ -685,7 +685,7 @@ class AnnotationController{
   Future<void> localizeUser(User user, {bool changeFloor = true}) async {
     if(_user != null && _user!.bid == user.bid && _user!.floor == user.floor ){
       if(changeFloor){
-        await changeBuildingFloor(user.bid, user.floor);
+        await changeAllBuildingsFloor(user.floor);
       }
       moveUser(user.location, user.floor);
       return;
@@ -696,7 +696,7 @@ class AnnotationController{
     GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
     GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
     if(changeFloor){
-      await changeBuildingFloor(user.bid, user.floor);
+      await changeAllBuildingsFloor(user.floor);
     }
     await _unifiedMapController.removeMarker("user");
     await _unifiedMapController.removeCircle("user");
