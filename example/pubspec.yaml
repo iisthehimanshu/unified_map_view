@@ -35,6 +35,9 @@ dependencies:
   connectivity_plus: ^7.3.0
   maplibre_gl: ^0.21.0
   mappls_gl: ^1.2.0
+  webview_flutter: ^4.10.0
+  glb_map_overlay:
+    path: ../../glb_map_overlay
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

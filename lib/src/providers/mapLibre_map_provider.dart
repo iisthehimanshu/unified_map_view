@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -26,6 +27,7 @@ import 'package:http/http.dart' as http;
 
 /// MapLibre GL implementation of BaseMapProvider
 /// Supports MapLibre — an open-source vector map rendering engine
+enum MarkerSelectionAnimationStyle { growShrink, shakeVertical }
 class MaplibreMapProvider extends BaseMapProvider {
   MapLibreMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
@@ -50,6 +52,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
+  final String _animatedMarkerSourceId = 'animated-marker-source';
+  final String _animatedMarkerLayerId = 'animated-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
@@ -156,204 +160,200 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
-    return Stack(
-      children: [
-        MapLibreMap(
-          trackCameraPosition: true,
-          initialCameraPosition: CameraPosition(
-              target: LatLng(
-                config.initialLocation.mapLocation.latitude,
-                config.initialLocation.mapLocation.longitude,
-              ),
-              zoom: config.initialLocation.zoom,
-              tilt: config.initialLocation.tilt,
-              bearing: config.initialLocation.bearing
+    return MapLibreMap(
+      trackCameraPosition: true,
+      initialCameraPosition: CameraPosition(
+          target: LatLng(
+            config.initialLocation.mapLocation.latitude,
+            config.initialLocation.mapLocation.longitude,
           ),
-          styleString: osmRasterStyle,
-          onMapCreated: (MapLibreMapController controller) async {
-            _config = config;
-            _controller = controller;
+          zoom: config.initialLocation.zoom,
+          tilt: config.initialLocation.tilt,
+          bearing: config.initialLocation.bearing
+      ),
+      styleString: osmRasterStyle,
+      onMapCreated: (MapLibreMapController controller) async {
+        _config = config;
+        _controller = controller;
 
-            config.onMapCreated(controller);
+        config.onMapCreated(controller);
 
-            // Handle feature taps (polygons & markers)
-            // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
-            controller.onFeatureTapped.add((dynamic id, Point<double> point, LatLng coordinates, String layerId) async {
-              print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
-              // if (_symbols
-              //     .where((s) => s.id.toLowerCase().contains("path"))
-              //     .isNotEmpty) return;
-              try {
-                // Query rendered features at the tap point for marker layers
-                final markerFeatures = await controller.queryRenderedFeatures(
-                  point,
-                  [
-                    _normalTextMarkerLayerId,
-                    "$_normalIconMarkerLayerId-withSectionId",
-                    "$_normalIconMarkerLayerId-withoutSectionId",
-                    _fixedMarkerLayerId,
-                    _customRenderingMarkerLayerId,
-                    _priorityMarkerLayerId,
-                    _rotationMarkerLayerId,
-                    _dotMarkerLayerId,
-                  ],
-                  null,
-                );
+        // Handle feature taps (polygons & markers)
+        // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
+        controller.onFeatureTapped.add((dynamic id, Point<double> point, LatLng coordinates, String layerId) async {
+          print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
+          // if (_symbols
+          //     .where((s) => s.id.toLowerCase().contains("path"))
+          //     .isNotEmpty) return;
+          try {
+            // Query rendered features at the tap point for marker layers
+            final markerFeatures = await controller.queryRenderedFeatures(
+              point,
+              [
+                _normalTextMarkerLayerId,
+                "$_normalIconMarkerLayerId-withSectionId",
+                "$_normalIconMarkerLayerId-withoutSectionId",
+                _fixedMarkerLayerId,
+                _customRenderingMarkerLayerId,
+                _priorityMarkerLayerId,
+                _rotationMarkerLayerId,
+                _dotMarkerLayerId,
+              ],
+              null,
+            );
 
-                print("queryRenderedFeatures count: ${markerFeatures.length}");
+            print("queryRenderedFeatures count: ${markerFeatures.length}");
 
-                if (markerFeatures.isNotEmpty) {
-                  final feature = markerFeatures.first;
-                  print(
-                      "feature $feature ${feature['properties']?['id']}");
-                  final markerId =
-                  _extractPolygonIdFromTap(feature['properties']?['id']);
-                  print("Marker tapped with ID: $markerId");
+            if (markerFeatures.isNotEmpty) {
+              final feature = markerFeatures.first;
+              print(
+                  "feature $feature ${feature['properties']?['id']}");
+              final markerId =
+              _extractPolygonIdFromTap(feature['properties']?['id']);
+              print("Marker tapped with ID: $markerId");
 
-                  if (markerId != null) {
-                    selectLocation(controller, markerId);
-                    return;
-                  }
-                }
-
-                final tappedPolygon = _hitTestPolygons(
-                  coordinates.latitude,
-                  coordinates.longitude,
-                );
-
-                print("tappedPolygon.id ${tappedPolygon?.id}");
-
-                if (tappedPolygon != null &&
-                    !tappedPolygon.id.toLowerCase().contains("boundary")) {
-                  final polygonId = _extractPolygonIdFromTap(tappedPolygon.id);
-                  if (polygonId != null &&
-                      !polygonId.toLowerCase().contains("boundary")) {
-                    selectLocation(controller, polygonId);
-                  }
-                  return;
-                }
-
-                // Fall through to polygon tap
-                if (id.isNotEmpty) {
-                  final polygonId = _extractPolygonIdFromTap(id);
-                  if (polygonId != null &&
-                      !polygonId.toLowerCase().contains("boundary")) {
-                    selectLocation(controller, polygonId);
-                  }
-                }
-              } catch (e) {
-                print("Error handling feature tap: $e");
+              if (markerId != null) {
+                selectLocation(controller, markerId);
+                return;
               }
-            });
-          },
-          onStyleLoadedCallback: () async {
-            if (_controller != null) {
-              await config.onStyleLoadedCallback(_controller);
-              // Style reload wipes ALL sources, layers, and addImage() calls —
-              // reset flags so enableXxxLayers() re-creates everything cleanly.
-              _isClusteringEnabled = false;
-              _isPolygonLayersEnabled = false;
-              _isPolylineLayersEnabled = false;
-              // Registered dot images are wiped too; allow re-registration.
-              _registeredDotImageIds.clear();
-              // Registered animal icons are wiped too (the composited bytes in
-              // _animalIconCache are still valid and get reused, only the
-              // addImage() registration needs to happen again).
-              _loadedAnimalIcons.clear();
-              _isCircleLayersEnabled = false;
-              _isFurnitureLayerEnabled = false;
-              _isFurnitureExtrusionAdded = false;
+            }
 
-              // Re-register all marker icons — style reload wipes addImage() calls
-              for (final marker in [..._symbols, ..._rotatingSymbols]) {
+            final tappedPolygon = _hitTestPolygons(
+              coordinates.latitude,
+              coordinates.longitude,
+            );
+
+            print("tappedPolygon.id ${tappedPolygon?.id}");
+
+            if (tappedPolygon != null &&
+                !tappedPolygon.id.toLowerCase().contains("boundary")) {
+              final polygonId = _extractPolygonIdFromTap(tappedPolygon.id);
+              if (polygonId != null &&
+                  !polygonId.toLowerCase().contains("boundary")) {
+                selectLocation(controller, polygonId);
+              }
+              return;
+            }
+
+            // Fall through to polygon tap
+            if (id.isNotEmpty) {
+              final polygonId = _extractPolygonIdFromTap(id);
+              if (polygonId != null &&
+                  !polygonId.toLowerCase().contains("boundary")) {
+                selectLocation(controller, polygonId);
+              }
+            }
+          } catch (e) {
+            print("Error handling feature tap: $e");
+          }
+        });
+      },
+      onStyleLoadedCallback: () async {
+        if (_controller != null) {
+          await config.onStyleLoadedCallback(_controller);
+          // Style reload wipes ALL sources, layers, and addImage() calls —
+          // reset flags so enableXxxLayers() re-creates everything cleanly.
+          _isClusteringEnabled = false;
+          _isPolygonLayersEnabled = false;
+          _isPolylineLayersEnabled = false;
+          // Registered dot images are wiped too; allow re-registration.
+          _registeredDotImageIds.clear();
+          // Registered animal icons are wiped too (the composited bytes in
+          // _animalIconCache are still valid and get reused, only the
+          // addImage() registration needs to happen again).
+          _loadedAnimalIcons.clear();
+          _isCircleLayersEnabled = false;
+          _isFurnitureLayerEnabled = false;
+          _isFurnitureExtrusionAdded = false;
+
+          // Re-register all marker icons — style reload wipes addImage() calls
+          for (final marker in [..._symbols, ..._rotatingSymbols]) {
+            try {
+              await _loadMarkerIcon(_controller!, marker);
+            } catch (e) {
+              print('Warning: failed to reload icon for ${marker.id}: $e');
+            }
+          }
+
+          await enablePolygonLayers(_controller!);
+          await enablePolylineLayers(_controller!);
+          await enableCircleLayers(_controller!);
+          await enableMarkerLayers(_controller!);
+
+          // enableMarkerLayers re-pushes _symbols, but not _rotatingSymbols
+          if (_rotatingSymbols.isNotEmpty) {
+            await setGeoJsonSource(_controller!, _rotatingSymbols, _rotationSourceId);
+          }
+          // Re-push polygons, polylines, and circles that existed before reload.
+          // Style reload wipes addImage() pattern bitmaps too, so re-register
+          // them BEFORE re-pushing the source — otherwise fill-pattern resolves
+          // to a missing image and the polygon renders grey.
+          if (_polygons.isNotEmpty) {
+            await Future.wait(
+              _polygons.map((polygon) async {
                 try {
-                  await _loadMarkerIcon(_controller!, marker);
+                  await RenderingUtilities.registerLandmarkPattern(_controller!, polygon);
                 } catch (e) {
-                  print('Warning: failed to reload icon for ${marker.id}: $e');
+                  print('Warning: failed to re-register pattern for ${polygon.id}: $e');
                 }
-              }
+              }),
+            );
+            await _updatePolygonSource(_controller!);
+          }
+          if (_lines.isNotEmpty) {
+            await _updatePolylineSource(_controller!);
+          }
+          if (_circles.isNotEmpty) {
+            await _setGeoJsonCircle(_controller!);
+          }
+          if (_furnitureItems.isNotEmpty) {
+            await _enableFurnitureLayer(_controller!);
+            await _updateFurnitureSource(_controller!);
+          }
+          _screenSize = MediaQuery.of(context).size;
+          await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
+        }
+      },
+      onCameraIdle: () async {
+        if (_controller != null) {
+          try {
+            final cameraPos = _controller!.cameraPosition;
+            if(cameraPos == null) return;
+            final target = cameraPos.target;
+            final bearing = cameraPos.bearing;
+            final tilt = cameraPos.tilt;
+            final zoom = cameraPos.zoom;
+            print("tilt $tilt");
+            print("zoom $zoom");
+            print("bearing $bearing");
+            var unifiedCameraPosition = UnifiedCameraPosition(
+                mapLocation: MapLocation(
+                  latitude: target.latitude,
+                  longitude: target.longitude,
+                ),
+                zoom: zoom,
+                bearing: bearing,
+                tilt: tilt
+            );
+            config.onCameraMove(unifiedCameraPosition);
 
-              await enablePolygonLayers(_controller!);
-              await enablePolylineLayers(_controller!);
-              await enableCircleLayers(_controller!);
-              await enableMarkerLayers(_controller!);
-
-              // enableMarkerLayers re-pushes _symbols, but not _rotatingSymbols
-              if (_rotatingSymbols.isNotEmpty) {
-                await setGeoJsonSource(_controller!, _rotatingSymbols, _rotationSourceId);
-              }
-              // Re-push polygons, polylines, and circles that existed before reload.
-              // Style reload wipes addImage() pattern bitmaps too, so re-register
-              // them BEFORE re-pushing the source — otherwise fill-pattern resolves
-              // to a missing image and the polygon renders grey.
-              if (_polygons.isNotEmpty) {
-                await Future.wait(
-                  _polygons.map((polygon) async {
-                    try {
-                      await RenderingUtilities.registerLandmarkPattern(_controller!, polygon);
-                    } catch (e) {
-                      print('Warning: failed to re-register pattern for ${polygon.id}: $e');
-                    }
-                  }),
-                );
-                await _updatePolygonSource(_controller!);
-              }
-              if (_lines.isNotEmpty) {
-                await _updatePolylineSource(_controller!);
-              }
-              if (_circles.isNotEmpty) {
-                await _setGeoJsonCircle(_controller!);
-              }
-              if (_furnitureItems.isNotEmpty) {
-                await _enableFurnitureLayer(_controller!);
-                await _updateFurnitureSource(_controller!);
-              }
-              _screenSize = MediaQuery.of(context).size;
-              await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
+            if(onCameraMove != null){
+              onCameraMove(unifiedCameraPosition);
             }
-          },
-          onCameraIdle: () async {
-            if (_controller != null) {
-              try {
-                final cameraPos = _controller!.cameraPosition;
-                if(cameraPos == null) return;
-                final target = cameraPos.target;
-                final bearing = cameraPos.bearing;
-                final tilt = cameraPos.tilt;
-                final zoom = cameraPos.zoom;
-                print("tilt $tilt");
-                print("zoom $zoom");
-                print("bearing $bearing");
-                var unifiedCameraPosition = UnifiedCameraPosition(
-                    mapLocation: MapLocation(
-                      latitude: target.latitude,
-                      longitude: target.longitude,
-                    ),
-                    zoom: zoom,
-                    bearing: bearing,
-                    tilt: tilt
-                );
-                config.onCameraMove(unifiedCameraPosition);
-
-                if(onCameraMove != null){
-                  onCameraMove(unifiedCameraPosition);
-                }
-              } catch (e) {
-                print("Error getting camera position: $e");
-              }
-            }
-          },
-          myLocationEnabled: config.showUserLocation,
-          myLocationTrackingMode: MyLocationTrackingMode.none,
-          compassEnabled: false,
-          rotateGesturesEnabled: config.rotateGesturesEnabled,
-          scrollGesturesEnabled: config.scrollGesturesEnabled,
-          tiltGesturesEnabled: config.tiltGesturesEnabled,
-          zoomGesturesEnabled: config.zoomControlsEnabled,
-          minMaxZoomPreference: const MinMaxZoomPreference(12.0, 23.0),
-          logoViewMargins: const Point(50, 5),
-        ),
-      ],
+          } catch (e) {
+            print("Error getting camera position: $e");
+          }
+        }
+      },
+      myLocationEnabled: config.showUserLocation,
+      myLocationTrackingMode: MyLocationTrackingMode.none,
+      compassEnabled: false,
+      rotateGesturesEnabled: config.rotateGesturesEnabled,
+      scrollGesturesEnabled: config.scrollGesturesEnabled,
+      tiltGesturesEnabled: config.tiltGesturesEnabled,
+      zoomGesturesEnabled: config.zoomControlsEnabled,
+      minMaxZoomPreference: const MinMaxZoomPreference(12.0, 23.0),
+      logoViewMargins: const Point(50, 5),
     );
   }
 
@@ -585,6 +585,10 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Timer? _circleAnimationTimer;
   bool _circleExpanding = true;
+  Timer? _iconAnimationTimer;
+  final Map<String, double> _markerIconScale = {};
+  final Map<String, double> _markerIconShakeDeg = {};
+  String? _animatingMarkerId;
 
   void _startCircleAnimation(
       MapLibreMapController controller, GeoJsonCircle circle) {
@@ -620,9 +624,124 @@ class MaplibreMapProvider extends BaseMapProvider {
         });
   }
 
+
   void stopCircleAnimation() {
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
+  }
+  ///
+  Future<void> animateMarkerSelection(
+      MapLibreMapController controller,
+      String markerId, {
+        MarkerSelectionAnimationStyle style = MarkerSelectionAnimationStyle.growShrink,
+      }) async {
+    if (_animatingMarkerId != null && _animatingMarkerId != markerId) {
+      _markerIconScale[_animatingMarkerId!] = 1.0;
+      _markerIconShakeDeg[_animatingMarkerId!] = 0.0;
+    }
+    _iconAnimationTimer?.cancel();
+    _animatingMarkerId = markerId;
+
+    final matches = _symbols.where((m) => m.id == markerId);
+    if (matches.isEmpty) return;
+    final marker = matches.first;
+    if (marker.assetPath == null) return;
+
+    // Awaited: static icon must be confirmed hidden before the animated
+    // layer starts drawing, otherwise both are visible for a frame or two.
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: markerId);
+    await Future.delayed(const Duration(milliseconds: 200)); // let native finish hiding it
+
+    const growShrinkDuration = Duration(milliseconds: 2400);
+    const shakeDuration = Duration(milliseconds: 1400);
+    final totalDuration = style == MarkerSelectionAnimationStyle.growShrink
+        ? growShrinkDuration
+        : shakeDuration;
+
+    final startTime = DateTime.now();
+    bool pushBusy = false;
+    const double peakScale = 2.2;
+    const double peakLabelScale = 1.6;
+
+    Future<void> pushAnimatedFeature(double scale, double shakeDeg, double labelScale) async {
+      if (pushBusy) return;
+      pushBusy = true;
+      try {
+        await controller.setGeoJsonSource(_animatedMarkerSourceId, {
+          'type': 'FeatureCollection',
+          'features': [
+            {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [marker.position.longitude, marker.position.latitude],
+              },
+              'properties': {
+                'icon': marker.id,
+                'iconScaleFactor': scale,
+                'iconShake': shakeDeg,
+                'labelScale': labelScale,
+                'title': marker.textVisibility
+                    ? creator.formatText(marker.title ?? "", TextFormat.smartWrap)
+                    : '',
+              },
+            }
+          ],
+        });
+      } finally {
+        pushBusy = false;
+      }
+    }
+
+    // First animated frame pushed and awaited BEFORE starting the timer, so
+    // there's no gap where neither the static nor animated icon is on screen.
+    await pushAnimatedFeature(1.0, 0.0, 1.0);
+
+    _iconAnimationTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
+      final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
+      final t = (elapsedMs / totalDuration.inMilliseconds).clamp(0.0, 1.0);
+
+      const double growPhaseEnd = 0.45;
+      const double shakeStart = 0.55;
+      double scale;
+      double shakeDeg = 0.0;
+
+      if (style == MarkerSelectionAnimationStyle.growShrink) {
+        const p1 = 0.25, p2 = 0.5, p3 = 0.75;
+        if (t < p1) {
+          scale = 1.0 + (peakScale - 1.0) * (t / p1);
+        } else if (t < p2) {
+          scale = peakScale + (1.0 - peakScale) * ((t - p1) / (p2 - p1));
+        } else if (t < p3) {
+          scale = 1.0 + (peakScale - 1.0) * ((t - p2) / (p3 - p2));
+        } else {
+          scale = peakScale;
+        }
+      } else {
+        if (t < growPhaseEnd) {
+          scale = 1.0 + (peakScale - 1.0) * (t / growPhaseEnd);
+        } else {
+          scale = peakScale;
+          if (t >= shakeStart) {
+            final settleT = ((t - shakeStart) / (1.0 - shakeStart)).clamp(0.0, 1.0);
+            final decay = (1.0 - settleT).clamp(0.0, 1.0);
+            shakeDeg = sin(settleT * pi * 6) * 14.0 * decay;
+          }
+        }
+      }
+
+      final growthFraction = ((scale - 1.0) / (peakScale - 1.0)).clamp(0.0, 1.0);
+      final labelScale = 1.0 + (peakLabelScale - 1.0) * growthFraction;
+
+      await pushAnimatedFeature(scale, shakeDeg, labelScale);
+
+      if (t >= 1.0) {
+        timer.cancel();
+        _markerIconScale[markerId] = peakScale;
+        _markerIconShakeDeg[markerId] = 0.0;
+        await pushAnimatedFeature(peakScale, 0.0, peakLabelScale);
+      }
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -824,7 +943,10 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
 
       final features = symbols.map((marker) {
-        final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
+        final bool isAnimatingThisMarker = marker.id == _animatingMarkerId;
+        final anchor = isAnimatingThisMarker
+            ? "center"
+            : (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
             ? "center"
             : "bottom";
         bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
@@ -880,6 +1002,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             // Numeric priority used by symbolSortKey: higher value → higher sort
             // precedence (wins collision). Negated inside the layer expression.
             _kPriorityKey: _markerPriority(marker),
+            'iconScaleFactor': _markerIconScale[marker.id] ?? 1.0,
+            'iconShake': _markerIconShakeDeg[marker.id] ?? 0.0,
+            'isAnimating': marker.id == _animatingMarkerId,
             // Per-feature base of the full marker's symbolSortKey. The dot layer
             // reuses this (+ a fractional offset) so each feature's dot is
             // placed right after its own full marker in the global collision
@@ -2180,6 +2305,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
         belowLayerId: null,
@@ -2269,6 +2395,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+
+          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["to-boolean", ["get", "sectionId"]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
@@ -2326,6 +2454,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["!", ["to-boolean", ["get", "sectionId"]]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
@@ -2433,6 +2562,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["to-boolean", ["get", "bearing"]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
         belowLayerId: _normalIconMarkerLayerId,
@@ -2607,7 +2737,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconAllowOverlap: true,
           textAllowOverlap: false,
         ),
-        filter: ["to-boolean", ["get", "isPriority"]],
+        filter: [
+          "all",
+          ["to-boolean", ["get", "isPriority"]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
+        ],
         enableInteraction: true,
         belowLayerId: null,
       );
@@ -2638,8 +2772,10 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["literal", [0, 1.2]],
             ["literal", [0, 1.2]]
           ],
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+          iconIgnorePlacement: true,
+          textIgnorePlacement: true,
         ),
         filter: [
           "all",
@@ -2648,6 +2784,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
         belowLayerId: null,
@@ -2665,18 +2802,67 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["concat", ["get", "icon"], "-selected"],
             ["get", "icon"],
           ],
-          iconSize: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            13,  0.2,
-            18,  1.5,
-          ],
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
+          // iconSize: [
+          //   "interpolate",
+          //   ["linear"],
+          //   ["zoom"],
+          //   13,  0.2,
+          //   18,  1.5,
+          // ],
+          iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
+          iconRotate: ["get", "iconShake"],
+          iconRotationAlignment: "viewport",
+          textField: ["get", "title"],
+          textSize: ["*", 14, 1.6], // keep this number equal to peakLabelScale above
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: ["literal", [0, 1.2]],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+          iconIgnorePlacement: true,
+          textIgnorePlacement: true,
         ),
-        filter: ["to-boolean", ["get", "isSelected"]],
+        filter: [
+          "all",
+          ["to-boolean", ["get", "isSelected"]],
+          ["!", ["to-boolean", ["get", "isAnimating"]]],
+          ["to-boolean", ["get", "icon"]],
+        ],
         enableInteraction: true,
+        belowLayerId: null,
+      );
+
+      // Layer 11: Animated marker — a separate, tiny source that only ever
+      // holds the single marker currently being tap-animated. Updating this
+      // every tick is cheap; updating the whole clusterSource every tick is not.
+      await controller.addGeoJsonSource(_animatedMarkerSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+      await controller.addSymbolLayer(
+        _animatedMarkerSourceId,
+        _animatedMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
+          iconRotate: ["get", "iconShake"],
+          iconRotationAlignment: "viewport",
+          iconAnchor: "center",
+          textField: ["get", "title"],
+          textSize: ["*", 14, ["get", "labelScale"]],
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: ["literal", [0, 1.2]],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+          iconIgnorePlacement: true,
+          textIgnorePlacement: true,
+        ),
+        enableInteraction: false,
         belowLayerId: null,
       );
 
@@ -3408,12 +3594,32 @@ class MaplibreMapProvider extends BaseMapProvider {
         _updatePolygonSource(controller, selectPolygonId: polygon.id);
       }
       if (marker != null) {
+        // Clear any leftover frozen animation from the previous selection
+        // BEFORE handling this new one. Needed because the animated layer
+        // now freezes in place instead of resetting itself — if this new
+        // marker has no icon, animateMarkerSelection never runs to
+        // overwrite it, so without this it would just sit there forever.
+        if (_animatingMarkerId != null && _animatingMarkerId != marker.id) {
+          _iconAnimationTimer?.cancel();
+          _markerIconScale.remove(_animatingMarkerId);
+          _markerIconShakeDeg.remove(_animatingMarkerId);
+          _animatingMarkerId = null;
+          await controller.setGeoJsonSource(_animatedMarkerSourceId, {
+            'type': 'FeatureCollection',
+            'features': [],
+          });
+        }
+
         setGeoJsonSource(
           controller,
           _symbols,
           _clusterSourceId,
           selectedMarkerId: marker.id,
         );
+      }
+
+      if (marker != null && marker.assetPath != null) {
+        animateMarkerSelection(controller, marker.id, style: MarkerSelectionAnimationStyle.growShrink);
       }
 
       // 2. Notify listeners before the camera moves so panels open on tap
@@ -3528,6 +3734,19 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     try {
       await _updatePolygonSource(controller, selectPolygonId: null);
+
+      // Undo whatever the animation left behind before the normal layers
+      // take back over showing this marker at rest.
+      _iconAnimationTimer?.cancel();
+      if (_animatingMarkerId != null) {
+        _markerIconScale.remove(_animatingMarkerId);
+        _markerIconShakeDeg.remove(_animatingMarkerId);
+        _animatingMarkerId = null;
+      }
+      await controller.setGeoJsonSource(_animatedMarkerSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
 
       await setGeoJsonSource(
         controller,
@@ -3671,6 +3890,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     _compassSub = null;
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
+    _iconAnimationTimer?.cancel();
+    _iconAnimationTimer = null;
   }
 
   static const String osmRasterStyle = '''
