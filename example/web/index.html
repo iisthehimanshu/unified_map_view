@@ -31,6 +31,17 @@
 
   <title>example</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Required by maplibre_gl on web (see its README). -->
+  <script src='https://unpkg.com/maplibre-gl@^4.3/dist/maplibre-gl.js'></script>
+  <link href='https://unpkg.com/maplibre-gl@^4.3/dist/maplibre-gl.css' rel='stylesheet' />
+  <!-- TEMP DEBUG: expose the live Map instance. Remove after diagnosing. -->
+  <script>
+    (function () {
+      var p = maplibregl.Map.prototype, orig = p.addSource;
+      p.addSource = function () { window.__map = this; return orig.apply(this, arguments); };
+    })();
+  </script>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>

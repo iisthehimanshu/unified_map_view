@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import '../apimodels/BuildingData.dart';
 import '../config.dart';
@@ -92,9 +93,15 @@ class BuildingByVenue {
     var connectivityResult = await Connectivity().checkConnectivity();
 
     if (!connectivityResult.contains(ConnectivityResult.mobile) &&
-        !connectivityResult.contains(ConnectivityResult.wifi)) {
+        !connectivityResult.contains(ConnectivityResult.wifi) &&
+        !(kIsWeb && connectivityResult.contains(ConnectivityResult.ethernet))) {
       return false;
     }
+
+    // The reachability probe is a cross-origin request the browser blocks
+    // (clients3.google.com sends no CORS headers), so it always reports
+    // offline on web. Trust the connectivity result there instead.
+    if (kIsWeb) return true;
 
     try {
       final response = await http
