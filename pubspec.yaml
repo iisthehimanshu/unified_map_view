@@ -17,8 +17,7 @@ dependencies:
   flutter_compass: ^0.8.1
   connectivity_plus: ^7.3.0
   crypto: ^3.0.0
-  glb_map_overlay:
-    path: ../glb_map_overlay
+
 
   url_launcher: ^6.3.1
 
