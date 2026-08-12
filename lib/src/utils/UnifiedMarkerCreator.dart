@@ -1107,4 +1107,30 @@ class UnifiedMarkerCreator {
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     return byteData!.buffer.asUint8List();
   }
+
+  Future<Uint8List> createDirectionArrow({Color color = Colors.white, double size = 32.0}) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+
+    final path = Path();
+    // Triangle pointing right
+    path.moveTo(size * 0.2, size * 0.2);
+    path.lineTo(size * 0.8, size * 0.5);
+    path.lineTo(size * 0.2, size * 0.8);
+    path.close();
+
+    canvas.drawPath(path, paint);
+
+    final image = await recorder
+        .endRecording()
+        .toImage(size.toInt(), size.toInt());
+
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
 }

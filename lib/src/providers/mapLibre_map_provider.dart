@@ -70,6 +70,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const String _kDotAssetPath =
       'packages/unified_map_view/assets/markers/room_dot.png';
 
+  /// Map image id for the path direction arrow.
+  static const String _kPathArrowImageId = '__path_arrow__';
+
   /// Marker ids for which icon/text overlap is temporarily forced on. These
   /// markers are routed into a dedicated always-visible layer (and excluded
   /// from the collision-subject normal layers) so they are never hidden by
@@ -111,6 +114,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
   final String _pathOutlineLayerId = 'path-solid-outline-polyline-layer';
   final String _pathDashedLayerId = 'path-dashed-polyline-layer';
+  final String _pathArrowLayerId = 'path-arrow-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
   final String _greyOverlayLayerId = 'grey-overlay-polyline-layer';
 
@@ -286,6 +290,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           _isPolylineLayersEnabled = false;
           // Registered dot images are wiped too; allow re-registration.
           _registeredDotImageIds.clear();
+          // Registered path arrow is wiped too.
+          await _loadPathArrowImage(_controller!);
           // Registered animal icons are wiped too (the composited bytes in
           // _animalIconCache are still valid and get reused, only the
           // addImage() registration needs to happen again).
@@ -2114,6 +2120,16 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Registers the path direction arrow image.
+  Future<void> _loadPathArrowImage(MapLibreMapController controller) async {
+    try {
+      final bytes = await creator.createDirectionArrow();
+      await controller.addImage(_kPathArrowImageId, bytes);
+    } catch (e) {
+      print("_loadPathArrowImage $e");
+    }
+  }
+
   /// Registers a marker's custom dot image (under its asset path as the image
   /// id) so the dot layer can reference it via the feature's `dotIcon` property.
   Future<void> _loadMarkerDotIcon(
@@ -3482,6 +3498,28 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
+      );
+
+      // Arrow layer for direction - follows the line direction
+      await controller.addSymbolLayer(
+        _polylineSourceId,
+        _pathArrowLayerId,
+        const SymbolLayerProperties(
+          iconImage: _kPathArrowImageId,
+          symbolPlacement: 'line',
+          symbolSpacing: 100, // in pixels, so arrows increase/decrease with zoom
+          iconSize: 0.8,
+          iconRotationAlignment: 'map',
+          iconAllowOverlap: true,
+          iconIgnorePlacement: true,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"],
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+        ],
+        belowLayerId: await _webSafeBelowLayerId(controller, _rotationMarkerLayerId),
       );
 
       // Dashed path lines
