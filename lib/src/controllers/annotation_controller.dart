@@ -98,14 +98,20 @@ class AnnotationController{
       // List<MapLocation> circlePoints = RenderingUtilities.generateCirclePoints(center: _venueData.venueLatLng, radiusInMeters: 5000);
       // _unifiedMapController.addPolygon(GeoJsonPolygon(id: "venue patch", points: circlePoints, properties: {"type":"Boundary"}));
       if(_user != null){
-        localizeUser(_user!);
+        // The user can be localized before the map controller exists, in which
+        // case addUserMarker was a no-op but _user was still set. Clearing it
+        // forces the full add path here — localizeUser's fast path only *moves*
+        // an already-drawn marker, which would leave the puck unrendered.
+        final pendingUser = _user!;
+        _user = null;
+        await localizeUser(pendingUser);
       }
       print("onReadyLandmarkSelectionID ${_unifiedMapController.onReadyLandmarkSelectionID}");
       if(_unifiedMapController.onReadyLandmarkSelectionID != null && _unifiedMapController.onReadyLandmarkSelectionID!.isNotEmpty){
         await _unifiedMapController.selectLocation(polyID: _unifiedMapController.onReadyLandmarkSelectionID!);
       }
-    }catch(e){
-      print("e ${e}");
+    }catch(e, stackTrace){
+      print("e ${e} $stackTrace");
     }
   }
 

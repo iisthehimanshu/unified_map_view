@@ -1,5 +1,7 @@
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 import '../../../unified_map_view.dart';
 import '../LandmarkAssetType.dart';
 
@@ -26,10 +28,20 @@ class PredefinedMarkers{
         position: location,
         title: "",
         snippet: "",
-        assetPath: LandmarkAssetType.user.assetPath,
+        // Web draws the user as a blue disc with a white ring — the source
+        // marker's design recoloured. Regenerate it with `tool/make_marker.py`
+        // (colours are constants at the top) rather than exporting from a
+        // rasteriser: macOS `qlmanage` composites its output onto an opaque
+        // white card, which still reports hasAlpha but drew a white square
+        // behind the marker on the map. Native keeps user.png untouched.
+        assetPath: kIsWeb
+            ? 'packages/unified_map_view/assets/markers/userMarkerBlue.png'
+            : LandmarkAssetType.user.assetPath,
         iconName: "User",
         priority: true,
-        imageSize: Size(35, 35),
+        // Web draws it at half size: the plain disc reads much heavier on the
+        // floor plan than the old arrow did at the same 35pt.
+        imageSize: kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35),
       anchor: LandmarkAssetType.user.anchor,
       renderAnchor: Offset(0.5, 0.5),
       // renderAnchor: Offset(0.515, 0.66),

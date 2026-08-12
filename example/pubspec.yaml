@@ -33,7 +33,7 @@ dependencies:
   unified_map_view:
     path: ../
   connectivity_plus: ^7.3.0
-  maplibre_gl: ^0.21.0
+  maplibre_gl: ^0.26.2
   mappls_gl: ^1.2.0
   webview_flutter: ^4.10.0
 

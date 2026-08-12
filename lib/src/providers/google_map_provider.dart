@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -254,10 +255,11 @@ class GoogleMapProvider extends BaseMapProvider {
             color: Colors.blueAccent,
             width: 8,
             patterns: [
+              // `Platform` is dart:io and throws on web, so short-circuit first.
               if(isWaypoint)PatternItem.dash(
-                  Platform.isIOS ? 2 : 10), // length of each dash
+                  (!kIsWeb && Platform.isIOS) ? 2 : 10), // length of each dash
               if(isWaypoint)PatternItem.gap(
-                  Platform.isIOS ? 1 : 6), // gap between dashes
+                  (!kIsWeb && Platform.isIOS) ? 1 : 6), // gap between dashes
             ]
         ));
   }
