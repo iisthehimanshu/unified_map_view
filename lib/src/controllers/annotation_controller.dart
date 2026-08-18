@@ -2,6 +2,7 @@ import 'package:turn_highlighter/turn_highlighter.dart';
 import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
 import 'package:unified_map_view/src/utils/renderingUtilities.dart';
+import 'package:unified_map_view/src/utils/perf_trace.dart';
 import 'dart:math' as math;
 import 'dart:developer' as dev;
 import '../../unified_map_view.dart';
@@ -71,16 +72,22 @@ class AnnotationController{
     final apiDataFuture = GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
     final furnitureDataFuture = FurnitureAPI().fetchFurniture(venueName);
 
-    final buildingData = await buildingDataFuture;
-    final apiData = await apiDataFuture;
-    final furnitureData = await furnitureDataFuture;
+    PerfTrace.mark('_setVenue fetches dispatched');
+    final buildingData = await PerfTrace.timeAsync(
+        'await buildingData', () => buildingDataFuture);
+    final apiData = await PerfTrace.timeAsync(
+        'await venue geojson', () => apiDataFuture);
+    final furnitureData = await PerfTrace.timeAsync(
+        'await furniture', () => furnitureDataFuture);
 
     if (apiData == null || apiData.isEmpty) {
       throw Exception('No GeoJSON data received from API');
     }
     print("apiD Data recieved at ${DateTime.now()}");
-    _venueData = VenueData(venueName, apiData, buildingData, furnitureData: furnitureData);
-    await renderVenue();
+    _venueData = PerfTrace.time('VenueData parse',
+        () => VenueData(venueName, apiData, buildingData, furnitureData: furnitureData));
+    await PerfTrace.timeAsync('renderVenue', () => renderVenue());
+    if (PerfTrace.enabled) print(PerfTrace.report());
   }
 
   Future<void> renderVenue() async {

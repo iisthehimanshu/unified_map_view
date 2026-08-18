@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
+import '../utils/perf_trace.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
 import '../services/GlobalGeoJSONStorageService.dart';
@@ -74,9 +75,15 @@ class GlobalGeoJSONVenueAPI {
     );
 
     if (response.statusCode == 200) {
-      final body = json.decode(response.body);
+      final body = PerfTrace.time(
+        'GlobalGeoJSONVenueAPI json.decode (${response.body.length ~/ 1024}KB)',
+        () => json.decode(response.body),
+      );
       service.saveGeoData(GlobalGeoJSONVenueAPIModel(responseBody: body), venueName);
-      print("GlobalGeoJSONVenueAPI from API $body");
+      // Interpolating `body` here stringifies the whole decoded payload — ~2.8MB
+      // for ApolloHospital — on the main thread, and `print` is not stripped from
+      // Flutter web release builds. Native keeps the original log.
+      if (!kIsWeb) print("GlobalGeoJSONVenueAPI from API $body");
       return body;
     } else if (response.statusCode == 403) {
       return _fetchFromApi(venueName, service);

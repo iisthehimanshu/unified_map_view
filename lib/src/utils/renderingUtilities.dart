@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:unified_map_view/src/models/geojson_models.dart';
 import 'package:unified_map_view/src/models/map_location.dart';
@@ -471,7 +472,9 @@ class RenderingUtilities{
     try {
       await _registerPattern(controller, patternId: patternId,
           type: type!,size:geojsonpolygon.properties?['patternSize'] ,gap:geojsonpolygon.properties?['patternSpacing'] ,angle:geojsonpolygon.properties?['patternRotation'] ,foreground: hexToColor(geojsonpolygon.properties?['patternColor']), background: backgroundColor);
-      print("[PATTERN-DEBUG] registerLandmarkPattern OK addImage('$patternId') for polygon ${geojsonpolygon.id}");
+      // One console line per polygon on the success path. Failures still log on
+      // web — those are rare and worth seeing.
+      if (!kIsWeb) print("[PATTERN-DEBUG] registerLandmarkPattern OK addImage('$patternId') for polygon ${geojsonpolygon.id}");
     } catch (e, st) {
       print("[PATTERN-DEBUG] registerLandmarkPattern FAILED addImage('$patternId') for polygon ${geojsonpolygon.id}: $e\n$st");
       rethrow;

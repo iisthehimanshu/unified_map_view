@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:unified_map_view/src/utils/perf_trace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -294,13 +295,35 @@ class MaplibreMapProvider extends BaseMapProvider {
               _isFurnitureExtrusionAdded = false;
 
               // Re-register all marker icons — style reload wipes addImage() calls
-              for (final marker in [..._symbols, ..._rotatingSymbols]) {
-                try {
-                  await _loadMarkerIcon(_controller!, marker);
-                } catch (e) {
-                  print('Warning: failed to reload icon for ${marker.id}: $e');
+              final iconMarkers = [..._symbols, ..._rotatingSymbols];
+              await PerfTrace.timeAsync(
+                  'style-loaded: rebake of ${iconMarkers.length} icons', () async {
+                if (kIsWeb) {
+                  // Fanned out instead of a sequential `for ... await`. This
+                  // pass runs *after* the basemap paints, so serially baking
+                  // ~190 icons was the bulk of "base map instant, then elements
+                  // trickle in for ~12s". The wall-clock total barely moves
+                  // (single-threaded, CPU-bound), but the work interleaves and
+                  // the URL-icon fetches overlap, which reads as noticeably
+                  // faster. Sequencing is preserved: every icon is registered
+                  // before enable*Layers below.
+                  await Future.wait(iconMarkers.map((marker) async {
+                    try {
+                      await _loadMarkerIcon(_controller!, marker);
+                    } catch (e) {
+                      print('Warning: failed to reload icon for ${marker.id}: $e');
+                    }
+                  }));
+                } else {
+                  for (final marker in iconMarkers) {
+                    try {
+                      await _loadMarkerIcon(_controller!, marker);
+                    } catch (e) {
+                      print('Warning: failed to reload icon for ${marker.id}: $e');
+                    }
+                  }
                 }
-              }
+              });
 
               await enablePolygonLayers(_controller!);
               await enablePolylineLayers(_controller!);
@@ -699,7 +722,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           .isNotEmpty) {
         return;
       }
-      print("localizeUser ${StackTrace.current}");
+      // dart2js stack capture/format is expensive; native keeps the trace.
+      if (!kIsWeb) print("localizeUser ${StackTrace.current}");
       _rotatingSymbols.add(marker);
       await _loadMarkerIcon(controller, marker);
       try {
@@ -726,7 +750,9 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
-    print("markers $markers");
+    // Calls toString() on every marker in the venue, and addMarkers runs 3-4
+    // times per render, so this stringifies the whole marker set repeatedly.
+    if (!kIsWeb) print("markers $markers");
     if (controller is MapLibreMapController) {
       final animalMarkers = <GeoJsonMarker>[];
       final otherMarkers = <GeoJsonMarker>[];
@@ -744,6 +770,26 @@ class MaplibreMapProvider extends BaseMapProvider {
       // time — _loadMarkerIcon already fetches/decodes/registers everything
       // this loop used to redundantly fetch a second time, so there's no
       // separate per-marker fetch here anymore, just the fan-out await.
+      //
+      // DO NOT skip, defer or reorder this bake. Three attempts on 2026-08-12
+      // each left the map a blank grey canvas with no base map at all:
+      //   • push the source first and stream icons in afterwards;
+      //   • skip baking while `!_isClusteringEnabled` and let
+      //     onStyleLoadedCallback do it — the reasoning looked sound (the push
+      //     is dropped anyway, and the style load that follows wipes every
+      //     addImage this loop makes) but the style-loaded handler does not
+      //     recover it in practice;
+      //   • bake only markers inside the viewport, rest on camera idle — this
+      //     one WORKED (4.6s → 3ms) and was reverted by request.
+      // There is an ordering dependency here that is not yet understood. Fix the
+      // style-ready race first (setGeoJsonSource/_updatePolygonSource/
+      // _updatePolylineSource silently early-return when their layer flag is
+      // false) before touching this again.
+      //
+      // Cost, for the record: ~4.5s for 189 markers on a Redmi. Each marker's
+      // label is painted into its own PNG (UnifiedMarkerCreator keys its cache
+      // on the text), so the images are genuinely unique — neither dedup nor
+      // concurrency can help, since web is single-threaded.
       await Future.wait(otherMarkers.map((marker) async {
         try {
           await _loadMarkerIcon(controller, marker);
@@ -2678,7 +2724,26 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconImage: ["get", "icon"],
           // Halved (was 1.5) to match the collision dots — the user arrow was
           // dominating the floor plan it is meant to sit on.
-          iconSize: 0.75,
+          //
+          // Web only: scale with zoom like every other marker layer, rather
+          // than holding one size while the floor plan grows and shrinks under
+          // it. Same 14 → 18.3 ramp the other custom-rendering markers use,
+          // scaled so the top of the curve is the 0.75 tuned above instead of
+          // 1.0 — the arrow keeps its established weight zoomed in and stops
+          // swamping the plan zoomed out. Native deliberately keeps the plain
+          // scalar: this was asked for on web, and a bare number cannot trip
+          // the iOS zoom-expression hazard documented on Layer 0.
+          iconSize: kIsWeb
+              ? [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  14.0, 0.15,
+                  18.0, 0.7082,
+                  18.3, 0.75,
+                  22.0, 0.75,
+                ]
+              : 0.75,
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,

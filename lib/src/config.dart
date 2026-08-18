@@ -30,6 +30,13 @@ class AppConfig {
   static final _init = _startSpeedMonitor();
 
   static void _startSpeedMonitor() {
+    // Skipped on web: this downloads 1MB the moment the class is first touched
+    // — which is the `AppConfig.instance` read in the UnifiedMapController
+    // constructor, i.e. exactly during first paint — and then repeats every two
+    // minutes. It competes with the venue GeoJSON fetch for the browser's
+    // 6-connection budget, and the only consumer of `internetSpeedInMbps` is
+    // commented out. Note this runs twice on native (constructor + `_init`).
+    if (kIsWeb) return;
     print("_measureSpeed");
     // Run immediately on startup, then every 30 seconds
     _measureSpeed();

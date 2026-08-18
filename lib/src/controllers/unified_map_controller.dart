@@ -3,6 +3,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show EdgeInsets;
 import 'package:unified_map_view/src/enums/Theme.dart';
+import 'package:unified_map_view/src/utils/perf_trace.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
@@ -168,7 +169,9 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Animate camera to a specific location
   Future<void> animateCamera(MapLocation location, {double? zoom, double? bearing, double? tilt, Duration? duration}) async {
-    print("animateCamera ${StackTrace.current}");
+    // StackTrace.current is expensive to capture and format under dart2js, and
+    // this sits on a hot path. Native keeps the trace.
+    if (!kIsWeb) print("animateCamera ${StackTrace.current}");
     if (_currentMapController == null) return;
     await currentProviderImplementation.animateCamera(
       _currentMapController,
@@ -309,20 +312,29 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Add GeoJSON feature collection to map
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
-    print("addGeoJsonFeatures ${StackTrace.current}");
+    // See note on animateCamera above — dart2js stack capture on a hot path.
+    if (!kIsWeb) print("addGeoJsonFeatures ${StackTrace.current}");
     // Add polygons
     final polygons = GeoJsonLoader.extractPolygons(collection);
     final sectionPolygons = polygons.where((p) => p.properties?["type"] == "Section").toList();
     final subSection = polygons.where((p) => p.properties?["type"] == "SubSection").toList();
     final boundaryPolygons = polygons.where((p) => p.properties?["type"] == "Boundary").toList();
     final otherPolygons = polygons.where((p) => !sectionPolygons.contains(p) && !boundaryPolygons.contains(p)).toList();
-    await addPolygons(boundaryPolygons);
-    await addPolygons(otherPolygons);
-    await addPolygons(sectionPolygons);
-    await addPolygons(subSection);
+    // Each addPolygons call re-serialises the ENTIRE accumulated polygon set,
+    // so these four rebuild the whole source four times. Collapsing them is
+    // Phase 3 of the perf plan; measuring them first.
+    await PerfTrace.timeAsync('addPolygons boundary (${boundaryPolygons.length})',
+        () => addPolygons(boundaryPolygons));
+    await PerfTrace.timeAsync('addPolygons other (${otherPolygons.length})',
+        () => addPolygons(otherPolygons));
+    await PerfTrace.timeAsync('addPolygons section (${sectionPolygons.length})',
+        () => addPolygons(sectionPolygons));
+    await PerfTrace.timeAsync('addPolygons subSection (${subSection.length})',
+        () => addPolygons(subSection));
 
     final polylines = GeoJsonLoader.extractPolylines(collection);
-    await addPolylines(polylines);
+    await PerfTrace.timeAsync('addPolylines (${polylines.length})',
+        () => addPolylines(polylines));
 
     final markers = GeoJsonLoader.extractMarkers(collection);
     final urlMarkers = markers.where((marker)=> (marker.assetPath != null && marker.assetPath!.contains("http"))).toList();
@@ -331,9 +343,14 @@ class UnifiedMapController extends ChangeNotifier {
     final sectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "Section").toList();
     final subSectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "SubSection").toList();
     final normalMarker = localMarkers.where((marker) => !sectionMarkers.contains(marker) && !subSectionMarkers.contains(marker)).toList();
-    await addMarkers(normalMarker);
-    await addMarkers(sectionMarkers);
-    await addMarkers(subSectionMarkers);
+    // Same cumulative-rebuild problem as addPolygons above, and each of these
+    // additionally blocks on every icon bake before any marker is pushed.
+    await PerfTrace.timeAsync('addMarkers normal (${normalMarker.length})',
+        () => addMarkers(normalMarker));
+    await PerfTrace.timeAsync('addMarkers section (${sectionMarkers.length})',
+        () => addMarkers(sectionMarkers));
+    await PerfTrace.timeAsync('addMarkers subSection (${subSectionMarkers.length})',
+        () => addMarkers(subSectionMarkers));
 
     // Point features carrying a "3dRef" part list are rendered as extruded 3D
     // furniture. Whether they also get a marker is decided by the
@@ -360,7 +377,8 @@ class UnifiedMapController extends ChangeNotifier {
       });
     }
     if (furnitureItems.isNotEmpty) {
-      await addFurniture(furnitureItems);
+      await PerfTrace.timeAsync('addFurniture (${furnitureItems.length})',
+          () => addFurniture(furnitureItems));
     }
 
     notifyListeners();

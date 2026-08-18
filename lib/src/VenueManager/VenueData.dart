@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:unified_map_view/src/apimodels/BuildingData.dart';
 import 'package:unified_map_view/src/apimodels/GlobalAppGeoJsonDataModel.dart';
 
@@ -299,7 +300,10 @@ class VenueData{
   GeoJsonFeature? findLocation(String polyId){
     GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
     if (model.data == null) return null;
-    print("model.data $polyId ${model.data}");
+    // Stringifies every feature in the venue. This sits on the deep-link
+    // landmark path (selectLocation -> switchToLocationFloor -> findLocation),
+    // so it fires during first paint. Native keeps the dump.
+    if (!kIsWeb) print("model.data $polyId ${model.data}");
     final feature = model.data!.firstWhere((feature)=>(feature.id == polyId || feature.properties?["polyId"] == polyId));
 
     return GeoJsonFeature.fromJson(feature.toJson());
