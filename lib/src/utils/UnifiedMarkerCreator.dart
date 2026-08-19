@@ -568,7 +568,7 @@ class UnifiedMarkerCreator {
         textHeightPx + pillPaddingV * 2,
       );
       final RRect pillRRect =
-          RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius));
+      RRect.fromRectAndRadius(pillRect, Radius.circular(pillRadius));
 
       // Soft drop shadow beneath the card (gallery-style pill).
       if (pillShadow) {
@@ -757,7 +757,7 @@ class UnifiedMarkerCreator {
     // When selected, the card/tail frame, the dot core, and the title text all
     // switch to the highlight colour.
     final Color frameColor =
-        selected ? selectedColor : const Color(0xFFFFFFFF);
+    selected ? selectedColor : const Color(0xFFFFFFFF);
     final Color effectiveDotColor = selected ? selectedColor : dotColor;
     final Color effectiveTextColor = selected ? selectedColor : textColor;
 
@@ -849,7 +849,7 @@ class UnifiedMarkerCreator {
 
     final cardRect = Rect.fromLTWH(cardX, cardTop, cardW, cardH);
     final cardRRect =
-        RRect.fromRectAndRadius(cardRect, Radius.circular(cornerPx));
+    RRect.fromRectAndRadius(cardRect, Radius.circular(cornerPx));
 
     // Tail path (rounded triangle) pointing down toward the dot.
     final tailPath = Path()
@@ -959,9 +959,9 @@ class UnifiedMarkerCreator {
     }
 
     final ui.Image finalImage =
-        await recorder.endRecording().toImage(canvasW, canvasH);
+    await recorder.endRecording().toImage(canvasW, canvasH);
     final ByteData? pngData =
-        await finalImage.toByteData(format: ui.ImageByteFormat.png);
+    await finalImage.toByteData(format: ui.ImageByteFormat.png);
     if (pngData == null) {
       throw Exception('Failed to encode museum POI marker to PNG.');
     }
@@ -983,10 +983,10 @@ class UnifiedMarkerCreator {
   /// padding is added above to balance the label below) so the priority layer's
   /// default "center" anchor still lands the circle on the coordinate.
   Future<Uint8List> createStopMarkerIcon(
-    String text, {
-    bool museum = false,
-    String stopName = "",
-  }) async {
+      String text, {
+        bool museum = false,
+        String stopName = "",
+      }) async {
     const double diameter = 60;
     const double radius = 30;
     const double labelGap = 8; // circle → label
@@ -1051,7 +1051,7 @@ class UnifiedMarkerCreator {
 
     // Symmetric canvas so the circle centre is the canvas centre.
     final double belowHalf =
-        hasLabel ? radius + labelGap + labelH : radius;
+    hasLabel ? radius + labelGap + labelH : radius;
     final double halfHeight = max(radius, belowHalf);
     final double canvasW = max(diameter, labelW);
     final double canvasH = halfHeight * 2;
@@ -1106,6 +1106,157 @@ class UnifiedMarkerCreator {
 
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     return byteData!.buffer.asUint8List();
+  }
+
+  /// Draws a single, continuous chevron-style arrow that runs straight for
+  /// [tailLength], bends by [angle] degrees, then runs straight again for
+  /// [headShaftLength] before flaring into the arrowhead.
+  ///
+  /// This used to build the bend by intersecting two offset lines to find a
+  /// mitered elbow point. That math divides by `sin(angle)`, so a dead-straight
+  /// continuation (angle == 0 — exactly what [createBigCornerArrow] passes)
+  /// hit a division by zero, and angles near 0°/180° produced an ever-longer
+  /// spike or a self-intersecting shape depending on turn direction. That's
+  /// what showed up as a broken, discontinuous arrow at the bend.
+  ///
+  /// Instead, the tail→bend→shaft is drawn as one stroked path with a round
+  /// join/cap, which is well-defined and self-intersection-free for every
+  /// angle from a dead-straight 0° to a full 180° reversal, so the arrow
+  /// always reads as a single unbroken shape that follows the path through
+  /// the bend. The arrowhead (wider than the shaft) is layered on top and
+  /// fully covers the shaft's rounded end cap, so there's no seam there either.
+  Future<Uint8List> createBentArrow({
+    required double angle, // turn angle in degrees (relative to straight ahead)
+    Color fillColor = Colors.white,
+    Color strokeColor = const Color(0xFF3C4043), // subtle dark grey, not blue
+    double size = 256.0,
+  }) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // Much thinner outline — was 0.04, Google's is closer to a hairline
+    final double strokeWidthPx = size * 0.012;
+
+    final double centerX = size / 2;
+    final double centerY = size / 2;
+
+    // Slimmer proportions to match Google Maps style
+    final double w = size * 0.055; // shaft width
+    final double tailLength = size * 0.45; // straight run BEFORE the bend
+    final double headShaftLength = size * 0.25; // straight run AFTER the bend
+    final double headWidth = size * 0.20; // arrowhead base width
+    final double headTipLength = size * 0.22; // arrowhead tip length
+
+    // Direction of the outgoing (post-bend) segment. angle=0 keeps going
+    // straight "up" — the same direction the tail arrives from — and a
+    // positive angle turns right, matching the original convention.
+    final double rad = (angle - 90) * pi / 180.0;
+    final Offset dir = Offset(cos(rad), sin(rad));
+    final Offset perp = Offset(-dir.dy, dir.dx);
+
+    // The elbow sits exactly at the canvas center so it lines up with the
+    // real bend coordinate on the map (the corner layer uses
+    // iconAnchor: 'center').
+    final Offset elbow = Offset(centerX, centerY);
+    final Offset tailPoint = Offset(centerX, centerY + tailLength);
+    final Offset headBase = elbow + dir * headShaftLength;
+    final Offset tip = headBase + dir * headTipLength;
+    final Offset headL = headBase + perp * (headWidth / 2);
+    final Offset headR = headBase - perp * (headWidth / 2);
+
+    // Tail + post-bend shaft as one open polyline. The round join is what
+    // fixes the bend: it stays continuous and well-defined at every angle,
+    // unlike a hand-computed miter. The round cap at the headBase end leaves
+    // a small semicircular bump that the (much wider) arrowhead below fully
+    // covers, so there's no visible seam between shaft and head either.
+    final Path shaftPath = Path()
+      ..moveTo(tailPoint.dx, tailPoint.dy)
+      ..lineTo(elbow.dx, elbow.dy)
+      ..lineTo(headBase.dx, headBase.dy);
+
+    final Path headPath = Path()
+      ..moveTo(headL.dx, headL.dy)
+      ..lineTo(tip.dx, tip.dy)
+      ..lineTo(headR.dx, headR.dy)
+      ..close();
+
+    void drawArrow({
+      required Paint shaftPaint,
+      required Paint headPaint,
+      Offset translate = Offset.zero,
+    }) {
+      canvas.save();
+      canvas.translate(translate.dx, translate.dy);
+      canvas.drawPath(shaftPath, shaftPaint);
+      canvas.drawPath(headPath, headPaint);
+      canvas.restore();
+    }
+
+    // Soft drop shadow for elevation, like Google's arrow.
+    final Paint shadowShaftPaint = Paint()
+      ..color = const Color(0x33000000)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, size * 0.025);
+    final Paint shadowHeadPaint = Paint()
+      ..color = const Color(0x33000000)
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, size * 0.025);
+    drawArrow(
+      shaftPaint: shadowShaftPaint,
+      headPaint: shadowHeadPaint,
+      translate: Offset(0, size * 0.015),
+    );
+
+    // Border pass — slightly wider than the fill pass below, so it reads as
+    // an outline once the fill is drawn on top of it.
+    final Paint borderShaftPaint = Paint()
+      ..color = strokeColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w + strokeWidthPx * 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+    final Paint borderHeadPaint = Paint()
+      ..color = strokeColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidthPx * 2
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+    drawArrow(shaftPaint: borderShaftPaint, headPaint: borderHeadPaint);
+
+    // Fill pass on top.
+    final Paint fillShaftPaint = Paint()
+      ..color = fillColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..isAntiAlias = true;
+    final Paint fillHeadPaint = Paint()
+      ..color = fillColor
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+    drawArrow(shaftPaint: fillShaftPaint, headPaint: fillHeadPaint);
+
+    final ui.Image image =
+    await recorder.endRecording().toImage(size.toInt(), size.toInt());
+    final ByteData? byteData =
+    await image.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  Future<Uint8List> createBigCornerArrow({
+    Color fillColor = Colors.white,
+    Color strokeColor = const Color(0xFF448AFF),
+    double size = 120.0,
+  }) async {
+    // Straight elongation
+    return createBentArrow(angle: 0, fillColor: fillColor, strokeColor: strokeColor, size: size * 2.0);
   }
 
   Future<Uint8List> createDirectionArrow({Color color = Colors.white, double size = 32.0}) async {

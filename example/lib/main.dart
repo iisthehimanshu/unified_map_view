@@ -41,6 +41,7 @@ class GeoJsonMapScreen extends StatefulWidget {
 
 class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   late UnifiedMapController _unifiedMapController;
+  late MaplibreMapProvider _maplibreProvider;
   bool _isLoading = false;
 
   Timer? _moveUserTimer;
@@ -62,18 +63,19 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   @override
   void initState() {
     super.initState();
+    _maplibreProvider = MaplibreMapProvider();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
         venueName: 'RGCI',
         initialLocation: UnifiedCameraPosition(
-          mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
-          zoom: 3.0,
-          bearing: 0.0,
-          tilt: 0.0
+            mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
+            zoom: 3.0,
+            bearing: 0.0,
+            tilt: 0.0
         ),
-      url: "https://dev.iwayplus.in",
-      languageCode: "hi",
-        providers: {MapProvider.mapLibre: MaplibreMapProvider(),
+        url: "https://dev.iwayplus.in",
+        languageCode: "hi",
+        providers: {MapProvider.mapLibre: _maplibreProvider,
           MapProvider.mappls: MapplsMapProvider()}
     );
     
@@ -192,6 +194,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     {"node": 3780534, "x": 115, "y": 92, "lat": 28.716429974372552, "lng": 77.11098567502565, "ttsEnabled": false, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
     {"node": 3036008, "x": 113, "y": 104, "lat": 28.716406312087642 ,"lng": 77.11101218917014, "ttsEnabled": true, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null, "destinationLat":28.716406312087642, "destinationLng": 77.11101218917014, "name":"Destination"}
   ];
+  
 
   @override
   Widget build(BuildContext context) {
@@ -330,14 +333,14 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               children: [
                 UnifiedMapWidget(controller: _unifiedMapController),
                 Positioned(bottom: 150,
-                right: 16,
-                child: Column(
-                  children: [
-                    FloorSpeedDial(controller: _unifiedMapController),
-                    SizedBox(height: 12,),
-                    ExtrusionToggleButton(controller: _unifiedMapController)
-                  ],
-                ),)
+                  right: 16,
+                  child: Column(
+                    children: [
+                      FloorSpeedDial(controller: _unifiedMapController),
+                      SizedBox(height: 12,),
+                      ExtrusionToggleButton(controller: _unifiedMapController)
+                    ],
+                  ),),
               ],
             ),
           ),

@@ -15,6 +15,7 @@ import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
+import '../utils/mapCalculations.dart';
 import '../utils/renderingUtilities.dart';
 import '../enums/Theme.dart';
 import '../VenueManager/VenueData.dart';
@@ -35,6 +36,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   final List<GeoJsonMarker> _rotatingSymbols = [];
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _lines = [];
+
+  final ValueNotifier<String?> bannerText = ValueNotifier(null);
+  final ValueNotifier<IconData?> bannerIcon = ValueNotifier(null);
 
   /// Raw GeoJSON point-feature maps whose properties carry a "3dRef"
   /// part list — rendered as extruded 3D furniture. Kept so the source
@@ -71,7 +75,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       'packages/unified_map_view/assets/markers/room_dot.png';
 
   /// Map image id for the path direction arrow.
-  static const String _kPathArrowImageId = '__path_arrow__';
+  static const String _kPathArrowImageId = '__path_arrow__'; 
+  static const String _kPathBigArrowImageId = '__path_big_arrow__';
 
   /// Marker ids for which icon/text overlap is temporarily forced on. These
   /// markers are routed into a dedicated always-visible layer (and excluded
@@ -111,6 +116,15 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const double _furnitureMinZoom = 17.5;
 
   final String _polylineSourceId = 'polylines-source';
+  final String _pathCornerSourceId = 'path-corners-source';
+  final String _pathBigArrowLayerId = 'path-big-arrow-layer';
+  final String _pathShineSourceId = 'path-shine-source';
+  final String _pathShineLayerId = 'path-shine-layer';
+  static const String _kShineImageId = '__path_shine__';
+  Timer? _pathShineTimer;
+  double _pathShineProgress = 0.0;
+  List<Map<String, dynamic>> _allCornerFeatures = [];
+  final String _turnBubbleLayerId = 'turn-bubble-layer';
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
   final String _pathOutlineLayerId = 'path-solid-outline-polyline-layer';
   final String _pathDashedLayerId = 'path-dashed-polyline-layer';
@@ -290,6 +304,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           _isPolylineLayersEnabled = false;
           // Registered dot images are wiped too; allow re-registration.
           _registeredDotImageIds.clear();
+          _registeredCornerArrowAngles.clear();
           // Registered path arrow is wiped too.
           await _loadPathArrowImage(_controller!);
           // Registered animal icons are wiped too (the composited bytes in
@@ -351,6 +366,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       onCameraIdle: () async {
         if (_controller != null) {
           try {
+            if (_allCornerFeatures.isNotEmpty && _controller != null) {
+              _refreshCornerVisibility(_controller!);
+            }
             final cameraPos = _controller!.cameraPosition;
             if(cameraPos == null) return;
             final target = cameraPos.target;
@@ -386,7 +404,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       scrollGesturesEnabled: config.scrollGesturesEnabled,
       tiltGesturesEnabled: config.tiltGesturesEnabled,
       zoomGesturesEnabled: config.zoomControlsEnabled,
-      minMaxZoomPreference: const MinMaxZoomPreference(12.0, 23.0),
+      minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
       logoViewMargins: const Point(50, 5),
     );
   }
@@ -644,16 +662,16 @@ class MaplibreMapProvider extends BaseMapProvider {
       const double opacity = 1.0 - ((staticRadius - 5.0) / 15.0) * 0.7;
       controller
           .setLayerProperties(
-            _normalCircleLayerId,
-            CircleLayerProperties(
-              circleRadius: staticRadius,
-              circleColor: '#4CAF50',
-              circleOpacity: opacity * 0.3,
-              circleStrokeWidth: 2.0,
-              circleStrokeColor: '#4CAF50',
-              circleStrokeOpacity: opacity * 0.8,
-            ),
-          )
+        _normalCircleLayerId,
+        CircleLayerProperties(
+          circleRadius: staticRadius,
+          circleColor: '#4CAF50',
+          circleOpacity: opacity * 0.3,
+          circleStrokeWidth: 2.0,
+          circleStrokeColor: '#4CAF50',
+          circleStrokeOpacity: opacity * 0.8,
+        ),
+      )
           .catchError((_) {});
       return;
     }
@@ -1795,6 +1813,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       return;
     }
 
+    _ensurePathShineAnimation(controller);
+
     print("poyline going to add");
 
     final features = _lines.map((line) {
@@ -1828,6 +1848,258 @@ class MaplibreMapProvider extends BaseMapProvider {
         "features": features,
       },
     );
+
+    final cornerFeatures = <Map<String, dynamic>>[];
+    for (var line in _lines) {
+      final bool isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
+      final String? style = line.properties?['style'];
+      final bool isGreyOverlay = line.properties?['isGreyOverlay'] ?? false;
+
+      if (isPath && style == "solid" && !isGreyOverlay && line.points.length >= 3) {
+        // Detect significant corners (bends)
+        for (int i = 1; i < line.points.length - 1; i++) {
+          final b1 = _calculateBearing(line.points[i - 1], line.points[i]);
+          final b2 = _calculateBearing(line.points[i], line.points[i + 1]);
+
+          double diff = b2 - b1;
+          if (diff > 180) diff -= 360;
+          if (diff < -180) diff += 360;
+
+          // Threshold for a "bend"
+          if (diff.abs() > 20) {
+            // Exact-angle icon (rounded to 5° purely to cap distinct
+            // textures) instead of the old 6-way bucket — the baked bend now
+            // matches the real geometry of the turn instead of snapping to
+            // the nearest of [-135, -90, -45, 45, 90, 135].
+            final String iconId = await _ensureCornerArrowImage(controller, diff);
+            final String turnLabel = _turnLabel(diff);
+            final String bubbleIconId = await _ensureTurnBubbleImage(controller, turnLabel);
+
+            cornerFeatures.add({
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [line.points[i].longitude, line.points[i].latitude],
+              },
+              'properties': {
+                'path': true,
+                'style': 'solid',
+                'isGreyOverlay': false,
+                'bearing': b1, // Rotate icon by incoming bearing so tail aligns
+                'icon': iconId,
+                'turnBubbleIcon': bubbleIconId,
+                'turnSharpness': diff.abs(),
+              }
+            });
+          }
+        }
+      }
+    }
+
+    _allCornerFeatures = cornerFeatures;
+    await _refreshCornerVisibility(controller);
+  }
+
+  String _turnLabel(double diffDeg) {
+    final d = diffDeg.abs();
+    if (d < 20) return "Continue straight";
+    if (d < 45) return diffDeg > 0 ? "Turn Slight right" : "Turn Slight left";
+    if (d < 150) return diffDeg > 0 ? "Turn right" : "Turn left";
+    return "U-turn";
+  }
+
+  IconData _turnIcon(double diffDeg) {
+    if (diffDeg.abs() < 20) return Icons.straight;
+    return diffDeg > 0 ? Icons.turn_right : Icons.turn_left;
+  }
+
+  double _calculateBearing(MapLocation start, MapLocation end) {
+    double lat1 = start.latitude * pi / 180;
+    double lon1 = start.longitude * pi / 180;
+    double lat2 = end.latitude * pi / 180;
+    double lon2 = end.longitude * pi / 180;
+
+    double dLon = lon2 - lon1;
+
+    double y = sin(dLon) * cos(lat2);
+    double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    double brng = atan2(y, x);
+
+    return (brng * 180 / pi + 360) % 360;
+  }
+
+  double _haversineMeters(MapLocation a, MapLocation b) {
+    const R = 6371000.0;
+    final dLat = (b.latitude - a.latitude) * pi / 180;
+    final dLng = (b.longitude - a.longitude) * pi / 180;
+    final lat1 = a.latitude * pi / 180;
+    final lat2 = b.latitude * pi / 180;
+    final h = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1) * cos(lat2) * sin(dLng / 2) * sin(dLng / 2);
+    return 2 * R * atan2(sqrt(h), sqrt(1 - h));
+  }
+
+  MapLocation _pointAlongPath(List<MapLocation> points, double t) {
+    if (points.length < 2) return points.first;
+    double total = 0;
+    final segLengths = <double>[];
+    for (int i = 0; i < points.length - 1; i++) {
+      final d = _haversineMeters(points[i], points[i + 1]);
+      segLengths.add(d);
+      total += d;
+    }
+    if (total == 0) return points.first;
+    double target = t.clamp(0.0, 1.0) * total;
+    double accum = 0;
+    for (int i = 0; i < segLengths.length; i++) {
+      if (accum + segLengths[i] >= target) {
+        final segT = segLengths[i] == 0 ? 0.0 : (target - accum) / segLengths[i];
+        final a = points[i];
+        final b = points[i + 1];
+        return MapLocation(
+          latitude: a.latitude + (b.latitude - a.latitude) * segT,
+          longitude: a.longitude + (b.longitude - a.longitude) * segT,
+        );
+      }
+      accum += segLengths[i];
+    }
+    return points.last;
+  }
+
+  Future<void> _refreshCornerVisibility(MapLibreMapController controller) async {
+    if (_allCornerFeatures.isEmpty) {
+      await controller.setGeoJsonSource(_pathCornerSourceId, {
+        "type": "FeatureCollection",
+        "features": [],
+      });
+      return;
+    }
+
+    final cameraPos = controller.cameraPosition;
+    final zoom = cameraPos?.zoom ?? 16.0;
+    final lat = cameraPos?.target.latitude ?? 0.0;
+
+    // Below this zoom, hide corner arrows/bubbles entirely — even the
+    // sharpest turn shouldn't survive once the view is zoomed out this far.
+    const double hardCutoffZoom = 19;
+    if (zoom < hardCutoffZoom) {
+      await controller.setGeoJsonSource(_pathCornerSourceId, {
+        "type": "FeatureCollection",
+        "features": [],
+      });
+      return;
+    }
+
+    final metersPerPixel = 156543.03392 * cos(lat * pi / 180) / pow(2, zoom);
+    const double pixelThreshold = 80.0;
+    final double meterThreshold = pixelThreshold * metersPerPixel;
+
+    final sorted = [..._allCornerFeatures]
+      ..sort((a, b) => (b['properties']['turnSharpness'] as double)
+          .compareTo(a['properties']['turnSharpness'] as double));
+
+    final kept = <Map<String, dynamic>>[];
+    for (final feature in sorted) {
+      final coords = feature['geometry']['coordinates'] as List;
+      final point = MapLocation(latitude: coords[1], longitude: coords[0]);
+      bool tooClose = false;
+      for (final k in kept) {
+        final kCoords = k['geometry']['coordinates'] as List;
+        final kPoint = MapLocation(latitude: kCoords[1], longitude: kCoords[0]);
+        if (_haversineMeters(point, kPoint) < meterThreshold) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (!tooClose) kept.add(feature);
+    }
+
+    await controller.setGeoJsonSource(_pathCornerSourceId, {
+      "type": "FeatureCollection",
+      "features": kept,
+    });
+  }
+
+  Future<Uint8List> _createShineIconBytes() async {
+    const double size = 44;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final center = const Offset(size / 2, size / 2);
+    final paint = Paint()
+      ..shader = RadialGradient(
+        colors: [Colors.white, Colors.white.withOpacity(0.0)],
+        stops: const [0.0, 1.0],
+      ).createShader(Rect.fromCircle(center: center, radius: size / 2));
+    canvas.drawCircle(center, size / 2, paint);
+    final img = await recorder.endRecording().toImage(size.toInt(), size.toInt());
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  Future<void> _loadShineImage(MapLibreMapController controller) async {
+    try {
+      final bytes = await _createShineIconBytes();
+      await controller.addImage(_kShineImageId, bytes);
+    } catch (e) {
+      print("_loadShineImage $e");
+    }
+  }
+
+  static const int _pathShineCount = 1;
+
+  void _ensurePathShineAnimation(MapLibreMapController controller) {
+    if (_pathShineTimer != null) return;
+    _pathShineProgress = 0.0;
+    _pathShineTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
+      if (!_isPolylineLayersEnabled) return;
+
+      // Was 0.01 — tripled for a faster-moving shine.
+      _pathShineProgress += 0.04;
+      if (_pathShineProgress > 1.0) _pathShineProgress -= 1.0;
+
+      final activeLines = _lines.where((line) {
+        final isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
+        final style = line.properties?['style'];
+        final isGrey = line.properties?['isGreyOverlay'] ?? false;
+        return isPath && style == "solid" && !isGrey && line.points.length >= 2;
+      }).toList();
+
+      if (activeLines.isEmpty) {
+        timer.cancel();
+        _pathShineTimer = null;
+        return;
+      }
+
+      final features = <Map<String, dynamic>>[];
+      for (final line in activeLines) {
+        for (int i = 0; i < _pathShineCount; i++) {
+          final t = (_pathShineProgress + i / _pathShineCount) % 1.0;
+          final pos = _pointAlongPath(line.points, t);
+          features.add({
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [pos.longitude, pos.latitude],
+            },
+            'properties': {},
+          });
+        }
+      }
+
+      try {
+        await controller.setGeoJsonSource(_pathShineSourceId, {
+          'type': 'FeatureCollection',
+          'features': features,
+        });
+      } catch (e) {
+        // Source may not exist yet mid style-reload; next tick retries.
+      }
+    });
+  }
+
+  void _stopPathShineAnimation() {
+    _pathShineTimer?.cancel();
+    _pathShineTimer = null;
   }
 
   @override
@@ -1843,6 +2115,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MapLibreMapController) {
       try {
         _lines.clear();
+        _stopPathShineAnimation();
         await _updatePolylineSource(controller);
       } catch (e) {
         print('Error clearing polylines: $e');
@@ -1866,6 +2139,93 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Dot image ids already registered with the current style (cleared on style
   /// reload, which wipes addImage()). Avoids re-decoding shared dot assets.
   final Set<String> _registeredDotImageIds = {};
+
+  /// Corner-arrow angles (rounded to the nearest 5°) already registered with
+  /// the current style. Cleared on style reload same as the dot images.
+  final Set<int> _registeredCornerArrowAngles = {};
+
+  String _cornerArrowImageId(int roundedAngle) =>
+      '${_kPathBigArrowImageId}_exact_$roundedAngle';
+
+  /// Registers (once, cached by 5°-rounded angle) a bent-arrow icon whose bend
+  /// matches the real turn angle, and returns its image id. Rounding to 5° is
+  /// purely to cap the number of distinct textures (~72 max) — it is NOT a
+  /// visual bucket like the old 6-way [-135, -90, -45, 45, 90, 135] scheme;
+  /// a 5° step is visually indistinguishable from the exact angle.
+  Future<String> _ensureCornerArrowImage(
+      MapLibreMapController controller, double diff) async {
+    final int rounded = (diff / 5).round() * 5;
+    final String id = _cornerArrowImageId(rounded);
+    if (!_registeredCornerArrowAngles.contains(rounded)) {
+      final bytes = await creator.createBentArrow(angle: rounded.toDouble());
+      await controller.addImage(id, bytes);
+      _registeredCornerArrowAngles.add(rounded);
+    }
+    return id;
+  }
+
+  final Map<String, String> _registeredTurnBubbleIds = {};
+
+  Future<String> _ensureTurnBubbleImage(
+      MapLibreMapController controller, String label) async {
+    if (_registeredTurnBubbleIds.containsKey(label)) {
+      return _registeredTurnBubbleIds[label]!;
+    }
+    final bytes = await _createTurnBubbleBytes(label);
+    final id = 'turn_bubble_${label.hashCode}';
+    await controller.addImage(id, bytes);
+    _registeredTurnBubbleIds[label] = id;
+    return id;
+  }
+
+  Future<Uint8List> _createTurnBubbleBytes(String label) async {
+    const double ratio = 2.0;
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontSize: 14 * ratio,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    const paddingH = 16.0, paddingV = 10.0, tailH = 10.0;
+    final w = textPainter.width + paddingH * 2 * ratio;
+    final bubbleH = textPainter.height + paddingV * 2 * ratio;
+    final h = bubbleH + tailH * ratio;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    final bubbleRect = Rect.fromLTWH(0, 0, w, bubbleH);
+    final rrect = RRect.fromRectAndRadius(bubbleRect, Radius.circular(10 * ratio));
+
+    canvas.drawRRect(
+      rrect.shift(Offset(0, 2 * ratio)),
+      Paint()
+        ..color = const Color(0x33000000)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3 * ratio),
+    );
+
+    final bgPaint = Paint()..color = const Color(0xFF1A73E8);
+    canvas.drawRRect(rrect, bgPaint);
+
+    final tailPath = Path()
+      ..moveTo(w / 2 - 6 * ratio, bubbleH - 1)
+      ..lineTo(w / 2 + 6 * ratio, bubbleH - 1)
+      ..lineTo(w / 2, h)
+      ..close();
+    canvas.drawPath(tailPath, bgPaint);
+
+    textPainter.paint(canvas, Offset(paddingH * ratio, paddingV * ratio));
+
+    final img = await recorder.endRecording().toImage(w.ceil(), h.ceil());
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
 
   /// Longest-edge cap (px) an animal photo is downscaled to before its icon
   /// is registered with the map style, regardless of the source photo's
@@ -1930,7 +2290,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     );
     final resizedFrame = await resizedCodec.getNextFrame();
     final byteData =
-        await resizedFrame.image.toByteData(format: ui.ImageByteFormat.png);
+    await resizedFrame.image.toByteData(format: ui.ImageByteFormat.png);
     return byteData?.buffer.asUint8List() ?? bytes;
   }
 
@@ -1966,13 +2326,13 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
         if (rawBytes == null) return false;
         final Uint8List resizedSource =
-            await _resizeImageBytes(rawBytes, _animalMaxIconSize);
+        await _resizeImageBytes(rawBytes, _animalMaxIconSize);
 
         final double fontSize = marker.properties?["fontSize"] ?? 14.5;
         final Offset customAnchor =
             marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
         final Size iconSize =
-            Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
+        Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
         // The text and text-less variants are independent bakes of the same
         // resized source bytes — run them concurrently instead of back to
         // back so the second bake's decode/canvas/encode work overlaps the
@@ -1989,7 +2349,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             textColor: const Color(0xff000000),
             customAnchor: customAnchor,
             expandCanvasForRotation:
-                (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
+            (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
           ),
           creator.createUnifiedMarker(
             imageSize: iconSize,
@@ -2120,11 +2480,14 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  /// Registers the path direction arrow image.
+  /// Registers the path direction arrow images.
   Future<void> _loadPathArrowImage(MapLibreMapController controller) async {
     try {
       final bytes = await creator.createDirectionArrow();
       await controller.addImage(_kPathArrowImageId, bytes);
+
+      final bigBytes = await creator.createBigCornerArrow();
+      await controller.addImage(_kPathBigArrowImageId, bigBytes);
     } catch (e) {
       print("_loadPathArrowImage $e");
     }
@@ -2218,13 +2581,13 @@ class MaplibreMapProvider extends BaseMapProvider {
           final bool isGallery =
               marker.assetPath?.contains('Gallery.png') ?? false;
           final FontWeight pillWeight =
-              isGallery ? FontWeight.w700 : FontWeight.w500;
+          isGallery ? FontWeight.w700 : FontWeight.w500;
           final double pillFontSize = isGallery ? 14.0 : fontSize;
           final Size markerImageSize = isGallery
               ? const Size(62, 62)
               : (marker.imageSize ?? const Size(85, 85));
           final Color pillColor =
-              isGallery ? Colors.white.withOpacity(0.82) : Colors.white;
+          isGallery ? Colors.white.withOpacity(0.82) : Colors.white;
           // Fetch the source photo once and share it between the with-text
           // and without-text bakes below (each used to independently fetch
           // the same URL/asset, doubling network+disk work per marker).
@@ -3448,7 +3811,27 @@ class MaplibreMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      // Normal polylines (NOT path) — bottom-most
+      await controller.addGeoJsonSource(_pathCornerSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      await controller.addGeoJsonSource(_pathShineSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+      await _loadShineImage(controller);
+
+      // Layer ordering: Bottom to Top
+      // 1. Normal polylines
+      // 2. Path outline
+      // 3. Solid path line
+      // 4. Repetitive small arrows
+      // 5. Big corner arrows
+      // 6. Dashed path
+      // 7. Grey overlay
+
+      // 1. Normal polylines
       await controller.addLineLayer(
         _polylineSourceId,
         _polylineLayerId,
@@ -3459,17 +3842,16 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: ["!", ["to-boolean", ["get", "path"]]],
         enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
       );
 
+      // 2. Path outline
       await controller.addLineLayer(
         _polylineSourceId,
-        _pathOutlineLayerId,          // new layer id, e.g. 'path-solid-outline'
+        _pathOutlineLayerId,
         const LineLayerProperties(
-          lineColor: "#FFFFFF",        // white outline
-          lineWidth: 14,  // will be wider via lineGapWidth trick
+          lineColor: "#FFFFFF",
+          lineWidth: 14,
           lineOpacity: ["get", "lineOpacity"],
-          // lineGapWidth: ["get", "lineWidth"], // ← key: pushes the outline outward
         ),
         filter: [
           "all",
@@ -3477,11 +3859,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["==", ["get", "style"], "solid"],
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
         ],
-        enableInteraction: false,       // outline doesn't need to be tappable
-        belowLayerId: await _webSafeBelowLayerId(controller, _pathSolidLayerId), // render BELOW the solid line
+        enableInteraction: false,
       );
 
-      // Solid path lines
+      // 3. Solid path lines
       await controller.addLineLayer(
         _polylineSourceId,
         _pathSolidLayerId,
@@ -3497,21 +3878,32 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
         ],
         enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
       );
 
-      // Arrow layer for direction - follows the line direction
+      // 4. Repetitive small arrows
       await controller.addSymbolLayer(
         _polylineSourceId,
         _pathArrowLayerId,
         const SymbolLayerProperties(
           iconImage: _kPathArrowImageId,
           symbolPlacement: 'line',
-          symbolSpacing: 100, // in pixels, so arrows increase/decrease with zoom
-          iconSize: 0.8,
+          symbolSpacing: [
+            "interpolate", ["linear"], ["zoom"],
+            0, 2.0,   // Ultra-dense spacing for world-level view
+            10, 10.0,  // Very dense for city-level view
+            14, 40.0,
+            19, 100.0
+          ],
+          iconSize: [
+            "interpolate", ["linear"], ["zoom"],
+            0, 0.4,   // Scale down at extreme distance but keep visible
+            10, 0.6,
+            18, 0.8
+          ],
           iconRotationAlignment: 'map',
           iconAllowOverlap: true,
           iconIgnorePlacement: true,
+          iconPadding: 0,
         ),
         filter: [
           "all",
@@ -3519,10 +3911,68 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["==", ["get", "style"], "solid"],
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
         ],
-        belowLayerId: await _webSafeBelowLayerId(controller, _rotationMarkerLayerId),
       );
 
-      // Dashed path lines
+      // Big corner arrows
+      await controller.addSymbolLayer(
+        _pathCornerSourceId,
+        _pathBigArrowLayerId,
+        const SymbolLayerProperties(
+          symbolSortKey: -999999,
+          iconImage: ["coalesce", ["get", "icon"], _kPathBigArrowImageId],
+          iconSize: 1.2,
+          iconRotationAlignment: 'map',
+          iconRotate: ["get", "bearing"],
+          iconAnchor: 'center', // Pivot at the bend
+          iconAllowOverlap: true,
+          iconIgnorePlacement: false,
+          iconPadding: 0,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"],
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+        ],
+        minzoom: 19.0,
+      );
+
+      // Moving shine that travels along the active path.
+      await controller.addSymbolLayer(
+        _pathShineSourceId,
+        _pathShineLayerId,
+        const SymbolLayerProperties(
+          iconImage: _kShineImageId,
+          iconSize: 2.5,
+          iconAllowOverlap: true,
+          iconIgnorePlacement: true,
+        ),
+      );
+
+      // Turn bubble (floating callout with the turn label), anchored to the
+      // corner point. minzoom hides it when zoomed out too far.
+      await controller.addSymbolLayer(
+        _pathCornerSourceId,
+        _turnBubbleLayerId,
+        const SymbolLayerProperties(
+          symbolSortKey: ["*", ["get", "turnSharpness"], -1],
+          iconImage: ["get", "turnBubbleIcon"],
+          iconAnchor: "bottom",
+          iconOffset: [0, -24],
+          iconAllowOverlap: false,
+          iconIgnorePlacement: false,
+          iconPadding: 8,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"],
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+        ],
+        minzoom: 19.0,
+      );
+
+      // 6. Dashed path lines
       await controller.addLineLayer(
         _polylineSourceId,
         _pathDashedLayerId,
@@ -3530,7 +3980,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
           lineOpacity: ["get", "lineOpacity"],
-          // `Platform` is dart:io and throws on web, so short-circuit first.
           lineDasharray: (!kIsWeb && Platform.isAndroid)
               ? ["literal", [0.1, 2.0]]
               : null,
@@ -3542,10 +3991,9 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["==", ["get", "style"], "dashed"],
         ],
         enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
       );
 
-      // Grey overlay — above all path layers, below user marker
+      // 7. Grey overlay
       await controller.addLineLayer(
         _polylineSourceId,
         _greyOverlayLayerId,
@@ -3558,7 +4006,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         ),
         filter: ["to-boolean", ["get", "isGreyOverlay"]],
         enableInteraction: false,
-        belowLayerId: await _webSafeBelowLayerId(controller, _rotationMarkerLayerId),
       );
 
       _isPolylineLayersEnabled = true;
@@ -4009,6 +4456,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   void dispose() {
     _markerSourcesReady = false;
+    _stopPathShineAnimation();
     _isCircleLayersEnabled = false;
     _compassSub?.cancel();
     _compassSub = null;
