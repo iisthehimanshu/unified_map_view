@@ -295,7 +295,22 @@ class MaplibreMapProvider extends BaseMapProvider {
               _isFurnitureExtrusionAdded = false;
 
               // Re-register all marker icons — style reload wipes addImage() calls
-              final iconMarkers = [..._symbols, ..._rotatingSymbols];
+              //
+              // Animal markers are split out and rebaked through
+              // _batchLoadAnimalIcons below. _loadMarkerIcon is the *generic*
+              // path: it re-registers an image under the marker's own id but
+              // never repopulates _loadedAnimalIcons, which is the set
+              // _animalDisplayIconId consults to decide between the real
+              // composite and the paw placeholder. Since the reset above
+              // clears that set and _batchLoadAnimalIcons only otherwise runs
+              // from addMarkers (which does not re-run after a style reload),
+              // sending animals through the generic path left every one of
+              // them pinned to its paw placeholder for good, at every zoom.
+              final allIconMarkers = [..._symbols, ..._rotatingSymbols];
+              final animalIconMarkers =
+                  allIconMarkers.where(_isAnimalMarker).toList();
+              final iconMarkers =
+                  allIconMarkers.where((m) => !_isAnimalMarker(m)).toList();
               await PerfTrace.timeAsync(
                   'style-loaded: rebake of ${iconMarkers.length} icons', () async {
                 if (kIsWeb) {
@@ -324,6 +339,17 @@ class MaplibreMapProvider extends BaseMapProvider {
                   }
                 }
               });
+
+              // Rebake the animal composites so _loadedAnimalIcons is filled
+              // again before enableMarkerLayers re-pushes the source below —
+              // otherwise that push serialises every animal feature with the
+              // paw id. The composited bytes survive in _animalIconCache, so
+              // this is only the addImage() calls, not a re-fetch/re-paint.
+              if (animalIconMarkers.isNotEmpty) {
+                await PerfTrace.timeAsync(
+                    'style-loaded: rebake of ${animalIconMarkers.length} animal icons',
+                    () => _batchLoadAnimalIcons(_controller!, animalIconMarkers));
+              }
 
               await enablePolygonLayers(_controller!);
               await enablePolylineLayers(_controller!);
@@ -1880,7 +1906,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           final bd = await rootBundle.load(marker.assetPath!);
           rawBytes = bd.buffer.asUint8List();
         }
-        if (rawBytes == null) return false;
+        if (rawBytes == null) {
+          print('_loadAnimalIcon: no bytes for ${marker.assetPath} '
+              '(icon stays a paw placeholder)');
+          return false;
+        }
         final Uint8List resizedSource =
             await _resizeImageBytes(rawBytes, _animalMaxIconSize);
 
