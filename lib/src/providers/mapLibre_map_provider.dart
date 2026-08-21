@@ -2348,6 +2348,92 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillOutlineColor: ["get", "strokeColor"],
       );
 
+  /// Full property set for the custom-rendering marker layer — the zoo animal
+  /// composites, museum POI pins, and anything else baked by
+  /// [UnifiedMarkerCreator] rather than referenced as a plain icon.
+  ///
+  /// Same reason as the builders above: `setLayerProperties` **replaces** a
+  /// layer's properties. [_refreshMarkerLayerMinZooms] used to push only
+  /// `symbolSortKey` + `iconOpacity` here, which dropped `icon-image` and left
+  /// a symbol layer with nothing to draw. The markers did not vanish, because
+  /// layer 0 still drew each one's collision-fallback dot — for an animal that
+  /// dot is the paw. Symptom: "every animal is a paw at every zoom", which
+  /// looks like an icon-loading failure but is not; the composites were
+  /// registered fine, the layer just had no icon-image to reference them by.
+  SymbolLayerProperties _customRenderingLayerProps(List<dynamic> iconOpacity) =>
+      SymbolLayerProperties(
+        symbolSortKey: ["+", 4000, _kSortKeyExpression],
+        // The zoom step is a LABEL toggle, not a placeholder→photo swap:
+        // `icon` is the composite with the title baked in, `icon-small` the
+        // same photo with text: "". _loadAnimalIcon registers both ids.
+        iconImage: [
+          "step",
+          ["zoom"],
+          ["concat", ["get", "icon"], "-small"],
+          16,
+          ["get", "icon"],
+        ],
+        // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
+        // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
+        // All other custom-rendering markers keep the original 14→0.2,
+        // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
+        // stays at the top level and the per-feature branch lives in the
+        // stop outputs (nesting zoom inside a `case` throws on iOS).
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
+          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
+          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
+          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconAllowOverlap: false,
+        iconOpacity: iconOpacity,
+      );
+
+  /// Full property set for the fixed/rotated marker layer (features carrying a
+  /// bearing — entry pins and the like). Shared for the same replace-not-merge
+  /// reason; the refresh path only ever wanted to retune `text-opacity`, but
+  /// passing that alone dropped `icon-image`, `icon-rotate` and `text-field`.
+  ///
+  /// [textOpacity] is null at creation time (the layer ships without an
+  /// explicit text-opacity) and carries the venue-fit fade once
+  /// [_refreshMarkerLayerMinZooms] knows it.
+  SymbolLayerProperties _fixedMarkerLayerProps({
+    required List<dynamic> iconOpacity,
+    List<dynamic>? textOpacity,
+  }) =>
+      SymbolLayerProperties(
+        symbolSortKey: ["+", 1000, _kSortKeyExpression],
+        textRotate: ["get", "bearing"],
+        textRotationAlignment: "map",
+        textField: ["get", "title"],
+        textSize: 12,
+        textColor: "#000000",
+        textHaloColor: "#f8f9fa",
+        textHaloWidth: 2,
+        textAnchor: "center",
+        textAllowOverlap: false,
+        textOpacity: textOpacity,
+        iconImage: ["get", "icon"],
+        // Top of the ramp halved (was 1.0) — fixed markers, which include the
+        // main entry pin. The 0.0 floor is a fade-in, so only the top moves.
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          18, 0.0,
+          22.0, 0.5,
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconOpacity: iconOpacity,
+        iconRotate: ["get", "bearing"],
+        iconRotationAlignment: "map",
+        iconAllowOverlap: false,
+      );
+
   Future<void> enableMarkerLayers(dynamic controller) async  {
     if (controller is! MapLibreMapController) return;
 
@@ -2501,40 +2587,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addSymbolLayer(
         _clusterSourceId,
         _customRenderingMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 4000, _kSortKeyExpression],
-          iconImage: [
-            "step",
-            ["zoom"],
-            ["concat", ["get", "icon"], "-small"],
-            16,
-            ["get", "icon"],
-          ],
-          // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
-          // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
-          // All other custom-rendering markers keep the original 14→0.2,
-          // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
-          // stays at the top level and the per-feature branch lives in the
-          // stop outputs (nesting zoom inside a `case` throws on iOS).
-          iconSize: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
-            18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
-            18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
-            22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
-          ],
-          iconAnchor: ["get", "iconAnchor"],
-          iconAllowOverlap: false,
-          iconOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12.0, 0.0,
-            14.0, 1.0
-          ],
-        ),
+        _customRenderingLayerProps(_kDefaultMarkerOpacity),
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "overlapOverride"]]],
@@ -2557,39 +2610,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addSymbolLayer(
         _clusterSourceId,
         _fixedMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 1000, _kSortKeyExpression],
-          textRotate: ["get", "bearing"],
-          textRotationAlignment: "map",
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "center",
-          textAllowOverlap: false,
-          iconImage: ["get", "icon"],
-          // Top of the ramp halved (was 1.0) — fixed markers, which include the
-          // main entry pin. The 0.0 floor is a fade-in, so only the top moves.
-          iconSize: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            18, 0.0,
-            22.0, 0.5,
-          ],
-          iconAnchor: ["get", "iconAnchor"],
-          iconOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12.0, 0.0,
-            14.0, 1.0
-          ],
-          iconRotate: ["get", "bearing"],
-          iconRotationAlignment: "map",
-          iconAllowOverlap: false,
-        ),
+        _fixedMarkerLayerProps(iconOpacity: _kDefaultMarkerOpacity),
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "overlapOverride"]]],
@@ -3280,16 +3301,15 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: opacityExpression,
-      ),
+      _customRenderingLayerProps(opacityExpression),
     );
 
+    // icon-opacity keeps the layer's own creation ramp here: the partial call
+    // this replaces only ever retuned text-opacity for the fixed markers.
     await controller.setLayerProperties(
       _fixedMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
+      _fixedMarkerLayerProps(
+        iconOpacity: _kDefaultMarkerOpacity,
         textOpacity: opacityExpression,
       ),
     );
