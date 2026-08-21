@@ -2272,6 +2272,18 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Multiplier applied to every marker layer's `icon-size`.
+  ///
+  /// Web halves them: many landmarks collapse to collision dots at once there
+  /// and the icons read far too heavy against the floor plan. **Native keeps
+  /// 1.0 — the sizes mobile has always shipped.** Every call site below writes
+  /// its original value times this, so the native number stays readable in the
+  /// source instead of being pre-multiplied away.
+  ///
+  /// Not applied to the custom-rendering layer (layer 3, the animal/POI
+  /// composites): its ramp was never rescaled and both platforms share it.
+  static final double _kIconScale = kIsWeb ? 0.5 : 1.0;
+
   /// Default zoom fade used when the layers are first created; replaced at
   /// runtime by [_refreshMarkerLayerMinZooms] once the real fade zoom is known.
   static const List<dynamic> _kDefaultMarkerOpacity = [
@@ -2311,9 +2323,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       SymbolLayerProperties(
         symbolSortKey: ["+", sortBase, _kSortKeyExpression],
         iconImage: ["get", "icon"],
-        // Halved (was 0.8). Covers the ordinary landmark icons — lift, entry,
-        // washroom and the rest — for both the with/without-sectionId layers.
-        iconSize: 0.4,
+        // Covers the ordinary landmark icons — lift, entry, washroom and the
+        // rest — for both the with/without-sectionId layers.
+        iconSize: 0.8 * _kIconScale,
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
@@ -2421,14 +2433,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         textAllowOverlap: false,
         textOpacity: textOpacity,
         iconImage: ["get", "icon"],
-        // Top of the ramp halved (was 1.0) — fixed markers, which include the
-        // main entry pin. The 0.0 floor is a fade-in, so only the top moves.
+        // Fixed markers, which include the main entry pin. The 0.0 floor is a
+        // fade-in, so only the top of the ramp scales.
         iconSize: [
           "interpolate",
           ["linear"],
           ["zoom"],
           18, 0.0,
-          22.0, 0.5,
+          22.0, 1.0 * _kIconScale,
         ],
         iconAnchor: ["get", "iconAnchor"],
         iconOpacity: iconOpacity,
@@ -2475,11 +2487,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", ["get", "collisionBase"], 0.6, _kSortKeyExpression],
           iconImage: ["get", "dotIcon"],
-          // Half the source image. The dot is a bundled PNG registered via
-          // addImage, so its on-screen size is image pixels × iconSize — the
-          // dots read far too heavy at 1.0, especially on the web build where
-          // many landmarks collapse to dots at once.
-          iconSize: 0.5,
+          // The dot is a bundled PNG registered via addImage, so its on-screen
+          // size is image pixels × iconSize. Full size on native; web halves it
+          // because many landmarks collapse to dots there at once.
+          iconSize: 1.0 * _kIconScale,
           iconAnchor: "center",
           iconAllowOverlap: false,
           textAllowOverlap: false,
@@ -2690,7 +2701,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 7000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          iconSize: 0.4, // halved (was 0.8)
+          iconSize: 0.8 * _kIconScale,
           iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
@@ -2738,7 +2749,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           SymbolLayerProperties(
             symbolSortKey: ["+", 6000, _kSortKeyExpression],
             iconImage: ["get", "icon"],
-            iconSize: 0.75, // halved (was 1.5) — subSection markers
+            iconSize: 1.5 * _kIconScale, // subSection markers
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
@@ -2797,7 +2808,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                   18.3, 0.75,
                   22.0, 0.75,
                 ]
-              : 0.75,
+              : 1.5,
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,
@@ -2813,9 +2824,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 5000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          // Halved (was 1.5): same standalone-pin class as the user and
-          // selected markers, so it keeps the same visual weight as those.
-          iconSize: 0.75,
+          // Same standalone-pin class as the user and selected markers, so it
+          // keeps the same visual weight as those.
+          iconSize: 1.5 * _kIconScale,
           iconAllowOverlap: true,
           textAllowOverlap: false,
         ),
@@ -2834,7 +2845,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 15000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          iconSize: 0.4, // halved (was 0.8) — overlap-override markers
+          iconSize: 0.8 * _kIconScale, // overlap-override markers
           iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
@@ -2877,14 +2888,14 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["concat", ["get", "icon"], "-selected"],
             ["get", "icon"],
           ],
-          // Both stops halved (were 0.2 / 1.5) so the destination pin shrinks
-          // by the same factor at every zoom and the ramp keeps its shape.
+          // Both stops scale together so the destination pin keeps the shape
+          // of its ramp at every zoom.
           iconSize: [
             "interpolate",
             ["linear"],
             ["zoom"],
-            13,  0.1,
-            18,  0.75,
+            13,  0.2 * _kIconScale,
+            18,  1.5 * _kIconScale,
           ],
           iconAllowOverlap: false,
           textAllowOverlap: false,
@@ -3224,7 +3235,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       SymbolLayerProperties(
         symbolSortKey: ["+", 7000, _kSortKeyExpression],
         iconImage: ["get", "icon"],
-        iconSize: 0.4, // halved (was 0.8) — keep in step with the add above
+        iconSize: 0.8 * _kIconScale, // keep in step with the add above
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
