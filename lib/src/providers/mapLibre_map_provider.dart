@@ -2282,11 +2282,13 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Full property set for the text-only marker layer.
   ///
-  /// Shared by [enableMarkerLayers] and [_refreshMarkerLayerMinZooms] because
-  /// `setLayerProperties` **replaces** a layer's properties instead of merging
-  /// them: passing a partial set (just sort key + opacity, as the refresh used
-  /// to) silently drops `text-field`, leaving a symbol layer with nothing to
-  /// draw. Measured symptom was 45 dots and 0 text/icons at z18.9.
+  /// Shared by [enableMarkerLayers] and the **web** branch of
+  /// [_refreshMarkerLayerMinZooms]. Note `setLayerProperties` MERGES on both
+  /// platforms, so a partial set drops nothing — what it does do is overwrite
+  /// `symbol-sort-key` with a base-less expression, and the per-layer base is
+  /// what keeps each full marker sorted immediately before its own collision
+  /// dot. See the comment in [_refreshMarkerLayerMinZooms] for the cascade and
+  /// for why native deliberately keeps the flattened sort key.
   SymbolLayerProperties _normalTextLayerProps(List<dynamic> textOpacity) =>
       SymbolLayerProperties(
         symbolSortKey: ["+", 0, _kSortKeyExpression],
@@ -2352,14 +2354,15 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// composites, museum POI pins, and anything else baked by
   /// [UnifiedMarkerCreator] rather than referenced as a plain icon.
   ///
-  /// Same reason as the builders above: `setLayerProperties` **replaces** a
-  /// layer's properties. [_refreshMarkerLayerMinZooms] used to push only
-  /// `symbolSortKey` + `iconOpacity` here, which dropped `icon-image` and left
-  /// a symbol layer with nothing to draw. The markers did not vanish, because
-  /// layer 0 still drew each one's collision-fallback dot — for an animal that
-  /// dot is the paw. Symptom: "every animal is a paw at every zoom", which
-  /// looks like an icon-loading failure but is not; the composites were
-  /// registered fine, the layer just had no icon-image to reference them by.
+  /// Used at creation on every platform, and by the **web** branch of
+  /// [_refreshMarkerLayerMinZooms]. `icon-image` here is not what was broken —
+  /// setLayerProperties merges, so it was never dropped. The load-bearing line
+  /// is `symbolSortKey`'s 4000 base, which the refresh's partial call used to
+  /// overwrite: without it every full marker flattens to ~0, they collide with
+  /// each other as one block under `iconAllowOverlap: false`, and each loser
+  /// falls back to the layer-0 dot — for an animal, the paw. That is the "every
+  /// animal is a paw at every zoom" defect, and it is a collision-ordering bug,
+  /// not an icon-loading one: the composites were registered fine throughout.
   SymbolLayerProperties _customRenderingLayerProps(List<dynamic> iconOpacity) =>
       SymbolLayerProperties(
         symbolSortKey: ["+", 4000, _kSortKeyExpression],
@@ -3278,38 +3281,105 @@ class MaplibreMapProvider extends BaseMapProvider {
       fadeInEnd,   1.0,
     ];
 
-    // Full property sets, not partials: setLayerProperties replaces rather than
-    // merges, so the previous partial calls left these layers with no
-    // `text-field` / `icon-image` at all and they rendered nothing — which is
-    // why only the collision dots were ever visible. Reusing the same builders
-    // as the creation path also restores the collisionBase sort bases, which
-    // the old `symbolSortKey: _kSortKeyExpression` overwrite discarded.
+    // ── WEB ONLY ────────────────────────────────────────────────────────────
+    //
+    // These calls push each layer's FULL property set instead of just the two
+    // opacity/sort keys. The part that actually matters is `symbol-sort-key`:
+    // `setLayerProperties` MERGES on both platforms (Android routes
+    // `layer#setProperties` into `Layer.setProperties`, which applies only the
+    // keys present; the web binding loops setPaintProperty/setLayoutProperty
+    // per key), so nothing was ever dropped — but a partial call that names
+    // `symbolSortKey` still OVERWRITES it, and the bare `_kSortKeyExpression`
+    // discards the per-layer base from [_collisionBase] (text 0, fixed 1000,
+    // icon 2000/3000, customRendering 4000).
+    //
+    // That base is the whole marker→dot cascade: a feature's dot sorts at
+    // `collisionBase + 0.6`, i.e. immediately after its own full marker, so the
+    // full marker wins and suppresses its own dot. Flatten every full marker to
+    // ~0 and they instead all place first as one undifferentiated block, knock
+    // each other out under `iconAllowOverlap: false`, and each loser's dot then
+    // places into the gap. For an animal that dot is the paw — which is the
+    // "paw at every zoom" defect this fixes on web.
+    //
+    // NOT applied on native. Restoring the bases re-sorts customRendering to
+    // 4000, i.e. *after* text/fixed/icon markers, so the large labelled animal
+    // composites start losing collisions to them as you zoom in and drop back
+    // to paws. Mobile shipped for a long time with the flattened sort key and
+    // that is the accepted look there, so native keeps the original partial
+    // calls verbatim. Re-unify only with a deliberate mobile design pass.
+    if (kIsWeb) {
+      await controller.setLayerProperties(
+        _normalTextMarkerLayerId,
+        _normalTextLayerProps(opacityExpression),
+      );
+
+      await controller.setLayerProperties(
+        "$_normalIconMarkerLayerId-withSectionId",
+        _normalIconLayerProps(sortBase: 3000, opacity: opacityExpression),
+      );
+
+      await controller.setLayerProperties(
+        "$_normalIconMarkerLayerId-withoutSectionId",
+        _normalIconLayerProps(sortBase: 2000, opacity: opacityExpression),
+      );
+
+      await controller.setLayerProperties(
+        _customRenderingMarkerLayerId,
+        _customRenderingLayerProps(opacityExpression),
+      );
+
+      // icon-opacity keeps the layer's own creation ramp: the partial call this
+      // stands in for only ever retuned text-opacity for the fixed markers.
+      await controller.setLayerProperties(
+        _fixedMarkerLayerId,
+        _fixedMarkerLayerProps(
+          iconOpacity: _kDefaultMarkerOpacity,
+          textOpacity: opacityExpression,
+        ),
+      );
+      return;
+    }
+
+    // Native: unchanged from before the web work — partial sets that retune the
+    // fade ramp and flatten symbol-sort-key. Deliberately kept as-is.
     await controller.setLayerProperties(
       _normalTextMarkerLayerId,
-      _normalTextLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        textOpacity: opacityExpression,
+      ),
     );
 
     await controller.setLayerProperties(
       "$_normalIconMarkerLayerId-withSectionId",
-      _normalIconLayerProps(sortBase: 3000, opacity: opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
     );
 
     await controller.setLayerProperties(
       "$_normalIconMarkerLayerId-withoutSectionId",
-      _normalIconLayerProps(sortBase: 2000, opacity: opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
     );
 
     await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
-      _customRenderingLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: opacityExpression,
+      ),
     );
 
-    // icon-opacity keeps the layer's own creation ramp here: the partial call
-    // this replaces only ever retuned text-opacity for the fixed markers.
     await controller.setLayerProperties(
       _fixedMarkerLayerId,
-      _fixedMarkerLayerProps(
-        iconOpacity: _kDefaultMarkerOpacity,
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
         textOpacity: opacityExpression,
       ),
     );
