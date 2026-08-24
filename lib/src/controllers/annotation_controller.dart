@@ -129,15 +129,24 @@ class AnnotationController{
     }
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
       String id = GeoJsonUtils.buildKey(buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
-      GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(_user!.location, id);
-      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(_user!.location, id);
       await _unifiedMapController.removeMarker("user");
       await _unifiedMapController.removeCircle("user");
+      // Style read at the point of use — see the note in localizeUser.
+      GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
+          _user!.location, id,
+          style: _unifiedMapController.userMarkerStyle);
+      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(_user!.location, id);
       await _unifiedMapController.addUserMarker(userMarker);
       await _unifiedMapController.addCircle(userCircle);
       localizeUser(_user!);
     }else{
-
+      // removeMarker(buildingID) above also deletes the user puck: its id is
+      // buildKey(buildingID:..., id:"user"), and removeMarker matches with
+      // contains(). So whenever this branch is taken the puck has just been
+      // dropped and nothing here puts it back — it stays gone until some later
+      // localizeUser redraws it.
+      print("puck: changeBuildingFloor($buildingID -> $floor) removed the user "
+          "marker and did NOT re-add it (user=${_user?.bid}/${_user?.floor})");
     }
   }
 
@@ -177,12 +186,14 @@ class AnnotationController{
       if (_user != null && _user!.bid == buildingID && _user!.floor == floor) {
         String id = GeoJsonUtils.buildKey(
             buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
-        GeoJsonMarker userMarker =
-            PredefinedMarkers.getUserMarker(_user!.location, id);
-        GeoJsonCircle userCircle =
-            PredefinedCircles.getGenericMarker(_user!.location, id);
         await _unifiedMapController.removeMarker("user");
         await _unifiedMapController.removeCircle("user");
+        // Style read at the point of use — see the note in localizeUser.
+        GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
+            _user!.location, id,
+            style: _unifiedMapController.userMarkerStyle);
+        GeoJsonCircle userCircle =
+            PredefinedCircles.getGenericMarker(_user!.location, id);
         await _unifiedMapController.addUserMarker(userMarker);
         await _unifiedMapController.addCircle(userCircle);
         localizeUser(_user!);
@@ -693,17 +704,60 @@ class AnnotationController{
     await clearUser();
     _user = user;
     String id = GeoJsonUtils.buildKey(buildingID: user.bid, floor: user.floor.toString(), id: "user");
-    GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id);
-    GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
     if(changeFloor){
       await changeAllBuildingsFloor(user.floor);
     }
     await _unifiedMapController.removeMarker("user");
     await _unifiedMapController.removeCircle("user");
+    if(_venueData.selectedFloor[user.bid] != user.floor){
+      print("puck: localizeUser skipped the add — venue shows floor "
+          "${_venueData.selectedFloor[user.bid]} for ${user.bid} but user is on "
+          "${user.floor}; puck stays hidden");
+    }
     if(_venueData.selectedFloor[user.bid] == user.floor){
+      // Built here rather than before the awaits above: this method is entered
+      // as `void ... async` from UnifiedMapController, so callers cannot await
+      // it, and changeAllBuildingsFloor re-renders every building's floor. A
+      // marker built before that suspension carries whatever style was set at
+      // entry — so a setUserMarkerStyle landing mid-await would be undone by
+      // this method resuming and re-adding its stale marker. Reading the style
+      // at the point of use makes the last write win instead of the first.
+      GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id,
+          style: _unifiedMapController.userMarkerStyle);
+      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
       await _unifiedMapController.addUserMarker(userMarker);
       await _unifiedMapController.addCircle(userCircle);
     }
+  }
+
+  /// Redraws an already-placed puck so a changed [UnifiedMapController
+  /// .userMarkerStyle] takes effect.
+  ///
+  /// Needed because [localizeUser]'s same-building/same-floor fast path only
+  /// moves the existing marker — it never rebuilds the icon — so changing the
+  /// style alone would leave the old artwork on screen until the next floor
+  /// change.
+  ///
+  /// Does the remove/add itself rather than routing through
+  /// clearUser()+localizeUser(): those are exposed on UnifiedMapController as
+  /// `void ... async`, so a caller cannot await them and clearUser's internal
+  /// removeMarker can land *after* the re-add, deleting the puck it was
+  /// supposed to replace. Awaiting each step here keeps the swap ordered.
+  Future<void> refreshUserMarker() async {
+    final user = _user;
+    if (user == null) return;
+    if (_venueData.selectedFloor[user.bid] != user.floor) return;
+    final String id = GeoJsonUtils.buildKey(
+        buildingID: user.bid, floor: user.floor.toString(), id: "user");
+    final GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
+        user.location, id,
+        style: _unifiedMapController.userMarkerStyle);
+    final GeoJsonCircle userCircle =
+        PredefinedCircles.getGenericMarker(user.location, id);
+    await _unifiedMapController.removeMarker("user");
+    await _unifiedMapController.removeCircle("user");
+    await _unifiedMapController.addUserMarker(userMarker);
+    await _unifiedMapController.addCircle(userCircle);
   }
 
   Future<void> clearUser() async {

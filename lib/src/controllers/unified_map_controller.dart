@@ -694,6 +694,27 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Current appearance override for the user puck, or null for the default.
+  UserMarkerStyle? get userMarkerStyle => _userMarkerStyle;
+  UserMarkerStyle? _userMarkerStyle;
+
+  /// Swaps the user puck's artwork at runtime; pass null to restore the
+  /// default blue arrow.
+  ///
+  /// Intended for hosts that need a visually distinct puck for a position that
+  /// is not a live fix — a simulated or replayed walk, say. The style is held
+  /// on the controller (not globally), so it dies with the map rather than
+  /// leaking into the next one, and it is re-read every time the puck is
+  /// rebuilt, so it survives floor changes.
+  ///
+  /// Awaits the redraw, so once this returns the new artwork is on screen.
+  Future<void> setUserMarkerStyle(UserMarkerStyle? style) async {
+    if (_userMarkerStyle == style) return;
+    _userMarkerStyle = style;
+    await _annotationController.refreshUserMarker();
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     currentProviderImplementation.dispose();
