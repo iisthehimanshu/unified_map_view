@@ -15,29 +15,34 @@ class BuildingByVenue {
   Future<BuildingData> fetchBuildingIDS(String id) async {
     final buildingByVenueBox = BuildingByVenueAPIBOX.getData();
 
-    // ── FIRST RUN: Seed from asset if DB is empty ──
+    // Seed from the bundled asset (if any) so there's something to fall
+    // back to below even if the live fetch fails or there's no internet.
     if (!buildingByVenueBox.containsKey(id)) {
-      final seeded = await _seedFromAssetIfNeeded(id, buildingByVenueBox);
-      if (seeded) {
-        // Asset seeded — data is already available, no need to block on a
-        // live connectivity check just to decide whether to kick off a
-        // fire-and-forget background sync (which checks connectivity itself).
-        _backgroundSync(id, buildingByVenueBox);
-        final responseBody = buildingByVenueBox.get(id)!.responseBody;
-        return BuildingData.fromJson(responseBody);
-      }
-      final internetAvailable = await checkInternetConnectivity();
-      if(internetAvailable){
+      await _seedFromAssetIfNeeded(id, buildingByVenueBox);
+    }
+
+    // Prefer a live fetch whenever we're online, and use its result for
+    // THIS render — not just save it for next launch. The previous
+    // fire-and-forget "_backgroundSync" always rendered from whatever was
+    // cached (a bundled asset, or a prior session's fetch) and only
+    // updated the cache for the *next* launch, so a server-side data fix
+    // stayed invisible until the app was uninstalled and reinstalled,
+    // which is the only path that starts with an empty cache.
+    if (await checkInternetConnectivity()) {
+      try {
         return await _fetchFromApi(id, buildingByVenueBox);
-      }else{
-        throw("no preload & no DB data & no internet");
+      } catch (_) {
+        // fall through to cache below
       }
-    }else{
-      _backgroundSync(id, buildingByVenueBox);
+    }
+
+    if (buildingByVenueBox.containsKey(id)) {
       final responseBody = buildingByVenueBox.get(id)!.responseBody;
       print("UNIFIED MAP BUILDINGBYVENUE DATA FROM DATABASE");
       return BuildingData.fromJson(responseBody);
     }
+
+    throw("no preload & no DB data & no internet");
   }
 
   /// Seeds DB from bundled asset. Returns true if successful.
@@ -55,15 +60,6 @@ class BuildingByVenue {
     } catch (_) {
       print("No bundled BuildingByVenue asset found.");
       return false;
-    }
-  }
-
-  /// Fire-and-forget background API sync.
-  void _backgroundSync(String id, dynamic box) async {
-    final isConnected = await checkInternetConnectivity();
-    if (isConnected) {
-      print("UNIFIED MAP BUILDINGBYVENUE background sync started...");
-      _fetchFromApi(id, box);
     }
   }
 

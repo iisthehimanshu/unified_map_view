@@ -203,6 +203,21 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   @override
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
+    // The plugin's actual default (despite its doc comment claiming
+    // otherwise) is Virtual Display, not Hybrid Composition — see
+    // maplibre_gl_platform_interface's MapLibreMethodChannel.useHybridComposition,
+    // which is initialized to `false`. On Android, Virtual Display composites
+    // this GL-backed native view into an offscreen buffer and blits it into
+    // the Flutter tree, which is a well-known source of partial-transparency/
+    // ghosting artifacts for embedded GL/SurfaceView content — worst exactly
+    // during interaction (camera rotate/tilt), since that's when the native
+    // view's content is changing fastest relative to the composited copy.
+    // That reads as "furniture randomly turns transparent and it's worse
+    // when I rotate the camera" even though the map itself is rendering
+    // every frame correctly. Hybrid Composition embeds the native view
+    // directly instead of compositing a copy, which removes this whole
+    // class of artifact.
+    MapLibreMap.useHybridComposition = true;
     return MapLibreMap(
       trackCameraPosition: true,
       initialCameraPosition: CameraPosition(
@@ -1445,6 +1460,37 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Points used to approximate a cylinder/sphere footprint circle.
   static const int _circleSegments = 16;
 
+  /// Parts of the same furniture item (seat/back/legs, top/legs...) are
+  /// built as independent, unwelded extrusion polygons. Where two parts
+  /// are only meant to *touch*, floating-point rounding and the circle
+  /// approximation above leave a sub-millimetre gap at the seam; at an
+  /// oblique pitch, fill-extrusion's per-feature edge anti-aliasing lets
+  /// whatever is underneath (floor layer, basemap) show through exactly
+  /// there, which reads as "transparent furniture". Outsetting every part
+  /// by this much forces neighbouring parts to overlap instead of merely
+  /// touch, closing the seam. It's well under furniture scale (chairs are
+  /// tens of centimetres), so it isn't visible as size inflation.
+  static const double _partSeamOverlap = 0.01;
+
+  /// Parts meant to sit flush against each other (a cushion directly on a
+  /// seat base, a tabletop layer on its frame) frequently share the exact
+  /// same footprint in the source data. Padding every part by the same
+  /// fixed amount (above) keeps those side walls perfectly coplanar —
+  /// which is exactly the condition that makes a GPU depth buffer flicker
+  /// between two features as the camera moves: it can't consistently
+  /// decide which coincident surface is nearer, so the "loser" shows
+  /// whatever is behind it (another part, or the floor), and the loser
+  /// flips as the view/projection matrix changes with tilt/rotation. This
+  /// is a property of any standard depth buffer (WebGL, GLES, Metal), not
+  /// a misconfigured render flag — MapLibre's native renderer already runs
+  /// depth test/write correctly for fill-extrusion. The fix has to be on
+  /// our side: never hand the renderer two bit-identical surfaces. Varying
+  /// the pad per part index guarantees no two parts of the same item can
+  /// ever end up with identical padded geometry, without needing to know
+  /// which part is meant to sit "inside" which.
+  static const int _seamJitterSteps = 6;
+  static const double _seamJitterStep = 0.0015;
+
   /// "3dRef" may arrive as a Map or as a JSON-encoded string depending on
   /// how the API serialized the property — accept both.
   Map<String, dynamic>? _furnitureRefOf(Map<String, dynamic> props) {
@@ -1519,9 +1565,19 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _enableFurnitureLayer(MapLibreMapController controller) async {
     if (_isFurnitureLayerEnabled) return;
 
-    await controller.addSource(
-      _furnitureSourceId,
-      GeojsonSourceProperties(
+    // onStyleLoadedCallback resets this flag on every style reload on the
+    // assumption that the reload wiped every source/layer — true for
+    // everything else in that callback, but the furniture source/layer can
+    // survive some reloads anyway (seen in practice as an uncaught
+    // "Layer furniture-fill-layer already exists" PlatformException that
+    // aborted the rest of the callback, including the geometry refresh
+    // below). Swallow "already exists" here so a stale-flag/reality
+    // mismatch can't crash the reload — worst case we skip a redundant
+    // add and still fall through to re-push fresh source data.
+    try {
+      await controller.addSource(
+        _furnitureSourceId,
+        GeojsonSourceProperties(
         data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
         // Furniture parts are centimetre-scale, which puts them right on the
         // edge of what a tiled GeoJSON source can represent. Two separate
@@ -1542,28 +1598,35 @@ class MaplibreMapProvider extends BaseMapProvider {
         //    is ~2.3mm, fine enough for anything in these models, while still
         //    stopping the source from building real tiles for two more zoom
         //    levels on every pan the way 24 did.
-        maxzoom: 22,
-        tolerance: 0,
-        // Default. Furniture parts are sub-metre, so the doubled 256 buffer
-        // was only duplicating geometry into neighbouring tiles. Buffer only
-        // controls how much neighbouring geometry a tile carries, so lowering
-        // it cannot drop a part — a clipped fill is re-closed at the seam.
-        buffer: 256,
-      ),
-    );
+          maxzoom: 22,
+          tolerance: 0,
+          // Default. Furniture parts are sub-metre, so the doubled 256 buffer
+          // was only duplicating geometry into neighbouring tiles. Buffer only
+          // controls how much neighbouring geometry a tile carries, so lowering
+          // it cannot drop a part — a clipped fill is re-closed at the seam.
+          buffer: 256,
+        ),
+      );
+    } catch (_) {
+      // Source already exists on the native side — fine, carry on.
+    }
 
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
-    await controller.addFillLayer(
-      _furnitureSourceId,
-      _furnitureFillLayerId,
-      FillLayerProperties(
-        fillColor: ['get', 'color'],
-        fillOutlineColor: ['get', 'color'],
-        visibility: _config.immersive ? "none" : "visible",
-      ),
-      minzoom: _furnitureMinZoom,
-    );
+    try {
+      await controller.addFillLayer(
+        _furnitureSourceId,
+        _furnitureFillLayerId,
+        FillLayerProperties(
+          fillColor: ['get', 'color'],
+          fillOutlineColor: ['get', 'color'],
+          visibility: _config.immersive ? "none" : "visible",
+        ),
+        minzoom: _furnitureMinZoom,
+      );
+    } catch (_) {
+      // Layer already exists on the native side — fine, carry on.
+    }
 
     _isFurnitureLayerEnabled = true;
 
@@ -1579,16 +1642,25 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _addFurnitureExtrusionLayer(
       MapLibreMapController controller) async {
     if (!_isFurnitureLayerEnabled || _isFurnitureExtrusionAdded) return;
-    await controller.addFillExtrusionLayer(
-      _furnitureSourceId,
-      _furnitureLayerId,
-      const FillExtrusionLayerProperties(
-        fillExtrusionColor: ['get', 'color'],
-        fillExtrusionBase: ['get', 'base'],
-        fillExtrusionHeight: ['get', 'height'],
-      ),
-      minzoom: _furnitureMinZoom,
-    );
+    try {
+      await controller.addFillExtrusionLayer(
+        _furnitureSourceId,
+        _furnitureLayerId,
+        const FillExtrusionLayerProperties(
+          fillExtrusionColor: ['get', 'color'],
+          fillExtrusionBase: ['get', 'base'],
+          fillExtrusionHeight: ['get', 'height'],
+          // Every other extrusion layer in this file pins this explicitly;
+          // leaving it unset here was the one inconsistency letting the
+          // renderer fall back to an implicit default instead of a
+          // guaranteed-opaque layer.
+          fillExtrusionOpacity: 1.0,
+        ),
+        minzoom: _furnitureMinZoom,
+      );
+    } catch (_) {
+      // Layer already exists on the native side — fine, carry on.
+    }
     _isFurnitureExtrusionAdded = true;
   }
 
@@ -1652,7 +1724,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     final parts = (ref['3d'] as List?) ?? const [];
     final result = <Map<String, dynamic>>[];
 
-    for (final raw in parts) {
+    for (var partIndex = 0; partIndex < parts.length; partIndex++) {
+      final raw = parts[partIndex];
       if (raw is! Map) continue;
       final p = Map<String, dynamic>.from(raw);
       final shape = p['shape'] as String? ?? 'box';
@@ -1663,7 +1736,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           : (double.tryParse('${p['h'] ?? 0}') ?? 0.0);
       final oy = double.tryParse('${p['oy'] ?? 0}') ?? 0.0;
 
-      final localCorners = _footprintFor(p);
+      final eps = _partSeamOverlap +
+          (partIndex % _seamJitterSteps) * _seamJitterStep;
+
+      final localCorners = _footprintFor(p, eps);
       if (localCorners.isEmpty) continue;
 
       final ring = localCorners.map((c) {
@@ -1688,8 +1764,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         },
         'properties': {
           'color': p['color'] ?? '#888888',
-          'base': oy - h / 2,
-          'height': oy + h / 2,
+          'base': oy - h / 2 - eps,
+          'height': oy + h / 2 + eps,
         },
       });
     }
@@ -1705,13 +1781,13 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// columns, so a "sphere" renders as a cylinder of the same radius
   /// spanning its full diameter — not a true dome. That's a hard
   /// limit of this technique, not a bug.
-  List<List<double>> _footprintFor(Map<String, dynamic> p) {
+  List<List<double>> _footprintFor(Map<String, dynamic> p, double eps) {
     final shape = p['shape'] as String? ?? 'box';
     final ox = double.tryParse('${p['ox'] ?? 0}') ?? 0.0;
     final oz = double.tryParse('${p['oz'] ?? 0}') ?? 0.0;
 
     if (shape == 'cylinder' || shape == 'sphere') {
-      final r = double.tryParse('${p['r'] ?? 0}') ?? 0.0;
+      final r = (double.tryParse('${p['r'] ?? 0}') ?? 0.0) + eps;
       return List.generate(_circleSegments, (i) {
         final angle = 2 * pi * i / _circleSegments;
         return [ox + r * cos(angle), oz + r * sin(angle)];
@@ -1721,8 +1797,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     // default: box — w/d taken exactly as given in the JSON, no
     // unit scaling or minimum-size flooring. The footprint is the
     // horizontal w x d rectangle only; h feeds base/height later.
-    final w = double.tryParse('${p['w'] ?? 0}') ?? 0.0;
-    final d = double.tryParse('${p['d'] ?? 0}') ?? 0.0;
+    // Half-extents grow by eps on every side so this part overlaps its
+    // neighbours instead of merely touching (or exactly coinciding
+    // with) them.
+    final halfW = (double.tryParse('${p['w'] ?? 0}') ?? 0.0) / 2 + eps;
+    final halfD = (double.tryParse('${p['d'] ?? 0}') ?? 0.0) / 2 + eps;
 
     // Optional per-part "ry": the part's own yaw around its center
     // (e.g. wall niches at ry 90/270, amalaka lobes at ry 30/60...),
@@ -1730,20 +1809,20 @@ class MaplibreMapProvider extends BaseMapProvider {
     final ryDeg = double.tryParse('${p['ry'] ?? 0}') ?? 0.0;
     if (ryDeg == 0) {
       return [
-        [ox - w / 2, oz - d / 2],
-        [ox + w / 2, oz - d / 2],
-        [ox + w / 2, oz + d / 2],
-        [ox - w / 2, oz + d / 2],
+        [ox - halfW, oz - halfD],
+        [ox + halfW, oz - halfD],
+        [ox + halfW, oz + halfD],
+        [ox - halfW, oz + halfD],
       ];
     }
     final ryRad = ryDeg * pi / 180.0;
     final cosR = cos(ryRad);
     final sinR = sin(ryRad);
     return [
-      [-w / 2, -d / 2],
-      [w / 2, -d / 2],
-      [w / 2, d / 2],
-      [-w / 2, d / 2],
+      [-halfW, -halfD],
+      [halfW, -halfD],
+      [halfW, halfD],
+      [-halfW, halfD],
     ].map((c) {
       final x = c[0];
       final z = c[1];

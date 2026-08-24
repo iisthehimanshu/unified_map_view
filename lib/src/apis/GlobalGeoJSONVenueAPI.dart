@@ -17,27 +17,31 @@ class GlobalGeoJSONVenueAPI {
     await service.init();
     final bool dbHasData = service.containsID(venueName) == true;
 
-    // ── FIRST RUN: Seed from asset if DB is empty ──
+    // Seed from the bundled asset (if any) so there's something to fall
+    // back to below even if the live fetch fails or there's no internet.
     if (!dbHasData) {
-      final seeded = await _seedFromAssetIfNeeded(venueName, service);
-      if (seeded) {
-        // Asset seeded — data is already available, no need to block on a
-        // live connectivity check just to decide whether to kick off a
-        // fire-and-forget background sync (which checks connectivity itself).
-        _backgroundSync(venueName, service);
-        return service.getGeoData(venueName)?.responseBody;
-      }
-      final internetAvailable = await checkInternetConnectivity();
-      if(internetAvailable){
-        return await _fetchFromApi(venueName, service);
-      }else{
-        throw("no preload & no DB data & no internet");
-      }
-    }else{
-      _backgroundSync(venueName, service);
+      await _seedFromAssetIfNeeded(venueName, service);
+    }
+
+    // Prefer a live fetch whenever we're online, and use its result for
+    // THIS render — not just save it for next launch. The previous
+    // fire-and-forget "_backgroundSync" always rendered from whatever was
+    // cached (a bundled asset, or a prior session's fetch) and only
+    // updated the cache for the *next* launch, so any server-side data
+    // fix (e.g. corrected per-part colors on furniture/landmark models)
+    // stayed invisible until the app was uninstalled and reinstalled,
+    // which is the only path that starts with an empty cache.
+    if (await checkInternetConnectivity()) {
+      final fresh = await _fetchFromApi(venueName, service);
+      if (fresh != null) return fresh;
+    }
+
+    if (service.containsID(venueName)) {
       print("GlobalGeoJSONVenueAPI from DataBase");
       return service.getGeoData(venueName)?.responseBody;
     }
+
+    throw("no preload & no DB data & no internet");
   }
 
   /// Seeds DB from bundled asset. Returns true if successful.
@@ -54,15 +58,6 @@ class GlobalGeoJSONVenueAPI {
     } catch (_) {
       print("No bundled GeoJSON asset found.");
       return false;
-    }
-  }
-
-  /// Fire-and-forget background API sync.
-  void _backgroundSync(String venueName, GlobalGeoJSONVenueStorageService service) async {
-    final isConnected = await checkInternetConnectivity();
-    if (isConnected) {
-      print("GlobalGeoJSONVenueAPI background sync started...");
-      _fetchFromApi(venueName, service);
     }
   }
 
