@@ -157,6 +157,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isCircleLayersEnabled = false;
   bool _isFurnitureLayerEnabled = false;
 
+  /// Pending self-heal retry timers per GeoJSON source id — see the comment
+  /// in [setGeoJsonSource].
+  final Map<String, List<Timer>> _settleTimers = {};
+
   /// Whether [_clusterSourceId]/[_rotationSourceId] currently exist natively.
   /// A style reload wipes every source, so anything pushing GeoJSON from a
   /// timer/stream (compass ticks, marker animation) must check this first —
@@ -874,7 +878,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       await _loadMarkerIcon(controller, marker);
       _symbols.add(marker);
       try {
-        setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
+        await setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
       } catch (e) {
         print("error adding marker $e");
       }
@@ -913,7 +917,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         // (or the shared icon, if it's already loaded from an earlier call)
         // via _animalDisplayIconId, so nothing renders blank while the real
         // photos are still being fetched/decoded.
-        setGeoJsonSource(controller, _symbols, _clusterSourceId);
+        await setGeoJsonSource(controller, _symbols, _clusterSourceId);
       } catch (e) {
         print("error adding markers $e");
       }
@@ -1136,19 +1140,64 @@ class MaplibreMapProvider extends BaseMapProvider {
             // are registered under their asset path; null falls back to the
             // shared default room dot.
             'dotIcon': marker.dotAssetPath ?? _kDotImageId,
-            if(entryDirection != null)'bearing':entryDirection
+            if(entryDirection != null)'bearing':entryDirection,
+            // Bumped on every push, including retries that repeat otherwise
+            // identical data (see the self-heal comment below) — without
+            // this, a byte-identical resend risks being deduplicated by the
+            // native GeoJsonSource before it ever reaches layout.
+            '_rev': DateTime.now().microsecondsSinceEpoch,
           }
         };
       }).toList();
 
 
-      await controller.setGeoJsonSource(
-        sourceID,
-        {
-          "type": "FeatureCollection",
-          "features": features,
-        },
-      );
+      final geoJson = {
+        "type": "FeatureCollection",
+        "features": features,
+      };
+      await controller.setGeoJsonSource(sourceID, geoJson);
+
+      // Self-heal: a fresh setGeoJson call is what makes MapLibre 0.26.2
+      // redo symbol layout/placement for a source — it's what tapping a
+      // marker triggers today via selectLocation (it flips 'isSelected' on
+      // one feature), and it's why that "fixes" markers that failed to draw
+      // on their first push. A single re-push shortly after landed wasn't
+      // enough on real devices doing heavy startup work (venue GeoJSON
+      // parsing, furniture extrusion, pattern generation, marker-icon
+      // compositing all run synchronously on the UI isolate and have been
+      // observed dropping 200+ frames), which can delay when the native
+      // side actually catches up to process queued addImage()/setGeoJson()
+      // calls well past a few hundred milliseconds. Retry at several
+      // increasing delays — each rebuilt with a fresh '_rev' so it can't be
+      // mistaken for a no-op resend — so at least one both lands after that
+      // backlog clears and is guaranteed to force a real relayout.
+      for (final timer in _settleTimers[sourceID] ?? const <Timer>[]) {
+        timer.cancel();
+      }
+      _settleTimers[sourceID] = [
+        for (final delay in const [
+          Duration(milliseconds: 500),
+          Duration(seconds: 2),
+          Duration(seconds: 5),
+        ])
+          Timer(delay, () {
+            if (!_isClusteringEnabled) return;
+            print("settle re-push firing for $sourceID after ${delay.inMilliseconds}ms");
+            final refreshedFeatures = (geoJson["features"] as List).map((f) {
+              final feature = Map<String, dynamic>.from(f as Map);
+              feature['properties'] = Map<String, dynamic>.from(
+                  feature['properties'] as Map)
+                ..['_rev'] = DateTime.now().microsecondsSinceEpoch;
+              return feature;
+            }).toList();
+            controller.setGeoJsonSource(sourceID, {
+              "type": "FeatureCollection",
+              "features": refreshedFeatures,
+            }).catchError((e) {
+              print("settle re-push for $sourceID failed: $e");
+            });
+          }),
+      ];
     }
   }
 
@@ -1248,8 +1297,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         _rotatingSymbols.removeWhere(
                 (marker) => marker.id.toLowerCase().contains(markerId));
 
-        setGeoJsonSource(controller, _symbols, _clusterSourceId);
-        setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
+        await setGeoJsonSource(controller, _symbols, _clusterSourceId);
+        await setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
       } catch (e) {
         print('Error removing marker: $e');
       }
@@ -1261,8 +1310,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MapLibreMapController) {
       try {
         _symbols.clear();
-        setGeoJsonSource(controller, [], _clusterSourceId);
-        setGeoJsonSource(controller, [], _rotationSourceId);
+        await setGeoJsonSource(controller, [], _clusterSourceId);
+        await setGeoJsonSource(controller, [], _rotationSourceId);
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -1623,6 +1672,12 @@ class MaplibreMapProvider extends BaseMapProvider {
           visibility: _config.immersive ? "none" : "visible",
         ),
         minzoom: _furnitureMinZoom,
+        // Furniture activates at 17.5, markers at 18.0 — with no anchor here
+        // this layer was added after (so painted on top of) every marker
+        // layer, occluding icons/labels the moment furniture faded in.
+        // Anchor it beneath the bottom-most marker layer so markers always
+        // paint on top regardless of zoom.
+        belowLayerId: await _webSafeBelowLayerId(controller, _dotMarkerLayerId),
       );
     } catch (_) {
       // Layer already exists on the native side — fine, carry on.
@@ -1657,6 +1712,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           fillExtrusionOpacity: 1.0,
         ),
         minzoom: _furnitureMinZoom,
+        // See the matching comment on the flat fill layer above — without an
+        // anchor this 3D layer paints on top of every marker layer once it
+        // fades in at zoom 17.5, occluding markers as the user zooms in.
+        belowLayerId: await _webSafeBelowLayerId(controller, _dotMarkerLayerId),
       );
     } catch (_) {
       // Layer already exists on the native side — fine, carry on.
@@ -2118,7 +2177,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _loadShineImage(MapLibreMapController controller) async {
     try {
       final bytes = await _createShineIconBytes();
-      await controller.addImage(_kShineImageId, bytes);
+      await _addImageSafe(controller, _kShineImageId, bytes);
     } catch (e) {
       print("_loadShineImage $e");
     }
@@ -2237,7 +2296,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     final String id = _cornerArrowImageId(rounded);
     if (!_registeredCornerArrowAngles.contains(rounded)) {
       final bytes = await creator.createBentArrow(angle: rounded.toDouble());
-      await controller.addImage(id, bytes);
+      await _addImageSafe(controller, id, bytes);
       _registeredCornerArrowAngles.add(rounded);
     }
     return id;
@@ -2252,7 +2311,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
     final bytes = await _createTurnBubbleBytes(label);
     final id = 'turn_bubble_${label.hashCode}';
-    await controller.addImage(id, bytes);
+    await _addImageSafe(controller, id, bytes);
     _registeredTurnBubbleIds[label] = id;
     return id;
   }
@@ -2452,8 +2511,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
       // Independent platform-channel registrations — dispatch together.
       await Future.wait([
-        controller.addImage(imageId, composite),
-        controller.addImage('$imageId-small', smallComposite),
+        _addImageSafe(controller, imageId, composite),
+        _addImageSafe(controller, '$imageId-small', smallComposite),
       ]);
       _loadedAnimalIcons.add(contentKey);
       return true;
@@ -2536,12 +2595,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         Timer(_animalIconRefreshQuiet, () => _pushAnimalIconRefresh(controller));
   }
 
-  void _pushAnimalIconRefresh(MapLibreMapController controller) {
+  Future<void> _pushAnimalIconRefresh(MapLibreMapController controller) async {
     _animalIconRefreshTimer?.cancel();
     _animalIconRefreshTimer = null;
     _animalIconRefreshWindowStart = null;
     try {
-      setGeoJsonSource(controller, _symbols, _clusterSourceId);
+      await setGeoJsonSource(controller, _symbols, _clusterSourceId);
     } catch (e) {
       print("error refreshing animal markers $e");
     }
@@ -2552,7 +2611,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _loadDotImage(MapLibreMapController controller) async {
     try {
       final bd = await rootBundle.load(_kDotAssetPath);
-      await controller.addImage(_kDotImageId, bd.buffer.asUint8List());
+      await _addImageSafe(controller, _kDotImageId, bd.buffer.asUint8List());
       _registeredDotImageIds.add(_kDotImageId);
     } catch (e) {
       print("_loadDotImage $e");
@@ -2563,10 +2622,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _loadPathArrowImage(MapLibreMapController controller) async {
     try {
       final bytes = await creator.createDirectionArrow();
-      await controller.addImage(_kPathArrowImageId, bytes);
+      await _addImageSafe(controller, _kPathArrowImageId, bytes);
 
       final bigBytes = await creator.createBigCornerArrow();
-      await controller.addImage(_kPathBigArrowImageId, bigBytes);
+      await _addImageSafe(controller, _kPathBigArrowImageId, bigBytes);
     } catch (e) {
       print("_loadPathArrowImage $e");
     }
@@ -2587,12 +2646,50 @@ class MaplibreMapProvider extends BaseMapProvider {
         bytes = bd.buffer.asUint8List();
       }
       if (bytes != null) {
-        await controller.addImage(path, bytes);
+        await _addImageSafe(controller, path, bytes);
         _registeredDotImageIds.add(path);
       }
     } catch (e) {
       print("_loadMarkerDotIcon $e");
     }
+  }
+
+  /// Wraps [MapLibreMapController.addImage] with a retry against the native
+  /// "STYLE_NOT_READY" race (see [RenderingUtilities.retryOnStyleNotReady]).
+  Future<void> _addImageSafe(
+    MapLibreMapController controller,
+    String name,
+    Uint8List bytes, [
+    bool sdf = false,
+  ]) {
+    return RenderingUtilities.retryOnStyleNotReady(
+        () => controller.addImage(name, bytes, sdf));
+  }
+
+  /// Wraps [MapLibreMapController.addSymbolLayer] with the same retry.
+  Future<void> _addSymbolLayerSafe(
+    MapLibreMapController controller,
+    String sourceId,
+    String layerId,
+    SymbolLayerProperties properties, {
+    String? belowLayerId,
+    String? sourceLayer,
+    double? minzoom,
+    double? maxzoom,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) {
+    return RenderingUtilities.retryOnStyleNotReady(() => controller.addSymbolLayer(
+          sourceId,
+          layerId,
+          properties,
+          belowLayerId: belowLayerId,
+          sourceLayer: sourceLayer,
+          minzoom: minzoom,
+          maxzoom: maxzoom,
+          filter: filter,
+          enableInteraction: enableInteraction,
+        ));
   }
 
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
@@ -2637,9 +2734,9 @@ class MaplibreMapProvider extends BaseMapProvider {
           final poiMarker = poiResults[0];
           final poiSelected = poiResults[1];
           await Future.wait([
-            controller.addImage(marker.id, poiMarker.icon),
-            controller.addImage("${marker.id}-small", poiMarker.icon),
-            controller.addImage("${marker.id}-selected", poiSelected.icon),
+            _addImageSafe(controller, marker.id, poiMarker.icon),
+            _addImageSafe(controller, "${marker.id}-small", poiMarker.icon),
+            _addImageSafe(controller, "${marker.id}-selected", poiSelected.icon),
           ]);
           marker.anchor = poiMarker.anchor;
           return true;
@@ -2650,7 +2747,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             museum: RenderingTheme.current.isMuseum,
             stopName: marker.properties?['stopName'] ?? "",
           );
-          await controller.addImage(marker.id, iconBytes);
+          await _addImageSafe(controller, marker.id, iconBytes);
           return true;
         }else{
           double fontSize = marker.properties?["fontSize"]??14.5;
@@ -2719,8 +2816,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
           final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
           await Future.wait([
-            controller.addImage(marker.id, iconBytes),
-            controller.addImage("${marker.id}-small", iconBytes2),
+            _addImageSafe(controller, marker.id, iconBytes),
+            _addImageSafe(controller, "${marker.id}-small", iconBytes2),
           ]);
           marker.anchor = markerIconWithAnchorWithText.anchor;
           return true;
@@ -2735,7 +2832,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconBytes = bd.buffer.asUint8List();
         }
         if (iconBytes != null) {
-          await controller.addImage(marker.id, iconBytes);
+          await _addImageSafe(controller, marker.id, iconBytes);
           return true;
         }
       }
@@ -2858,15 +2955,38 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is! MapLibreMapController) return;
 
     try {
-      await controller.addGeoJsonSource(_clusterSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
-
-      await controller.addGeoJsonSource(_rotationSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
+      // addGeoJsonSource() cannot set maxzoom and silently defaults to 18 —
+      // geojson-vt then only tiles marker data up to z18, and every marker
+      // vanishes once the camera zooms past that (over-zoomed tiles for a
+      // point source lose their symbols instead of just looking coarser).
+      // Furniture already learned this lesson (see its own maxzoom: 22
+      // comment); apply the same fix here via the richer addSource() API.
+      // Wrapped per-call because, unlike addGeoJsonSource(), addSource()
+      // has no "already exists" guard on the native side and throws on a
+      // style-reload re-add — which would otherwise abort every layer setup
+      // after it in this function.
+      try {
+        await controller.addSource(
+          _clusterSourceId,
+          const GeojsonSourceProperties(
+            data: {'type': 'FeatureCollection', 'features': []},
+            maxzoom: 22,
+          ),
+        );
+      } catch (_) {
+        // Source already exists on the native side — fine, carry on.
+      }
+      try {
+        await controller.addSource(
+          _rotationSourceId,
+          const GeojsonSourceProperties(
+            data: {'type': 'FeatureCollection', 'features': []},
+            maxzoom: 22,
+          ),
+        );
+      } catch (_) {
+        // Source already exists on the native side — fine, carry on.
+      }
 
       // Both sources exist again — async pushes (compass, animation) may resume.
       _markerSourcesReady = true;
@@ -2886,7 +3006,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       //     is hidden, so the marker also falls back to its dot.
       //   • 2 dots collide → the lower-priority dot is hidden.
       // The winner never shows a dot: its own dot collides with its own full.
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _dotMarkerLayerId,
         SymbolLayerProperties(
@@ -2940,7 +3060,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 1: Normal text markers (no icon, no bearing)
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
           _clusterSourceId,
           _normalTextMarkerLayerId,
           _normalTextLayerProps(_kDefaultMarkerOpacity),
@@ -2960,7 +3080,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 2: Normal icon markers (has icon, no bearing) — with sectionId
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withSectionId",
         _normalIconLayerProps(
@@ -2985,7 +3105,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 2b: Normal icon markers — without sectionId
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         "$_normalIconMarkerLayerId-withoutSectionId",
         _normalIconLayerProps(
@@ -3008,7 +3128,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 3: Custom rendering markers
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _customRenderingMarkerLayerId,
         SymbolLayerProperties(
@@ -3064,7 +3184,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 4: Normal fixed/rotated markers (has bearing)
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _fixedMarkerLayerId,
         SymbolLayerProperties(
@@ -3115,7 +3235,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 5: Boundary / patch-above markers
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _patchAboveMarkerLayerId,
         SymbolLayerProperties(
@@ -3171,7 +3291,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 6: Section markers
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _sectionMarkerLayerId,
         SymbolLayerProperties(
@@ -3219,7 +3339,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 7: SubSection markers
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
           _clusterSourceId,
           _subSectionMarkerLayerId,
           SymbolLayerProperties(
@@ -3257,7 +3377,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 8: Rotation markers (separate source)
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _rotationSourceId,
         _rotationMarkerLayerId,
         SymbolLayerProperties(
@@ -3275,7 +3395,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 9: isPriority markers
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _priorityMarkerLayerId,
         SymbolLayerProperties(
@@ -3300,7 +3420,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       // Mirrors the normal icon-marker styling but with icon/text overlap forced
       // on, so toggled markers stay visible regardless of collision. Excludes
       // priority/structural markers (they are handled by their own layers).
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _overlapOverrideMarkerLayerId,
         SymbolLayerProperties(
@@ -3341,7 +3461,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 10: Selected marker
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _selectedMarkerLayerId,
         SymbolLayerProperties(
@@ -3391,7 +3511,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         'type': 'FeatureCollection',
         'features': [],
       });
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _animatedMarkerSourceId,
         _animatedMarkerLayerId,
         SymbolLayerProperties(
@@ -3420,7 +3540,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       if (_symbols.isNotEmpty) {
         final symbols = [..._symbols];
-        setGeoJsonSource(controller, symbols, _clusterSourceId);
+        await setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
     } catch (e, stack) {
       print('Error enabling marker layers: $e');
@@ -3684,7 +3804,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // 2. Boundary marker fade layer — remove and re-add to update maxzoom
     await controller.removeLayer(_patchAboveMarkerLayerId);
-    await controller.addSymbolLayer(
+    await _addSymbolLayerSafe(controller,
       _clusterSourceId,
       _patchAboveMarkerLayerId,
       SymbolLayerProperties(
@@ -3740,7 +3860,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       ]),
     );
     await controller.removeLayer(_sectionMarkerLayerId);
-    await controller.addSymbolLayer(
+    await _addSymbolLayerSafe(controller,
       _clusterSourceId,
       _sectionMarkerLayerId,
       SymbolLayerProperties(
@@ -3960,7 +4080,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // 4. Repetitive small arrows
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _polylineSourceId,
         _pathArrowLayerId,
         const SymbolLayerProperties(
@@ -3993,7 +4113,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Big corner arrows
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _pathCornerSourceId,
         _pathBigArrowLayerId,
         const SymbolLayerProperties(
@@ -4017,7 +4137,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Moving shine that travels along the active path.
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _pathShineSourceId,
         _pathShineLayerId,
         const SymbolLayerProperties(
@@ -4030,7 +4150,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       // Turn bubble (floating callout with the turn label), anchored to the
       // corner point. minzoom hides it when zoomed out too far.
-      await controller.addSymbolLayer(
+      await _addSymbolLayerSafe(controller,
         _pathCornerSourceId,
         _turnBubbleLayerId,
         const SymbolLayerProperties(

@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:unified_map_view/src/models/geojson_models.dart';
 import 'package:unified_map_view/src/models/map_location.dart';
 import 'dart:math';
@@ -10,6 +11,32 @@ import 'LandmarkAssetType.dart';
 import 'dart:developer' as developer;
 
 class RenderingUtilities{
+  /// Retries [action] when it fails with the native "STYLE_NOT_READY" error.
+  ///
+  /// MapLibre 0.26.2's native Android/iOS style-mutation handlers
+  /// (`style#addImage`, `symbolLayer#add`, ...) now check
+  /// `style.isFullyLoaded()` before doing anything and reject the call with
+  /// this error code if it's called too early — a race that didn't exist on
+  /// 0.21.0. Every guard that raises it runs before any native state is
+  /// touched, so retrying the exact same call is always safe: either nothing
+  /// was applied yet (safe to redo) or it already succeeded (no exception).
+  static Future<T> retryOnStyleNotReady<T>(
+      Future<T> Function() action, {
+        int maxAttempts = 4,
+        Duration initialDelay = const Duration(milliseconds: 100),
+      }) async {
+    Duration delay = initialDelay;
+    for (var attempt = 1;; attempt++) {
+      try {
+        return await action();
+      } on PlatformException catch (e) {
+        if (e.code != 'STYLE_NOT_READY' || attempt >= maxAttempts) rethrow;
+        await Future.delayed(delay);
+        delay *= 2;
+      }
+    }
+  }
+
   static Color hexToColor(String hex, {double opacity = 1.0}) {
     hex = hex.replaceAll('#', '');
     if (hex.length == 6) {
@@ -500,7 +527,7 @@ class RenderingUtilities{
       gap: gap,
       angle: angle,
     );
-    await controller.addImage(patternId, pngBytes);
+    await retryOnStyleNotReady(() => controller.addImage(patternId, pngBytes));
   }
 
   static Future<Uint8List> _generatePattern({

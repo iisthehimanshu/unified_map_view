@@ -326,7 +326,7 @@ class UnifiedMapController extends ChangeNotifier {
 
     final markers = GeoJsonLoader.extractMarkers(collection);
     final urlMarkers = markers.where((marker)=> (marker.assetPath != null && marker.assetPath!.contains("http"))).toList();
-    addMarkers(urlMarkers);
+    await addMarkers(urlMarkers);
     final localMarkers = markers.where((marker)=> !urlMarkers.contains(marker)).toList();
     final sectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "Section").toList();
     final subSectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "SubSection").toList();
