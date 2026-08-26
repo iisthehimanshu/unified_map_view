@@ -1063,7 +1063,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         return;
       }
 
-      final features = symbols.map((marker) {
+      Map<String, dynamic> buildFeature(GeoJsonMarker marker) {
         final bool isAnimatingThisMarker = marker.id == _animatingMarkerId;
         final anchor = isAnimatingThisMarker
             ? "center"
@@ -1148,12 +1148,11 @@ class MaplibreMapProvider extends BaseMapProvider {
             '_rev': DateTime.now().microsecondsSinceEpoch,
           }
         };
-      }).toList();
-
+      }
 
       final geoJson = {
         "type": "FeatureCollection",
-        "features": features,
+        "features": symbols.map(buildFeature).toList(),
       };
       await controller.setGeoJsonSource(sourceID, geoJson);
 
@@ -1168,9 +1167,20 @@ class MaplibreMapProvider extends BaseMapProvider {
       // observed dropping 200+ frames), which can delay when the native
       // side actually catches up to process queued addImage()/setGeoJson()
       // calls well past a few hundred milliseconds. Retry at several
-      // increasing delays — each rebuilt with a fresh '_rev' so it can't be
-      // mistaken for a no-op resend — so at least one both lands after that
-      // backlog clears and is guaranteed to force a real relayout.
+      // increasing delays so at least one both lands after that backlog
+      // clears and is guaranteed to force a real relayout.
+      //
+      // Rebuilt from scratch each tick (not a resend of the captured
+      // `geoJson` above) rather than just bumping '_rev' on stale features:
+      // animal markers push their paw-dot placeholder immediately and load
+      // the real photo icon asynchronously afterwards (registration is a
+      // network fetch + decode + addImage, which can itself outlast
+      // addImage's own STYLE_NOT_READY retry budget under the same startup
+      // load). A resend of the stale snapshot would just keep re-affirming
+      // the placeholder forever. Re-attempting any still-unloaded animal
+      // icon here, then rebuilding features from live marker/icon state,
+      // means a slow or once-failed photo load still gets picked up and
+      // rendered instead of being stuck on the placeholder permanently.
       for (final timer in _settleTimers[sourceID] ?? const <Timer>[]) {
         timer.cancel();
       }
@@ -1180,22 +1190,27 @@ class MaplibreMapProvider extends BaseMapProvider {
           Duration(seconds: 2),
           Duration(seconds: 5),
         ])
-          Timer(delay, () {
+          Timer(delay, () async {
             if (!_isClusteringEnabled) return;
             print("settle re-push firing for $sourceID after ${delay.inMilliseconds}ms");
-            final refreshedFeatures = (geoJson["features"] as List).map((f) {
-              final feature = Map<String, dynamic>.from(f as Map);
-              feature['properties'] = Map<String, dynamic>.from(
-                  feature['properties'] as Map)
-                ..['_rev'] = DateTime.now().microsecondsSinceEpoch;
-              return feature;
-            }).toList();
-            controller.setGeoJsonSource(sourceID, {
-              "type": "FeatureCollection",
-              "features": refreshedFeatures,
-            }).catchError((e) {
+            try {
+              for (final marker in symbols) {
+                if (_isAnimalMarker(marker) &&
+                    !_loadedAnimalIcons.contains(_animalIconKey(marker))) {
+                  try {
+                    await _loadAnimalIcon(controller, marker);
+                  } catch (e) {
+                    print("settle re-push animal icon retry failed for ${marker.id}: $e");
+                  }
+                }
+              }
+              await controller.setGeoJsonSource(sourceID, {
+                "type": "FeatureCollection",
+                "features": symbols.map(buildFeature).toList(),
+              });
+            } catch (e) {
               print("settle re-push for $sourceID failed: $e");
-            });
+            }
           }),
       ];
     }
@@ -2936,6 +2951,77 @@ class MaplibreMapProvider extends BaseMapProvider {
         textOpacity: opacity,
       );
 
+  /// Full property set for the custom-rendering marker layer (animal/POI
+  /// photo icons). Shared by the creation call and
+  /// [_refreshMarkerLayerMinZooms] for the same reason as the builders
+  /// above: `setLayerProperties` replaces rather than merges, so a partial
+  /// update carrying only `symbolSortKey`/`iconOpacity` drops `icon-image`
+  /// (and size/anchor/allow-overlap) entirely, leaving the layer with
+  /// nothing to draw — every custom-rendering marker then falls back to its
+  /// collision dot forever, even though its icon is correctly registered
+  /// and referenced in the source data.
+  SymbolLayerProperties _customRenderingLayerProps(List<dynamic> iconOpacity) =>
+      SymbolLayerProperties(
+        symbolSortKey: ["+", 4000, _kSortKeyExpression],
+        iconImage: [
+          "step",
+          ["zoom"],
+          ["concat", ["get", "icon"], "-small"],
+          16,
+          ["get", "icon"],
+        ],
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
+          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
+          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
+          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconAllowOverlap: false,
+        iconOpacity: iconOpacity,
+      );
+
+  /// Full property set for the fixed/rotated (bearing) marker layer. See
+  /// [_customRenderingLayerProps] for why this must be a full set rather
+  /// than the sortKey/opacity-only partial [_refreshMarkerLayerMinZooms]
+  /// used to send.
+  SymbolLayerProperties _fixedMarkerLayerProps(List<dynamic> textOpacity) =>
+      SymbolLayerProperties(
+        symbolSortKey: ["+", 1000, _kSortKeyExpression],
+        textRotate: ["get", "bearing"],
+        textRotationAlignment: "map",
+        textField: ["get", "title"],
+        textSize: 12,
+        textColor: "#000000",
+        textHaloColor: "#f8f9fa",
+        textHaloWidth: 2,
+        textAnchor: "center",
+        textAllowOverlap: false,
+        iconImage: ["get", "icon"],
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          18, 0.0,
+          22.0, 0.5,
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconOpacity: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          12.0, 0.0,
+          14.0, 1.0
+        ],
+        iconRotate: ["get", "bearing"],
+        iconRotationAlignment: "map",
+        iconAllowOverlap: false,
+        textOpacity: textOpacity,
+      );
+
   /// Full property set for the section polygon layer.
   ///
   /// Shared by the creation call and the later fade-zoom update for the same
@@ -3128,43 +3214,17 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 3: Custom rendering markers
+      //
+      // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
+      // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
+      // All other custom-rendering markers keep the original 14→0.2,
+      // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
+      // stays at the top level and the per-feature branch lives in the
+      // stop outputs (nesting zoom inside a `case` throws on iOS).
       await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _customRenderingMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 4000, _kSortKeyExpression],
-          iconImage: [
-            "step",
-            ["zoom"],
-            ["concat", ["get", "icon"], "-small"],
-            16,
-            ["get", "icon"],
-          ],
-          // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
-          // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
-          // All other custom-rendering markers keep the original 14→0.2,
-          // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
-          // stays at the top level and the per-feature branch lives in the
-          // stop outputs (nesting zoom inside a `case` throws on iOS).
-          iconSize: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
-            18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
-            18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
-            22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
-          ],
-          iconAnchor: ["get", "iconAnchor"],
-          iconAllowOverlap: false,
-          iconOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12.0, 0.0,
-            14.0, 1.0
-          ],
-        ),
+        _customRenderingLayerProps(_kDefaultMarkerOpacity),
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "overlapOverride"]]],
@@ -3184,42 +3244,13 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Layer 4: Normal fixed/rotated markers (has bearing)
+      // Top of the icon-size ramp is halved (was 1.0) — fixed markers, which
+      // include the main entry pin. The 0.0 floor is a fade-in, so only the
+      // top moves.
       await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _fixedMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 1000, _kSortKeyExpression],
-          textRotate: ["get", "bearing"],
-          textRotationAlignment: "map",
-          textField: ["get", "title"],
-          textSize: 12,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 2,
-          textAnchor: "center",
-          textAllowOverlap: false,
-          iconImage: ["get", "icon"],
-          // Top of the ramp halved (was 1.0) — fixed markers, which include the
-          // main entry pin. The 0.0 floor is a fade-in, so only the top moves.
-          iconSize: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            18, 0.0,
-            22.0, 0.5,
-          ],
-          iconAnchor: ["get", "iconAnchor"],
-          iconOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12.0, 0.0,
-            14.0, 1.0
-          ],
-          iconRotate: ["get", "bearing"],
-          iconRotationAlignment: "map",
-          iconAllowOverlap: false,
-        ),
+        _fixedMarkerLayerProps(_kDefaultMarkerOpacity),
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "overlapOverride"]]],
@@ -3944,20 +3975,21 @@ class MaplibreMapProvider extends BaseMapProvider {
       _normalIconLayerProps(sortBase: 2000, opacity: opacityExpression),
     );
 
+    // Full property sets via the shared builders (see their doc comments) —
+    // a partial update here previously dropped icon-image/icon-size/
+    // icon-anchor/icon-allow-overlap from these two layers entirely, which
+    // is why customRendering markers (animal/POI photos) never rendered:
+    // the layer had nothing left to draw and every one of them silently
+    // fell back to its collision dot, even though the icon was correctly
+    // registered and referenced in the source data.
     await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: opacityExpression,
-      ),
+      _customRenderingLayerProps(opacityExpression),
     );
 
     await controller.setLayerProperties(
       _fixedMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        textOpacity: opacityExpression,
-      ),
+      _fixedMarkerLayerProps(opacityExpression),
     );
   }
 
