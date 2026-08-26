@@ -781,7 +781,15 @@ class MaplibreMapProvider extends BaseMapProvider {
                 'coordinates': [marker.position.longitude, marker.position.latitude],
               },
               'properties': {
-                'icon': marker.id,
+                // Animal/POI photo markers are registered under a
+                // content-derived id (see _animalDisplayIconId), not
+                // marker.id — using marker.id here for them referenced an
+                // image that was never registered, so the animated layer
+                // had nothing to draw and the marker visually vanished for
+                // the whole tap animation instead of growing/shrinking.
+                'icon': _isAnimalMarker(marker)
+                    ? _animalDisplayIconId(marker)
+                    : marker.id,
                 'iconScaleFactor': scale,
                 'iconShake': shakeDeg,
                 'labelScale': labelScale,
@@ -1194,7 +1202,15 @@ class MaplibreMapProvider extends BaseMapProvider {
             if (!_isClusteringEnabled) return;
             print("settle re-push firing for $sourceID after ${delay.inMilliseconds}ms");
             try {
-              for (final marker in symbols) {
+              // Snapshot before the loop: `symbols` is usually the live
+              // `_symbols` field, and this loop awaits per-marker icon
+              // loads across several event-loop turns — if another
+              // addMarkers()/removeMarker() call mutates `_symbols` while
+              // this is in flight, iterating the live list throws
+              // "Concurrent modification during iteration". A frozen copy
+              // reflects the state at fire time and stays safe to iterate.
+              final snapshot = List<GeoJsonMarker>.of(symbols);
+              for (final marker in snapshot) {
                 if (_isAnimalMarker(marker) &&
                     !_loadedAnimalIcons.contains(_animalIconKey(marker))) {
                   try {
@@ -1206,7 +1222,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               }
               await controller.setGeoJsonSource(sourceID, {
                 "type": "FeatureCollection",
-                "features": symbols.map(buildFeature).toList(),
+                "features": snapshot.map(buildFeature).toList(),
               });
             } catch (e) {
               print("settle re-push for $sourceID failed: $e");
