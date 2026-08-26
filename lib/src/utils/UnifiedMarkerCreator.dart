@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -8,6 +9,21 @@ import 'package:unified_map_view/src/config.dart';
 import 'dart:math';
 
 import '../database/cache/cache_controller.dart';
+
+/// Device-pixel-ratio used when baking marker PNGs.
+///
+/// Bake cost is O(pixels) = O(ratio^2), and each baked icon is then PNG-encoded
+/// (Skia/libpng, main thread), decoded again by the browser inside `addImage`,
+/// read back through a 2D canvas and uploaded to the GPU — all single-threaded
+/// on web. Budget Android phones report a DPR of 2.75-4.0 while iPhones report
+/// 2-3, so an uncapped ratio makes them pay up to 4x the pixel work for the
+/// same marker; that is most of the observed Android/iOS gap. Markers are
+/// 62-85dp, well past the point where a ratio above 2.0 is visible. Native
+/// keeps the true ratio.
+double get markerBakeRatio {
+  final double ratio = ui.window.devicePixelRatio;
+  return kIsWeb ? min(ratio, 2.0) : ratio;
+}
 
 class MarkerIconWithAnchor {
   final Uint8List icon;
@@ -256,7 +272,7 @@ class UnifiedMarkerCreator {
     Color pillColor = Colors.white,
     double? pillCornerRadius, // logical dp; null → default stadium radius
   }) async {
-    final double ratio = ui.window.devicePixelRatio; // device pixel ratio
+    final double ratio = markerBakeRatio;
 
     // Convert logical sizes to pixel sizes (so final PNG has pixel-perfect content)
     final double imageWidthPx = imageSize.width * ratio;
@@ -286,26 +302,35 @@ class UnifiedMarkerCreator {
         }
 
         if (bytes != null) {
-          // Decode original to get its natural dimensions
-          final Completer<ui.Image> originalCompleter = Completer();
-          ui.decodeImageFromList(
-              bytes, (ui.Image img) => originalCompleter.complete(img));
-          final ui.Image originalImage = await originalCompleter.future;
-
-          // Fit within imageSize while preserving aspect ratio (BoxFit.contain)
-          final double origW = originalImage.width.toDouble();
-          final double origH = originalImage.height.toDouble();
-          final double scale = min(imageWidthPx / origW, imageHeightPx / origH);
-          actualImageSizePx = Size(origW * scale, origH * scale);
-
-          // instantiate codec at final pixel size (prevents later upscaling)
-          final codec = await ui.instantiateImageCodec(
-            bytes,
-            targetWidth: actualImageSizePx.width.toInt().clamp(1, 10000),
-            targetHeight: actualImageSizePx.height.toInt().clamp(1, 10000),
-          );
+          // ONE decode, already downscaled.
+          //
+          // This used to `decodeImageFromList` the whole image at its native
+          // resolution purely to read width/height, throw that away, then
+          // decode a SECOND time at target size — two full decodes per marker,
+          // the first on a multi-megapixel source photo. (An
+          // ui.ImageDescriptor header probe would avoid it on native but
+          // throws "ImageDescriptor.width is not supported on web".)
+          //
+          // Instead, decode once with only `targetWidth` set — the codec keeps
+          // the aspect ratio when a single dimension is given — capped at the
+          // larger edge of the target box. The exact BoxFit.contain rect is
+          // then computed from the decoded size below, and any residual fit is
+          // a trivial canvas scale on an already-small bitmap.
+          final int decodeCap = (imageWidthPx > imageHeightPx
+                  ? imageWidthPx
+                  : imageHeightPx)
+              .round()
+              .clamp(1, 10000);
+          final codec =
+              await ui.instantiateImageCodec(bytes, targetWidth: decodeCap);
           final frame = await codec.getNextFrame();
           markerImage = frame.image;
+
+          // Fit within imageSize while preserving aspect ratio (BoxFit.contain)
+          final double origW = markerImage.width.toDouble();
+          final double origH = markerImage.height.toDouble();
+          final double scale = min(imageWidthPx / origW, imageHeightPx / origH);
+          actualImageSizePx = Size(origW * scale, origH * scale);
         }
       } catch (e) {
         // keep markerImage null and fallback to text-only layout
@@ -761,7 +786,7 @@ class UnifiedMarkerCreator {
     final Color effectiveDotColor = selected ? selectedColor : dotColor;
     final Color effectiveTextColor = selected ? selectedColor : textColor;
 
-    final double ratio = ui.window.devicePixelRatio;
+    final double ratio = markerBakeRatio;
 
     // Logical → pixel
     final double cardW = cardSize.width * ratio;

@@ -26,6 +26,35 @@ import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:http/http.dart' as http;
 
+/// Everything a custom-rendering marker needs registered with the map style,
+/// kept so a style reload — which wipes every addImage() call — can re-upload
+/// without re-fetching the source photo or re-entering the bake path.
+class _BakedMarkerIcon {
+  /// Full composite, with the label baked in. Registered under the marker id.
+  final Uint8List main;
+
+  /// Image id the zoomed-out (label-less) variant is registered under. Shared
+  /// between every marker whose photo and pill geometry match; equal to the
+  /// marker id when the label is hidden, since both bakes are then identical.
+  final String smallIconId;
+
+  /// Bytes for [smallIconId]. Null when it aliases [main].
+  final Uint8List? small;
+
+  /// Museum POI highlight variant, registered under '<id>-selected'.
+  final Uint8List? selected;
+
+  final Offset anchor;
+
+  const _BakedMarkerIcon({
+    required this.main,
+    required this.smallIconId,
+    required this.anchor,
+    this.small,
+    this.selected,
+  });
+}
+
 /// MapLibre GL implementation of BaseMapProvider
 /// Supports MapLibre — an open-source vector map rendering engine
 class MaplibreMapProvider extends BaseMapProvider {
@@ -286,10 +315,19 @@ class MaplibreMapProvider extends BaseMapProvider {
               _isPolylineLayersEnabled = false;
               // Registered dot images are wiped too; allow re-registration.
               _registeredDotImageIds.clear();
+              // Same for the shared label-less icons. The baked bytes in
+              // _bakedIconCache stay valid — only the addImage() registration
+              // is gone — so the rebake pass below is upload-only.
+              _registeredSmallIconIds.clear();
               // Registered animal icons are wiped too (the composited bytes in
               // _animalIconCache are still valid and get reused, only the
               // addImage() registration needs to happen again).
               _loadedAnimalIcons.clear();
+              // Re-arm the deferred labelled bake: its addImage() calls are
+              // gone with the style, so the next camera idle at label zoom has
+              // to re-register them. The bytes survive in _animalIconCache, so
+              // that pass is upload-only.
+              _labelledAnimalsStarted = false;
               _isCircleLayersEnabled = false;
               _isFurnitureLayerEnabled = false;
               _isFurnitureExtrusionAdded = false;
@@ -402,6 +440,13 @@ class MaplibreMapProvider extends BaseMapProvider {
                 print("tilt $tilt");
                 print("zoom $zoom");
                 print("bearing $bearing");
+                // The labelled animal composites are only drawn from
+                // _kLabelZoomThreshold up, so they are baked the first time the
+                // camera actually settles there instead of during load. Not
+                // awaited: this callback should not block the camera.
+                if (zoom >= _kLabelZoomThreshold) {
+                  unawaited(_ensureLabelledAnimalIcons(_controller!));
+                }
                 var unifiedCameraPosition = UnifiedCameraPosition(
                     mapLocation: MapLocation(
                       latitude: target.latitude,
@@ -1011,6 +1056,14 @@ class MaplibreMapProvider extends BaseMapProvider {
               'icon': _isAnimalMarker(marker)
                   ? _animalDisplayIconId(marker)
                   : marker.id,
+            // Image id for the zoomed-out (label-less) variant. Shared between
+            // every marker with the same photo and pill geometry, so ~190
+            // byte-identical uploads collapse to one per distinct photo.
+            // Animals are absent from the map and fall through to the
+            // '<icon>-small' branch of the layer expression — their ids are
+            // already content-keyed.
+            if (marker.assetPath != null && _smallIconIds[marker.id] != null)
+              'smallIcon': _smallIconIds[marker.id],
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             'bearing': marker.compassBasedRotation
@@ -1170,6 +1223,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MapLibreMapController) {
       try {
         _symbols.clear();
+        // Per-marker state only. The content-keyed small icons stay: their ids
+        // are still registered with the live style and their bytes are reusable
+        // by the next render, which is the whole point of keying by content.
+        _smallIconIds.clear();
+        _bakedIconCache.clear();
         setGeoJsonSource(controller, [], _clusterSourceId);
         setGeoJsonSource(controller, [], _rotationSourceId);
       } catch (e) {
@@ -1827,6 +1885,37 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// another decode/addImage round trip.
   final Set<String> _loadedAnimalIcons = {};
 
+  /// Shared "no label" icon ids already registered with the current style.
+  ///
+  /// The zoomed-out variant of a custom-rendering marker is the same photo
+  /// baked with `text: ""`, so its bytes depend only on the photo and the pill
+  /// geometry — never on the marker. Registering it under a per-marker
+  /// `<id>-small` id therefore uploaded ~190 byte-identical images, each one a
+  /// Blob → <img> decode → canvas readback → GPU upload. Keying by content
+  /// collapses that to one upload per distinct photo+size. Cleared on style
+  /// reload, which wipes addImage().
+  final Set<String> _registeredSmallIconIds = {};
+
+  /// Image id each marker's features should use for the zoomed-out (label-less)
+  /// variant, emitted as the `smallIcon` feature property. Markers absent from
+  /// here fall back to the old `<icon>-small` expression, which is what animal
+  /// markers still use (their ids are already content-keyed).
+  final Map<String, String> _smallIconIds = {};
+
+  /// Bytes behind each id in [_registeredSmallIconIds], kept across style
+  /// reloads so the shared label-less icons can be re-uploaded without being
+  /// re-baked. Every registered id always has an entry here, because an id only
+  /// enters the registry through an upload made from this map.
+  final Map<String, Uint8List> _smallIconBytes = {};
+
+  /// Baked icon bytes per marker, so re-registering after a style reload is
+  /// upload-only — no source re-fetch and no re-entry into the bake path.
+  /// Keyed on the inputs that change what gets drawn, not just the id.
+  final Map<String, _BakedMarkerIcon> _bakedIconCache = {};
+
+  String _bakedIconKey(GeoJsonMarker marker) =>
+      '${marker.id}|${marker.textVisibility}|${marker.title ?? ""}';
+
   bool _isAnimalMarker(GeoJsonMarker marker) =>
       marker.customRendering && marker.properties?['animalRef'] != null;
 
@@ -1838,9 +1927,33 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Registered image id shared by every animal marker with the same
   /// [_animalIconKey] — one GPU texture per unique photo+title instead of
-  /// one per marker.
+  /// one per marker. Only used at or above [_kLabelZoomThreshold].
   String _animalImageId(GeoJsonMarker marker) =>
       'animal-${_animalIconKey(marker).hashCode}';
+
+  /// Content key of the label-less animal variant: the photo, and nothing
+  /// else. Titles are unique per animal, so keying the label-less bake by
+  /// photo+title (as [_animalIconKey] does) made ~112 byte-identical images
+  /// where a handful would do.
+  String _animalPhotoKey(GeoJsonMarker marker) => marker.assetPath ?? '';
+
+  /// Shared image id for the label-less variant, one per distinct photo.
+  String _animalSmallImageId(GeoJsonMarker marker) =>
+      'animal-small-${_animalPhotoKey(marker).hashCode}';
+
+  /// Fetched-and-downscaled source photos, keyed by [_animalPhotoKey]. Shared
+  /// between both bake phases so phase B never re-fetches or re-resizes.
+  final Map<String, Uint8List> _animalSourceCache = {};
+
+  /// Zoom at or above which the custom-rendering layer swaps from the
+  /// label-less icon to the labelled composite. Must match the `step` stop in
+  /// [_customRenderingLayerProps] — the deferred phase-B bake is scheduled off
+  /// this, so if they drift the labels stop appearing.
+  static const double _kLabelZoomThreshold = 16;
+
+  /// True once the labelled animal composites have been requested, so camera
+  /// idles after the first one don't re-enter the batch.
+  bool _labelledAnimalsStarted = false;
 
   /// Image id an animal marker's feature should reference right now: the
   /// shared composite once it has finished loading, otherwise the paw dot
@@ -1849,6 +1962,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (_loadedAnimalIcons.contains(_animalIconKey(marker))) {
       return _animalImageId(marker);
     }
+    // Labelled composite not baked yet (it is deferred past
+    // _kLabelZoomThreshold). Show the real photo without its label rather than
+    // the paw — the paw is for "no image at all yet".
+    final String smallId = _animalSmallImageId(marker);
+    if (_registeredSmallIconIds.contains(smallId)) return smallId;
     return marker.dotAssetPath ?? _kDotImageId;
   }
 
@@ -1876,96 +1994,128 @@ class MaplibreMapProvider extends BaseMapProvider {
     return byteData?.buffer.asUint8List() ?? bytes;
   }
 
-  /// Builds (or reuses) an animal marker's composited icon and registers it
-  /// under a content-derived id shared by every marker with the same photo
-  /// and baked title. Returns true if a new image was actually registered
-  /// with the style (i.e. the caller needs to re-push the GeoJSON source).
-  Future<bool> _loadAnimalIcon(
+  /// Source photo for an animal marker, fetched once per *photo* and already
+  /// downscaled to [_animalMaxIconSize].
+  ///
+  /// Previously keyed by photo+title, so N animals sharing a species photo each
+  /// re-fetched and re-decoded it. Keying by photo alone collapses that to one
+  /// fetch + one resize no matter how many titles reuse the image.
+  Future<Uint8List?> _animalSourceBytes(GeoJsonMarker marker) async {
+    final String key = _animalPhotoKey(marker);
+    final Uint8List? cached = _animalSourceCache[key];
+    if (cached != null) return cached;
+    Uint8List? rawBytes;
+    if (marker.assetPath!.startsWith('http')) {
+      rawBytes = await CacheController().fetchWithCache(marker.assetPath!);
+    } else {
+      final bd = await rootBundle.load(marker.assetPath!);
+      rawBytes = bd.buffer.asUint8List();
+    }
+    if (rawBytes == null) {
+      print('_animalSourceBytes: no bytes for ${marker.assetPath} '
+          '(icon stays a paw placeholder)');
+      return null;
+    }
+    // NOT pre-resized. _resizeImageBytes cost a full decode plus a PNG
+    // re-encode per photo, purely to hand smaller bytes to createUnifiedMarker
+    // — which instantiates its codec at the final ~80px target anyway, and now
+    // reads the source dimensions from the header instead of decoding. The
+    // downscale therefore happens exactly once, inside the bake, and the
+    // encode/decode pair this used to add is gone.
+    _animalSourceCache[key] = rawBytes;
+    return rawBytes;
+  }
+
+  /// Bake parameters shared by both animal variants, so the label-less and
+  /// labelled composites differ only in their text.
+  Future<MarkerIconWithAnchor> _bakeAnimalIcon(
+      GeoJsonMarker marker, Uint8List source, String text) {
+    final double fontSize = marker.properties?["fontSize"] ?? 14.5;
+    final Offset customAnchor =
+        marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+    final Size iconSize =
+        Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
+    return creator.createUnifiedMarker(
+      imageSize: iconSize,
+      fontSize: fontSize,
+      text: text,
+      imageSource: marker.assetPath,
+      imageBytes: source,
+      layout: MarkerLayout.vertical,
+      textFormat: TextFormat.smartWrap,
+      textColor: const Color(0xff000000),
+      customAnchor: customAnchor,
+      expandCanvasForRotation:
+          (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
+    );
+  }
+
+  /// PHASE A — the label-less animal icon, which is all the map actually draws
+  /// below [_kLabelZoomThreshold] (where every venue starts).
+  ///
+  /// Its pixels depend only on the photo, never the title, so it is keyed and
+  /// registered per photo. That is the whole point: an enclosure of 30 animals
+  /// with 30 distinct names shares ONE bake and ONE upload here, where the
+  /// labelled variant below would need 30 of each.
+  Future<bool> _loadAnimalSmallIcon(
       MapLibreMapController controller, GeoJsonMarker marker) async {
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
-
-    final String contentKey = _animalIconKey(marker);
-    final String imageId = _animalImageId(marker);
+    final String smallId = _animalSmallImageId(marker);
     marker.anchor ??= const Offset(0.5, 0.5);
-    if (_loadedAnimalIcons.contains(contentKey)) {
+    // Point this marker's feature at the shared image even if another marker
+    // already registered it — the property is per marker, the image is not.
+    _smallIconIds[marker.id] = smallId;
+    if (_registeredSmallIconIds.contains(smallId)) return false;
+    try {
+      Uint8List? bytes = _smallIconBytes[smallId];
+      if (bytes == null) {
+        final Uint8List? source = await _animalSourceBytes(marker);
+        if (source == null) return false;
+        final baked = await _bakeAnimalIcon(marker, source, "");
+        bytes = baked.icon;
+        marker.anchor = baked.anchor;
+        _smallIconBytes[smallId] = bytes;
+      }
+      await controller.addImage(smallId, bytes);
+      _registeredSmallIconIds.add(smallId);
+      return true;
+    } catch (e) {
+      print("_loadAnimalSmallIcon $e");
       return false;
     }
+  }
+
+  /// PHASE B — the labelled composite, one per photo+title.
+  ///
+  /// This is the expensive half (a TextPainter pass and a PNG encode per
+  /// distinct name) and it is only ever drawn at or above
+  /// [_kLabelZoomThreshold], so it is deferred off the load path and run when
+  /// the camera actually settles at that zoom. Deferring it is what takes the
+  /// animal pass off the critical path; nothing about the rendered result
+  /// changes, since the labelled image was invisible at load zoom anyway.
+  Future<bool> _loadAnimalLabelledIcon(
+      MapLibreMapController controller, GeoJsonMarker marker) async {
+    if (marker.assetPath == null) return false;
+    final String contentKey = _animalIconKey(marker);
+    final String imageId = _animalImageId(marker);
+    if (_loadedAnimalIcons.contains(contentKey)) return false;
     try {
       Uint8List? composite = _animalIconCache[contentKey];
-      Uint8List? smallComposite = _animalIconCache['$contentKey|small'];
-      if (composite == null || smallComposite == null) {
-        // Fetch the source photo once and cap its resolution before it's
-        // ever decoded for compositing — a 4000x3000 zoo photo shouldn't be
-        // pushed through the pipeline at full size just to be shrunk to an
-        // 80px icon a moment later.
-        Uint8List? rawBytes;
-        if (marker.assetPath!.startsWith('http')) {
-          rawBytes = await CacheController().fetchWithCache(marker.assetPath!);
-        } else {
-          final bd = await rootBundle.load(marker.assetPath!);
-          rawBytes = bd.buffer.asUint8List();
-        }
-        if (rawBytes == null) {
-          print('_loadAnimalIcon: no bytes for ${marker.assetPath} '
-              '(icon stays a paw placeholder)');
-          return false;
-        }
-        final Uint8List resizedSource =
-            await _resizeImageBytes(rawBytes, _animalMaxIconSize);
-
-        final double fontSize = marker.properties?["fontSize"] ?? 14.5;
-        final Offset customAnchor =
-            marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
-        final Size iconSize =
-            Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
-        // The text and text-less variants are independent bakes of the same
-        // resized source bytes — run them concurrently instead of back to
-        // back so the second bake's decode/canvas/encode work overlaps the
-        // first's await gaps rather than waiting for it to fully finish.
-        final iconResults = await Future.wait([
-          creator.createUnifiedMarker(
-            imageSize: iconSize,
-            fontSize: fontSize,
-            text: marker.textVisibility ? (marker.title ?? "") : "",
-            imageSource: marker.assetPath,
-            imageBytes: resizedSource,
-            layout: MarkerLayout.vertical,
-            textFormat: TextFormat.smartWrap,
-            textColor: const Color(0xff000000),
-            customAnchor: customAnchor,
-            expandCanvasForRotation:
-                (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
-          ),
-          creator.createUnifiedMarker(
-            imageSize: iconSize,
-            fontSize: fontSize,
-            text: "",
-            imageSource: marker.assetPath,
-            imageBytes: resizedSource,
-            layout: MarkerLayout.vertical,
-            textFormat: TextFormat.smartWrap,
-            textColor: const Color(0xff000000),
-            customAnchor: customAnchor,
-          ),
-        ]);
-        final withTextIcon = iconResults[0];
-        final withoutTextIcon = iconResults[1];
-        composite = withTextIcon.icon;
-        smallComposite = withoutTextIcon.icon;
-        marker.anchor = withTextIcon.anchor;
+      if (composite == null) {
+        final Uint8List? source = await _animalSourceBytes(marker);
+        if (source == null) return false;
+        final baked = await _bakeAnimalIcon(marker, source,
+            marker.textVisibility ? (marker.title ?? "") : "");
+        composite = baked.icon;
+        marker.anchor = baked.anchor;
         _animalIconCache[contentKey] = composite;
-        _animalIconCache['$contentKey|small'] = smallComposite;
       }
-      // Independent platform-channel registrations — dispatch together.
-      await Future.wait([
-        controller.addImage(imageId, composite),
-        controller.addImage('$imageId-small', smallComposite),
-      ]);
+      await controller.addImage(imageId, composite);
       _loadedAnimalIcons.add(contentKey);
       return true;
     } catch (e) {
-      print("_loadAnimalIcon $e");
+      print("_loadAnimalLabelledIcon $e");
       return false;
     }
   }
@@ -1981,20 +2131,24 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// already loaded from a previous call.
   Future<void> _batchLoadAnimalIcons(
       MapLibreMapController controller, List<GeoJsonMarker> animalMarkers) async {
+    // Grouped by PHOTO, not photo+title: this pass bakes only the label-less
+    // variant, whose pixels don't depend on the name. An enclosure of 30
+    // differently-named animals sharing one photo is a single group here.
     final Map<String, List<GeoJsonMarker>> groups = {};
     for (final marker in animalMarkers) {
-      groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
+      groups.putIfAbsent(_animalPhotoKey(marker), () => []).add(marker);
     }
 
     bool anyChanged = false;
     await Future.wait(groups.values.map((group) async {
       try {
-        final changed = await _loadAnimalIcon(controller, group.first);
-        // The whole group shares one composite; propagate the anchor the
-        // leader resolved so followers render consistently even though they
-        // never called createUnifiedMarker themselves.
+        final changed = await _loadAnimalSmallIcon(controller, group.first);
+        // The whole group shares one image; propagate the anchor the leader
+        // resolved, and point every follower's feature at the same id (the
+        // leader's _loadAnimalSmallIcon only set its own).
         for (final marker in group.skip(1)) {
           marker.anchor = group.first.anchor;
+          _smallIconIds[marker.id] = _animalSmallImageId(marker);
         }
         if (changed) {
           anyChanged = true;
@@ -2012,6 +2166,44 @@ class MaplibreMapProvider extends BaseMapProvider {
       // than waiting out the throttle window for the last stragglers.
       _pushAnimalIconRefresh(controller);
     }
+  }
+
+  /// Bakes the labelled animal composites (phase B), one per photo+title.
+  ///
+  /// Deferred until the camera settles at or above [_kLabelZoomThreshold],
+  /// because that is the only zoom at which the layer draws them. Runs at most
+  /// once per style; a second camera idle is a no-op.
+  Future<void> _ensureLabelledAnimalIcons(
+      MapLibreMapController controller) async {
+    if (_labelledAnimalsStarted) return;
+    final animals = _symbols.where(_isAnimalMarker).toList();
+    if (animals.isEmpty) return;
+    _labelledAnimalsStarted = true;
+
+    final Map<String, List<GeoJsonMarker>> groups = {};
+    for (final marker in animals) {
+      groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
+    }
+    bool anyChanged = false;
+    await PerfTrace.timeAsync(
+        'deferred: labelled bake of ${groups.length} animal icons', () async {
+      await Future.wait(groups.values.map((group) async {
+        try {
+          final changed =
+              await _loadAnimalLabelledIcon(controller, group.first);
+          for (final marker in group.skip(1)) {
+            marker.anchor = group.first.anchor;
+          }
+          if (changed) {
+            anyChanged = true;
+            _scheduleAnimalIconRefresh(controller);
+          }
+        } catch (e) {
+          print("_ensureLabelledAnimalIcons $e");
+        }
+      }));
+    });
+    if (anyChanged) _pushAnimalIconRefresh(controller);
   }
 
   /// Debounce state for progressive animal-icon reveal. setGeoJsonSource
@@ -2089,12 +2281,57 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Uploads a baked marker's images to the current style and records what it
+  /// registered, so a later style reload can repeat this without re-baking.
+  ///
+  /// The label-less variant is uploaded at most once per distinct
+  /// [_BakedMarkerIcon.smallIconId]; markers that share a photo and pill
+  /// geometry all point at that one image.
+  Future<void> _registerBakedIcon(
+    MapLibreMapController controller,
+    GeoJsonMarker marker,
+    _BakedMarkerIcon baked,
+  ) async {
+    if (baked.small != null) {
+      _smallIconBytes[baked.smallIconId] = baked.small!;
+    }
+    final Uint8List? smallBytes = baked.smallIconId == marker.id
+        ? null // aliases the main image; nothing separate to upload
+        : (_registeredSmallIconIds.contains(baked.smallIconId)
+            ? null
+            : _smallIconBytes[baked.smallIconId]);
+    await Future.wait([
+      controller.addImage(marker.id, baked.main),
+      if (smallBytes != null) controller.addImage(baked.smallIconId, smallBytes),
+      if (baked.selected != null)
+        controller.addImage("${marker.id}-selected", baked.selected!),
+    ]);
+    if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
+    _smallIconIds[marker.id] = baked.smallIconId;
+    _bakedIconCache[_bakedIconKey(marker)] = baked;
+    marker.anchor = baked.anchor;
+  }
+
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
     if (_isAnimalMarker(marker)) {
-      return _loadAnimalIcon(controller, marker);
+      // Only the label-less variant. The labelled composite is deferred to
+      // _ensureLabelledAnimalIcons, which runs on camera idle at label zoom.
+      return _loadAnimalSmallIcon(controller, marker);
     }
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
+    // Already baked once this session — a style reload wiped the addImage()
+    // registrations but not the bytes, so re-register straight from the cache
+    // instead of re-fetching the photo and re-entering the bake path.
+    final _BakedMarkerIcon? cachedIcon = _bakedIconCache[_bakedIconKey(marker)];
+    if (cachedIcon != null) {
+      try {
+        await _registerBakedIcon(controller, marker, cachedIcon);
+        return true;
+      } catch (e) {
+        print("_loadMarkerIcon (cached) $e");
+      }
+    }
     try {
       if (marker.customRendering) {
         // Museum POI marker: photo card + tail + dot + title, baked into one PNG.
@@ -2130,12 +2367,18 @@ class MaplibreMapProvider extends BaseMapProvider {
           ]);
           final poiMarker = poiResults[0];
           final poiSelected = poiResults[1];
-          await Future.wait([
-            controller.addImage(marker.id, poiMarker.icon),
-            controller.addImage("${marker.id}-small", poiMarker.icon),
-            controller.addImage("${marker.id}-selected", poiSelected.icon),
-          ]);
-          marker.anchor = poiMarker.anchor;
+          // The zoomed-out variant is the *same bytes* as the full one here, so
+          // it is aliased to the marker id rather than uploaded a second time.
+          await _registerBakedIcon(
+            controller,
+            marker,
+            _BakedMarkerIcon(
+              main: poiMarker.icon,
+              smallIconId: marker.id,
+              selected: poiSelected.icon,
+              anchor: poiMarker.anchor,
+            ),
+          );
           return true;
         }
         if(marker.properties?['pathStop']??false){
@@ -2171,8 +2414,20 @@ class MaplibreMapProvider extends BaseMapProvider {
             final bd = await rootBundle.load(marker.assetPath!);
             sourceBytes = bd.buffer.asUint8List();
           }
+          // Id the label-less bake is registered under. Its bytes depend only
+          // on the photo and the pill geometry, never on the marker, so every
+          // marker sharing those reuses one upload.
+          final String smallIconId = marker.textVisibility
+              ? 'small|${marker.assetPath}|${markerImageSize.width}x${markerImageSize.height}'
+                  '|$pillFontSize|$isGallery|${customAnchor.dx},${customAnchor.dy}'
+              // Label hidden → the "with text" bake has text "" too, so the two
+              // are byte-identical and the small variant just aliases the main.
+              : marker.id;
           // The two bakes are independent — run them concurrently instead of
-          // back to back.
+          // back to back. The second is skipped entirely when it would only
+          // reproduce the first (no label) or bytes already registered.
+          final bool needsSmallBake = marker.textVisibility &&
+              !_smallIconBytes.containsKey(smallIconId);
           final iconResults = await Future.wait([
             creator.createUnifiedMarker(
               imageSize: markerImageSize,
@@ -2191,32 +2446,35 @@ class MaplibreMapProvider extends BaseMapProvider {
               pillCornerRadius: isGallery ? 10.0 : null,
               expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
             ),
-            creator.createUnifiedMarker(
-              imageSize: markerImageSize,
-              fontSize: pillFontSize,
-              text: "",
-              imageSource: marker.assetPath,
-              imageBytes: sourceBytes,
-              layout: MarkerLayout.vertical,
-              textFormat: TextFormat.smartWrap,
-              textColor: const Color(0xff000000),
-              customAnchor: customAnchor,
-              fontWeight: pillWeight,
-              showPillBorder: !isGallery,
-              pillShadow: isGallery,
-              pillColor: pillColor,
-              pillCornerRadius: isGallery ? 10.0 : null,
-            ),
+            if (needsSmallBake)
+              creator.createUnifiedMarker(
+                imageSize: markerImageSize,
+                fontSize: pillFontSize,
+                text: "",
+                imageSource: marker.assetPath,
+                imageBytes: sourceBytes,
+                layout: MarkerLayout.vertical,
+                textFormat: TextFormat.smartWrap,
+                textColor: const Color(0xff000000),
+                customAnchor: customAnchor,
+                fontWeight: pillWeight,
+                showPillBorder: !isGallery,
+                pillShadow: isGallery,
+                pillColor: pillColor,
+                pillCornerRadius: isGallery ? 10.0 : null,
+              ),
           ]);
           final markerIconWithAnchorWithText = iconResults[0];
-          final markerIconWithAnchorWithoutText = iconResults[1];
-          final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
-          final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
-          await Future.wait([
-            controller.addImage(marker.id, iconBytes),
-            controller.addImage("${marker.id}-small", iconBytes2),
-          ]);
-          marker.anchor = markerIconWithAnchorWithText.anchor;
+          await _registerBakedIcon(
+            controller,
+            marker,
+            _BakedMarkerIcon(
+              main: markerIconWithAnchorWithText.icon,
+              smallIconId: smallIconId,
+              small: needsSmallBake ? iconResults[1].icon : null,
+              anchor: markerIconWithAnchorWithText.anchor,
+            ),
+          );
           return true;
         }
       } else {
@@ -2379,13 +2637,21 @@ class MaplibreMapProvider extends BaseMapProvider {
       SymbolLayerProperties(
         symbolSortKey: ["+", 4000, _kSortKeyExpression],
         // The zoom step is a LABEL toggle, not a placeholder→photo swap:
-        // `icon` is the composite with the title baked in, `icon-small` the
-        // same photo with text: "". _loadAnimalIcon registers both ids.
+        // `icon` is the composite with the title baked in, the low-zoom id the
+        // same photo with text: "". Custom-rendering markers carry that id in
+        // `smallIcon` (content-keyed, so one image serves many markers);
+        // animals have no `smallIcon` and keep the '<icon>-small' convention
+        // that _loadAnimalIcon registers, since their ids are already
+        // content-keyed.
         iconImage: [
           "step",
           ["zoom"],
-          ["concat", ["get", "icon"], "-small"],
-          16,
+          [
+            "coalesce",
+            ["get", "smallIcon"],
+            ["concat", ["get", "icon"], "-small"],
+          ],
+          _kLabelZoomThreshold,
           ["get", "icon"],
         ],
         // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
