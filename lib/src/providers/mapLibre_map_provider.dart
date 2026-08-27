@@ -211,7 +211,13 @@ class MaplibreMapProvider extends BaseMapProvider {
   // ---------------------------------------------------------------------------
 
   @override
+  /// Captured from [buildMap]'s config, because `config` is a parameter there
+  /// rather than a field and [_refreshPatchAboveOpacity] — which is where the
+  /// venue actually finishes drawing — cannot reach it.
+  void Function()? _onVenueRenderedCb;
+
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
+    _onVenueRenderedCb = config.onVenueRendered;
     return Stack(
       children: [
         MapLibreMap(
@@ -304,7 +310,14 @@ class MaplibreMapProvider extends BaseMapProvider {
           },
           onStyleLoadedCallback: () async {
             if (_controller != null) {
-              await config.onStyleLoadedCallback(_controller);
+              // Host-supplied; a throw here would skip the entire layer rebuild
+              // below and leave the map permanently blank. Same reasoning as
+              // the try around the icon rebake.
+              try {
+                await config.onStyleLoadedCallback(_controller);
+              } catch (e) {
+                print('style-loaded: host onStyleLoadedCallback threw: $e');
+              }
               // Style reload wipes ALL sources, layers, and addImage() calls —
               // reset flags so enableXxxLayers() re-creates everything cleanly.
               _isClusteringEnabled = false;
@@ -349,6 +362,17 @@ class MaplibreMapProvider extends BaseMapProvider {
                   allIconMarkers.where(_isAnimalMarker).toList();
               final iconMarkers =
                   allIconMarkers.where((m) => !_isAnimalMarker(m)).toList();
+              // The enable*Layers calls below MUST run. Every layer flag was
+              // reset to false at the top of this callback, so if anything in
+              // the icon rebake throws and we bail out here, those flags stay
+              // false for the lifetime of the map — and setGeoJsonSource,
+              // _updatePolygonSource and _updatePolylineSource all silently
+              // early-return on a false flag. The result is a permanent grey
+              // basemap with no venue and no error anywhere: the exact symptom
+              // seen on web on 2026-08-27. A missing icon is cosmetic; a
+              // missing layer is fatal. So the bake is best-effort and the
+              // enables are unconditional.
+              try {
               await PerfTrace.timeAsync(
                   'style-loaded: rebake of ${iconMarkers.length} icons', () async {
                 if (kIsWeb) {
@@ -387,6 +411,11 @@ class MaplibreMapProvider extends BaseMapProvider {
                 await PerfTrace.timeAsync(
                     'style-loaded: rebake of ${animalIconMarkers.length} animal icons',
                     () => _batchLoadAnimalIcons(_controller!, animalIconMarkers));
+              }
+              } catch (e, stack) {
+                print('style-loaded: icon rebake failed, continuing to enable '
+                    'layers anyway: $e');
+                print(stack);
               }
 
               await enablePolygonLayers(_controller!);
@@ -1870,7 +1899,23 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Longest-edge cap (px) an animal photo is downscaled to before its icon
   /// is registered with the map style, regardless of the source photo's
   /// native resolution.
+  ///
+  /// DO NOT make this smaller on web to shrink the animal markers. Tried
+  /// 2026-08-27 (56px + an 11pt pill): it works visually, but a smaller bake
+  /// completes faster, which lands the venue push before onStyleLoadedCallback
+  /// has enabled the layers — and those pushes are silently dropped, leaving a
+  /// permanent grey basemap. Verified by A/B against a clean HEAD that renders.
+  /// Shrink at RENDER time via [_kAnimalWebIconScale] on the layer's icon-size
+  /// instead: same appearance, zero effect on bake timing.
   static const int _animalMaxIconSize = 80;
+
+  /// Render-time shrink for the custom-rendering composites (animal photo +
+  /// its pill) on web, where a browser viewport shows much more of the venue at
+  /// a given zoom than a native phone map and the baked-at-80dp icons crowd
+  /// each other. Applied to the layer's icon-size stops, so it costs nothing
+  /// and cannot perturb load ordering. Museum POI pins are excluded — they have
+  /// their own `hasSelectedIcon` curve.
+  static final double _kAnimalWebIconScale = kIsWeb ? 0.55 : 1.0;
 
   /// Composited animal-icon bytes, keyed by [_animalIconKey] (photo URL +
   /// baked title). An enclosure of animals that share a photo and species
@@ -2664,10 +2709,13 @@ class MaplibreMapProvider extends BaseMapProvider {
           "interpolate",
           ["linear"],
           ["zoom"],
-          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
-          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
-          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
-          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
+          // The non-hasSelectedIcon stops carry _kAnimalWebIconScale, which is
+          // 1.0 off web — so native sizing is byte-identical and only the
+          // browser gets the smaller composites.
+          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2 * _kAnimalWebIconScale],
+          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442 * _kAnimalWebIconScale],
+          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0 * _kAnimalWebIconScale],
+          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0 * _kAnimalWebIconScale],
         ],
         iconAnchor: ["get", "iconAnchor"],
         iconAllowOverlap: false,
@@ -3543,6 +3591,17 @@ class MaplibreMapProvider extends BaseMapProvider {
     );
 
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
+
+    // The venue is now genuinely on screen: polygons pushed, patch and section
+    // fade curves applied, marker layers retuned. This is the point hosts need
+    // in order to aim the camera at something — the style-loaded and
+    // map-created callbacks both fire many seconds earlier, at which point a
+    // camera move lands on tiles that have not drawn.
+    try {
+      _onVenueRenderedCb?.call();
+    } catch (e) {
+      print('onVenueRendered handler threw: $e');
+    }
   }
 
   Future<void> _refreshMarkerLayerMinZooms(

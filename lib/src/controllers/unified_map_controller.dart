@@ -42,6 +42,11 @@ class UnifiedMapController extends ChangeNotifier {
 
     this.onReadyLandmarkSelectionID,
 
+    /// Fired when the venue is actually drawn (see [MapConfig.onVenueRendered]).
+    /// Hosts that need to move the camera at startup must wait for this rather
+    /// than onMapCreated/onStyleLoaded, which fire seconds earlier.
+    void Function()? onVenueRendered,
+
     String? url,
 
     String languageCode = 'en'
@@ -63,7 +68,8 @@ class UnifiedMapController extends ChangeNotifier {
       onCameraMove: onCameraMove,
       onMarkerTap: onMarker??onMarkerTap,
       onPolygonTap: onPolygon??onPolygonTap,
-      onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback
+      onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback,
+      onVenueRendered: onVenueRendered,
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
