@@ -4227,20 +4227,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const String osmRasterStyle = '''
 {
   "version": 8,
-  "name": "CARTO Dark No Labels",
+  "name": "Esri Dark Gray Canvas",
   "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   "sources": {
     "osm-tiles": {
       "type": "raster",
       "tiles": [
-        "https://a.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
-        "https://d.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png"
+        "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
       ],
       "tileSize": 256,
-      "attribution": "© OpenStreetMap contributors © CARTO",
-      "maxzoom": 20
+      "attribution": "© Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "maxzoom": 16
     },
     "empty": {
       "type": "geojson",
