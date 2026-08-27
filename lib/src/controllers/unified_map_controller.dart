@@ -1,5 +1,7 @@
 // lib/src/controllers/unified_map_controller.dart
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show EdgeInsets;
 import 'package:unified_map_view/src/enums/Theme.dart';
@@ -342,21 +344,11 @@ class UnifiedMapController extends ChangeNotifier {
     await PerfTrace.timeAsync('addPolylines (${polylines.length})',
         () => addPolylines(polylines));
 
+    // Markers are deliberately NOT added here — see the deferred block at the
+    // end of this method. They used to sit between the polylines above and the
+    // furniture below, awaited, so every icon bake blocked the rest of the
+    // venue from reaching the map.
     final markers = GeoJsonLoader.extractMarkers(collection);
-    final urlMarkers = markers.where((marker)=> (marker.assetPath != null && marker.assetPath!.contains("http"))).toList();
-    addMarkers(urlMarkers);
-    final localMarkers = markers.where((marker)=> !urlMarkers.contains(marker)).toList();
-    final sectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "Section").toList();
-    final subSectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "SubSection").toList();
-    final normalMarker = localMarkers.where((marker) => !sectionMarkers.contains(marker) && !subSectionMarkers.contains(marker)).toList();
-    // Same cumulative-rebuild problem as addPolygons above, and each of these
-    // additionally blocks on every icon bake before any marker is pushed.
-    await PerfTrace.timeAsync('addMarkers normal (${normalMarker.length})',
-        () => addMarkers(normalMarker));
-    await PerfTrace.timeAsync('addMarkers section (${sectionMarkers.length})',
-        () => addMarkers(sectionMarkers));
-    await PerfTrace.timeAsync('addMarkers subSection (${subSectionMarkers.length})',
-        () => addMarkers(subSectionMarkers));
 
     // Point features carrying a "3dRef" part list are rendered as extruded 3D
     // furniture. Whether they also get a marker is decided by the
@@ -386,6 +378,77 @@ class UnifiedMapController extends ChangeNotifier {
       await PerfTrace.timeAsync('addFurniture (${furnitureItems.length})',
           () => addFurniture(furnitureItems));
     }
+
+    // ---- Markers last, and detached ----
+    //
+    // Everything above (polygons, polylines, furniture) is what makes the venue
+    // appear. Marker icon baking is CPU-bound and by far the most expensive
+    // part of the load — measured on device at NationalZoologicalPark: skipping
+    // markers entirely took time-to-venue from 25.7s to 11.4s. Awaiting them
+    // here meant the user stared at a grey basemap for the whole bake even
+    // though the venue itself was ready.
+    //
+    // Detached (not awaited), so addGeoJsonFeatures completes — and the venue
+    // paints — as soon as the geometry is in. Markers then stream onto the map
+    // as their icons finish. notifyListeners() below fires on the geometry, not
+    // on the markers, which is the point.
+    //
+    // Ordering within the marker work is preserved: url-backed icons start
+    // first (they have network latency to hide), then local ones.
+    unawaited(() async {
+      try {
+        // Wait for the polygons to actually be on screen before starting any
+        // icon baking. Web is single-threaded: starting the bake immediately
+        // (even detached) means it competes with the polygon paint, which is
+        // why time-to-venue sat at 14.3s against an 11.4s markers-off floor.
+        // Polygons take ~850ms and markers take seconds — there is nothing to
+        // gain from overlapping them, and the venue appearing sooner is what
+        // the user actually perceives as "fast".
+        //
+        // Timed out rather than awaited unconditionally: if the venue-rendered
+        // signal never arrives (a venue with no polygons at all, say), markers
+        // must still render rather than be lost.
+        await PerfTrace.timeAsync(
+            'deferred markers: waiting for venue render',
+            () => currentProviderImplementation.venueRendered
+                .timeout(const Duration(seconds: 20), onTimeout: () {
+              print('deferred markers: venue-render signal never came, '
+                  'starting markers anyway');
+            }));
+
+        final urlMarkers = markers
+            .where((m) => m.assetPath != null && m.assetPath!.contains("http"))
+            .toList();
+        final localMarkers =
+            markers.where((m) => !urlMarkers.contains(m)).toList();
+        final sectionMarkers = localMarkers
+            .where((m) => m.properties?["type"] == "Section")
+            .toList();
+        final subSectionMarkers = localMarkers
+            .where((m) => m.properties?["type"] == "SubSection")
+            .toList();
+        final normalMarker = localMarkers
+            .where((m) =>
+                !sectionMarkers.contains(m) && !subSectionMarkers.contains(m))
+            .toList();
+
+        await PerfTrace.timeAsync('deferred addMarkers url (${urlMarkers.length})',
+            () => addMarkers(urlMarkers));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers normal (${normalMarker.length})',
+            () => addMarkers(normalMarker));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers section (${sectionMarkers.length})',
+            () => addMarkers(sectionMarkers));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers subSection (${subSectionMarkers.length})',
+            () => addMarkers(subSectionMarkers));
+        notifyListeners();
+      } catch (e) {
+        // Detached, so an escape here would be an unhandled async error.
+        print('deferred marker rendering failed: $e');
+      }
+    }());
 
     notifyListeners();
   }

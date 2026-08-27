@@ -216,6 +216,12 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// venue actually finishes drawing — cannot reach it.
   void Function()? _onVenueRenderedCb;
 
+  final Completer<void> _venueRenderedCompleter = Completer<void>();
+
+  /// Completes when the venue geometry is drawn. See [BaseMapProvider.venueRendered].
+  @override
+  Future<void> get venueRendered => _venueRenderedCompleter.future;
+
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
     _onVenueRenderedCb = config.onVenueRendered;
     return Stack(
@@ -402,15 +408,33 @@ class MaplibreMapProvider extends BaseMapProvider {
                 }
               });
 
-              // Rebake the animal composites so _loadedAnimalIcons is filled
-              // again before enableMarkerLayers re-pushes the source below —
-              // otherwise that push serialises every animal feature with the
-              // paw id. The composited bytes survive in _animalIconCache, so
-              // this is only the addImage() calls, not a re-fetch/re-paint.
+              // NOT awaited — this is the single biggest cost on the whole web
+              // load path. Measured on device (NationalZoologicalPark, 112
+              // animals, release): **14,053ms**, against a 25,725ms
+              // time-to-venue. Skipping markers entirely rendered the venue in
+              // 11,446ms, so this one call was 14.3s of the 14.3s that markers
+              // cost. It ran here, awaited, *before* enable*Layers — so the map
+              // sat blank for 14s re-registering icons for a venue it could
+              // already have drawn.
+              //
+              // The comment this replaces argued it had to be awaited so
+              // _loadedAnimalIcons was filled before enableMarkerLayers pushes
+              // the source, "otherwise that push serialises every animal
+              // feature with the paw id". That is true and it is fine: the paw
+              // IS the designed load-state fallback (_animalDisplayIconId), and
+              // _scheduleAnimalIconRefresh re-pushes the source as each icon
+              // lands. Paws for a couple of seconds beats a blank map for
+              // fourteen.
               if (animalIconMarkers.isNotEmpty) {
-                await PerfTrace.timeAsync(
-                    'style-loaded: rebake of ${animalIconMarkers.length} animal icons',
-                    () => _batchLoadAnimalIcons(_controller!, animalIconMarkers));
+                unawaited(PerfTrace.timeAsync(
+                        'style-loaded: rebake of ${animalIconMarkers.length} animal icons',
+                        () => _batchLoadAnimalIcons(
+                            _controller!, animalIconMarkers))
+                    .catchError((e) {
+                  // Unawaited, so a throw here would be an unhandled async
+                  // error rather than something the try below can catch.
+                  print('style-loaded: animal rebake failed: $e');
+                }));
               }
               } catch (e, stack) {
                 print('style-loaded: icon rebake failed, continuing to enable '
@@ -848,8 +872,27 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Diagnostic switch: build with `--dart-define=SKIP_MARKERS=true` to render
+  /// the venue with NO markers at all — no icon bake, no symbol push, and
+  /// nothing for the style-loaded rebake to redo (it iterates `_symbols`, which
+  /// stays empty because this returns before the adds).
+  ///
+  /// Exists to answer one question: is the load time dominated by the marker
+  /// bake specifically, or is the whole pipeline slow? Compare time-to-
+  /// `fadeOutZoom` with and without it. Not a feature — never ship it true.
+  static const bool kSkipMarkersForProfiling =
+      bool.fromEnvironment('SKIP_MARKERS');
+
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
+    if (kSkipMarkersForProfiling) {
+      print('PROFILE: skipping ${markers.length} markers (SKIP_MARKERS=true)');
+      return;
+    }
+    return _addMarkers(controller, markers);
+  }
+
+  Future<void> _addMarkers(controller, List<GeoJsonMarker> markers) async {
     // Calls toString() on every marker in the venue, and addMarkers runs 3-4
     // times per render, so this stringifies the whole marker set repeatedly.
     if (!kIsWeb) print("markers $markers");
@@ -1414,6 +1457,43 @@ class MaplibreMapProvider extends BaseMapProvider {
         "features": features,
       },
     );
+
+    // The venue's fade thresholds are derived from these very polygons, so they
+    // have to be recomputed whenever the polygon set changes.
+    await _refreshPatchFadeIfStale(controller);
+  }
+
+  /// Recomputes the patch/section fade zooms when the polygons they are derived
+  /// from have changed enough to move them.
+  ///
+  /// [_refreshPatchAboveOpacity] used to run from exactly one place —
+  /// onStyleLoadedCallback — so the thresholds were computed ONCE, from
+  /// whatever `_polygons` happened to hold at style-load time. When the venue
+  /// data arrived after that (which is what happens as soon as anything on the
+  /// load path gets faster), `_calculateFitZoom` fell back to its empty-list
+  /// default of 13.0, every fade zoom was computed from that wrong value, and
+  /// nothing ever recomputed them — the venue then never became visible and the
+  /// map sat on the grey basemap forever, with no error.
+  ///
+  /// That is the "every speedup breaks rendering" race: removing the icon
+  /// fetches' incidental latency, or baking smaller icons, both reordered the
+  /// venue push past the style load and tripped it. Deriving the thresholds
+  /// from the data whenever the data lands removes the ordering dependency
+  /// instead of trying to preserve it.
+  Future<void> _refreshPatchFadeIfStale(
+      MapLibreMapController controller) async {
+    if (!_isPolygonLayersEnabled) return;
+    final boundaryPolygons = _polygons.where((p) =>
+        p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
+    final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
+    // Nothing to derive from yet; the next push will call back in.
+    if (basis.isEmpty) return;
+    final fitZoom =
+        _calculateFitZoom(basis, screenSize: _screenSize) - 2.0;
+    // Unchanged (or first run) → only pay for the layer rebuild when it moves.
+    if (_fadeOutZoom != null && (_fadeOutZoom! - fitZoom).abs() < 0.01) return;
+    print('patch fade stale: recomputing (was $_fadeOutZoom, now $fitZoom)');
+    await _refreshPatchAboveOpacity(controller, screenSize: _screenSize);
   }
 
   @override
@@ -3597,6 +3677,12 @@ class MaplibreMapProvider extends BaseMapProvider {
     // in order to aim the camera at something — the style-loaded and
     // map-created callbacks both fire many seconds earlier, at which point a
     // camera move lands on tiles that have not drawn.
+    // Release anything waiting on the venue being drawn (deferred marker work,
+    // and the host's deep-link camera focus) before invoking the host callback,
+    // so a throwing host handler cannot strand those waiters forever.
+    if (!_venueRenderedCompleter.isCompleted) {
+      _venueRenderedCompleter.complete();
+    }
     try {
       _onVenueRenderedCb?.call();
     } catch (e) {

@@ -28,8 +28,13 @@ class PerfTrace {
   /// removed from the hot paths. Profile builds keep it, since that is what the
   /// device measurements are taken on.
   ///
-  /// Set `PerfTrace.enabled = true` early in main() to trace a release build.
-  static bool enabled = kIsWeb && !kReleaseMode;
+  /// Set `PerfTrace.enabled = true` early in main() to trace a release build,
+  /// or build with `--dart-define=PERF_TRACE=true`. The dart-define matters
+  /// because the load-time problem only reproduces at realistic speed in a
+  /// RELEASE build — a debug build's 2287-module bootstrap swamps everything
+  /// being measured — so without it there is no phase breakdown to look at.
+  static bool enabled = kIsWeb &&
+      (!kReleaseMode || const bool.fromEnvironment('PERF_TRACE'));
 
   static void mark(String label) {
     if (!enabled) return;

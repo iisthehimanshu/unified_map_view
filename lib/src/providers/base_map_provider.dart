@@ -34,6 +34,18 @@ abstract class BaseMapProvider {
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
 
+  /// Completes once the venue geometry is actually drawn — polygons pushed and
+  /// the patch fade applied.
+  ///
+  /// Deferred marker work awaits this so icon baking does not compete for the
+  /// single web thread while the polygons are still painting. Polygons take
+  /// ~850ms; markers take seconds, so letting them overlap makes the venue
+  /// appear late for no benefit.
+  ///
+  /// Defaults to already-complete, so providers that do not model a venue
+  /// render (and any future provider) behave exactly as before.
+  Future<void> get venueRendered => Future<void>.value();
+
   Future<void> addMarkers(dynamic controller, List<GeoJsonMarker> markers);
 
   Future<void> localizeUser(dynamic controller, GeoJsonMarker marker);
