@@ -972,11 +972,34 @@ class MaplibreMapProvider extends BaseMapProvider {
   StreamSubscription<CompassEvent>? _compassSub;
   double? _currentHeading;
 
+  /// Externally supplied heading that stands in for the device compass while
+  /// set. See [setHeadingOverride].
+  double? _headingOverride;
+
+  @override
+  Future<void> setHeadingOverride(dynamic controller, double? heading) async {
+    _headingOverride = heading;
+    // Written through to _currentHeading so the *position* repaint
+    // (_updateUserLocation, which runs on every move) carries the same value
+    // the compass path would have written. Without this a move would push a
+    // feature bearing the last live heading and undo the override.
+    if (heading != null) _currentHeading = heading;
+    if (controller is! MapLibreMapController) return;
+    await _updateUserLocation(controller);
+  }
+
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
     _compassSub = FlutterCompass.events?.listen((event) async {
       if (event.heading == null) return;
+      // Ignore the sensor rather than cancelling the subscription. There *is*
+      // a restart path — removeMarker() cancels and nulls _compassSub when the
+      // puck goes, and _startCompassListening re-subscribes when it comes back
+      // — but it only runs on a marker remove/add cycle. Cancelling here would
+      // leave the puck frozen from the moment the override is cleared until the
+      // next floor change happens to rebuild the marker.
+      if (_headingOverride != null) return;
       _currentHeading = event.heading;
       // A style reload wipes the rotation source; compass events keep arriving
       // during the rebuild, and pushing then NPEs natively on a null source.

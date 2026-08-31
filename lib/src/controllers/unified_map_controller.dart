@@ -715,6 +715,28 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Heading currently driving the user puck's rotation, or null when the
+  /// device compass is.
+  double? get userHeadingOverride => _userHeadingOverride;
+  double? _userHeadingOverride;
+
+  /// Points the user puck at [heading] (degrees from north) instead of the
+  /// device compass; pass null to hand rotation back to the sensor.
+  ///
+  /// Intended for a position that is not a live fix — a simulated or replayed
+  /// walk, where the puck should show the heading that was *recorded* rather
+  /// than the phone the simulation is running on. The map keeps its own
+  /// compass subscription, so without this the glyph spins with the device no
+  /// matter what the host writes into its own user state.
+  ///
+  /// Held on the controller (not globally), so it dies with the map.
+  Future<void> setUserHeadingOverride(double? heading) async {
+    _userHeadingOverride = heading;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setHeadingOverride(
+        _currentMapController, heading);
+  }
+
   @override
   void dispose() {
     currentProviderImplementation.dispose();

@@ -693,6 +693,28 @@ class AnnotationController{
     _pinSelectionLocation = null;
   }
 
+  /// Whether the floor [user] is on is the floor currently rendered for their
+  /// building — the precondition for drawing the puck.
+  ///
+  /// Only meaningful for a *floor-managed* building. [changeAllBuildingsFloor]
+  /// skips two kinds of building, and for both `selectedFloor` is frozen at
+  /// whatever the initial scan set and never tracks the user:
+  ///
+  ///  * the **campus**, deliberately never floor-swapped because it carries the
+  ///    base map — it is always on screen, so the puck is always visible;
+  ///  * a bid with **no entry in availableFloors**, which the loop never visits.
+  ///
+  /// Gating on a frozen selectedFloor hid the puck permanently: the user walks
+  /// onto floor 1, the campus's selectedFloor still reads 7, the equality never
+  /// holds again and no later localizeUser can put the marker back. So treat a
+  /// building that isn't floor-managed as always showing the user's floor.
+  bool _userFloorIsRendered(User user) {
+    final bool floorManaged = user.bid != _venueData.campusBuildingId &&
+        _venueData.availableFloors.containsKey(user.bid);
+    if (!floorManaged) return true;
+    return _venueData.selectedFloor[user.bid] == user.floor;
+  }
+
   Future<void> localizeUser(User user, {bool changeFloor = true}) async {
     if(_user != null && _user!.bid == user.bid && _user!.floor == user.floor ){
       if(changeFloor){
@@ -709,12 +731,16 @@ class AnnotationController{
     }
     await _unifiedMapController.removeMarker("user");
     await _unifiedMapController.removeCircle("user");
-    if(_venueData.selectedFloor[user.bid] != user.floor){
+    if(!_userFloorIsRendered(user)){
+      final campusId = _venueData.campusBuildingId;
       print("puck: localizeUser skipped the add — venue shows floor "
           "${_venueData.selectedFloor[user.bid]} for ${user.bid} but user is on "
-          "${user.floor}; puck stays hidden");
+          "${user.floor}; puck stays hidden"
+          " | isCampus=${user.bid == campusId} campusId=$campusId"
+          " | inAvailableFloors=${_venueData.availableFloors.containsKey(user.bid)}"
+          " availableFloors=${_venueData.availableFloors[user.bid]}");
     }
-    if(_venueData.selectedFloor[user.bid] == user.floor){
+    if(_userFloorIsRendered(user)){
       // Built here rather than before the awaits above: this method is entered
       // as `void ... async` from UnifiedMapController, so callers cannot await
       // it, and changeAllBuildingsFloor re-renders every building's floor. A
@@ -746,7 +772,7 @@ class AnnotationController{
   Future<void> refreshUserMarker() async {
     final user = _user;
     if (user == null) return;
-    if (_venueData.selectedFloor[user.bid] != user.floor) return;
+    if (!_userFloorIsRendered(user)) return;
     final String id = GeoJsonUtils.buildKey(
         buildingID: user.bid, floor: user.floor.toString(), id: "user");
     final GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
