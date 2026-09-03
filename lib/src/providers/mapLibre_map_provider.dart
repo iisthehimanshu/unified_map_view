@@ -28,7 +28,12 @@ import 'package:http/http.dart' as http;
 
 /// MapLibre GL implementation of BaseMapProvider
 /// Supports MapLibre — an open-source vector map rendering engine
-enum MarkerSelectionAnimationStyle { growShrink, shakeVertical }
+/// How a marker reacts when it is tapped / selected.
+///
+/// [none] is the default — the marker just gets highlighted, with no motion.
+/// Set [MaplibreMapProvider.markerSelectionAnimationStyle] to one of the other
+/// values when you actually want the tap animation.
+enum MarkerSelectionAnimationStyle { none, growShrink, shakeVertical }
 class MaplibreMapProvider extends BaseMapProvider {
   MapLibreMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
@@ -657,6 +662,58 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Upper zoom edge for the flat "section" fill (the coloured campus patches
+  /// that sit on top of the buildings). At this zoom the patches are gone and
+  /// the buildings show unobstructed; they ramp out over the 0.2 levels below
+  /// it. The *lower* edge is not fixed — the patches stay visible all the way
+  /// down until the "<venue name>" boundary layer fades in, then hand off to
+  /// it. Tune per venue via `_maplibreProvider.sectionLayerMaxZoom = ...`
+  /// before the map is built.
+  double sectionLayerMaxZoom = 18.0;
+
+  /// Fallback lower edge used only before the venue's real fit zoom is known
+  /// (i.e. for the section layer's initial creation, before
+  /// [_refreshPatchAboveOpacity] runs).
+  double sectionLayerMinZoom = 15.0;
+
+  /// Zoom at which plain building-name labels (text-only markers, and the
+  /// icon+text markers grouped under a sectionId) start to appear. Was a hard
+  /// 18.0; lowered so the building name is already readable while the coloured
+  /// section patch is still up (the patch spans up to [sectionLayerMaxZoom]).
+  double buildingLabelMinZoom = 17.0;
+
+  /// Opacity `interpolate` expression for the section fill / labels.
+  ///
+  /// Visible from [lowEdge] (where the boundary layer hands off) up to
+  /// [sectionLayerMaxZoom] (where the buildings take over), fading in/out over
+  /// a short ramp at each end. [lowEdge] defaults to [sectionLayerMinZoom]; the
+  /// runtime refresh passes the venue's boundary fade-out zoom so the patches
+  /// only disappear on zoom-out once the "<venue name>" layer appears.
+  List<dynamic> _sectionZoomWindowOpacity({double? lowEdge}) {
+    final hi = sectionLayerMaxZoom;
+    final loFull = lowEdge ?? sectionLayerMinZoom;
+    // Keep the four zoom stops strictly increasing regardless of tuning.
+    final a = loFull - 0.2;
+    final b = max(loFull, a + 0.01);
+    final c = max(hi - 0.2, b + 0.01);
+    final d = max(hi, c + 0.01);
+    return [
+      "interpolate", ["linear"], ["zoom"],
+      a, 0.0,
+      b, 1.0,
+      c, 1.0,
+      d, 0.0,
+    ];
+  }
+
+  /// Animation played when a marker is tapped / selected. Defaults to
+  /// [MarkerSelectionAnimationStyle.none] (highlight only, no motion) — set
+  /// it to [MarkerSelectionAnimationStyle.growShrink] or
+  /// [MarkerSelectionAnimationStyle.shakeVertical] when the tap animation is
+  /// wanted.
+  MarkerSelectionAnimationStyle markerSelectionAnimationStyle =
+      MarkerSelectionAnimationStyle.none;
+
   Timer? _circleAnimationTimer;
   bool _circleExpanding = true;
   Timer? _iconAnimationTimer;
@@ -737,8 +794,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> animateMarkerSelection(
       MapLibreMapController controller,
       String markerId, {
-        MarkerSelectionAnimationStyle style = MarkerSelectionAnimationStyle.growShrink,
+        MarkerSelectionAnimationStyle style = MarkerSelectionAnimationStyle.none,
       }) async {
+    // `none` means "no tap animation" — nothing to run.
+    if (style == MarkerSelectionAnimationStyle.none) return;
     if (_animatingMarkerId != null && _animatingMarkerId != markerId) {
       _markerIconScale[_animatingMarkerId!] = 1.0;
       _markerIconShakeDeg[_animatingMarkerId!] = 0.0;
@@ -793,7 +852,10 @@ class MaplibreMapProvider extends BaseMapProvider {
                 'iconScaleFactor': scale,
                 'iconShake': shakeDeg,
                 'labelScale': labelScale,
-                'title': marker.textVisibility
+                // Custom-rendering markers bake their label into the icon, so
+                // the animated layer must not draw ["get","title"] on top of
+                // it — same duplicate-label glitch as the selected layer.
+                'title': (marker.textVisibility && !marker.customRendering)
                     ? creator.formatText(marker.title ?? "", TextFormat.smartWrap)
                     : '',
               },
@@ -3050,7 +3112,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       FillLayerProperties(
         fillColor: ["get", "fillColor"],
         fillOpacity: fillOpacity,
-        fillOutlineColor: ["get", "strokeColor"],
+        // No fillOutlineColor — the section patches render as flat colour with
+        // no border.
       );
 
   Future<void> enableMarkerLayers(dynamic controller) async  {
@@ -3178,7 +3241,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ],
           enableInteraction: true,
           belowLayerId: null,
-          minzoom: 18.0
+          minzoom: buildingLabelMinZoom
       );
 
       // Layer 2: Normal icon markers (has icon, no bearing) — with sectionId
@@ -3203,7 +3266,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _normalTextMarkerLayerId),
-        minzoom: 18.0,
+        minzoom: buildingLabelMinZoom,
       );
 
       // Layer 2b: Normal icon markers — without sectionId
@@ -3529,7 +3592,18 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
           iconRotate: ["get", "iconShake"],
           iconRotationAlignment: "viewport",
-          textField: ["get", "title"],
+          // Custom-rendering markers (animal photos, museum POIs) bake their
+          // name straight into the icon image — see _customRenderingLayerProps,
+          // which has no textField. Drawing ["get","title"] here too gave the
+          // selected animal marker a second, raw label that the unselected
+          // marker never shows (e.g. the Sangai deer's parenthetical species
+          // name wrapping into stray "(" / ")" lines). Suppress the duplicate.
+          textField: [
+            "case",
+            ["to-boolean", ["get", "customRendering"]],
+            "",
+            ["get", "title"],
+          ],
           textSize: ["*", 14, 1.6], // keep this number equal to peakLabelScale above
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
@@ -3606,12 +3680,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addFillLayer(
         _polygonSourceId,
         _sectionPolygonLayerId,
-        _sectionPolygonProps(const [
-          "interpolate", ["linear"], ["zoom"],
-          16, 0.0,
-          17, 1.0,
-          17.5, 0.0
-        ]),
+        _sectionPolygonProps(_sectionZoomWindowOpacity()),
         filter: [
           "all",
           ["to-boolean", ["get", "section"]],
@@ -3898,13 +3967,33 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // Full property set — passing only fillOpacity here is what dropped
     // fill-color and left the sections rendering black.
-    await controller.setLayerProperties(
+    // Coloured "section" campus patches sit on top of the buildings. They stay
+    // visible all the way down to `fadeOutZoom` (where the boundary "<venue
+    // name>" layer takes over) and only ramp out above `sectionLayerMaxZoom`
+    // where the buildings show unobstructed.
+    //
+    // Remove + re-add rather than setLayerProperties: the patch must sit BELOW
+    // the marker/label layers so building names still read on top of it, and
+    // only re-adding lets us pin its stacking position (setLayerProperties
+    // can't move a layer). `_dotMarkerLayerId` is the bottom-most marker layer,
+    // added by enableMarkerLayers which always runs before this.
+    final sectionWindowOpacity = _sectionZoomWindowOpacity(lowEdge: fadeOutZoom);
+    try {
+      await controller.removeLayer(_sectionPolygonLayerId);
+    } catch (_) {}
+    await controller.addFillLayer(
+      _polygonSourceId,
       _sectionPolygonLayerId,
-      _sectionPolygonProps([
-        "interpolate", ["linear"], ["zoom"],
-        fadeOutZoom + 1.5, 1.0,
-        fadeOutZoom + 2.0, 0.0,
-      ]),
+      _sectionPolygonProps(sectionWindowOpacity),
+      filter: [
+        "all",
+        ["to-boolean", ["get", "section"]],
+        ["!", ["to-boolean", ["get", "subsection"]]],
+        ["!", ["has", "height"]],
+        ["!", ["to-boolean", ["get", "hasPattern"]]],
+      ],
+      enableInteraction: false,
+      belowLayerId: await _webSafeBelowLayerId(controller, _dotMarkerLayerId),
     );
     await controller.removeLayer(_sectionMarkerLayerId);
     await _addSymbolLayerSafe(controller,
@@ -3934,20 +4023,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
         textAllowOverlap: false,
         iconAllowOverlap: false,
-        iconOpacity: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          fadeOutZoom+1.5, 1.0,
-          fadeOutZoom+2.0, 0.0
-        ],
-        textOpacity: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          fadeOutZoom+1.5, 1.0,
-          fadeOutZoom+2.0, 0.0
-        ],
+        iconOpacity: sectionWindowOpacity,
+        textOpacity: sectionWindowOpacity,
       ),
       filter: ["to-boolean", ["get", "section"]],
       enableInteraction: true,
@@ -4434,8 +4511,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         );
       }
 
-      if (marker != null && marker.assetPath != null) {
-        animateMarkerSelection(controller, marker.id, style: MarkerSelectionAnimationStyle.growShrink);
+      if (marker != null &&
+          marker.assetPath != null &&
+          markerSelectionAnimationStyle != MarkerSelectionAnimationStyle.none) {
+        animateMarkerSelection(controller, marker.id,
+            style: markerSelectionAnimationStyle);
       }
 
       // 2. Notify listeners before the camera moves so panels open on tap

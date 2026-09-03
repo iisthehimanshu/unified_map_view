@@ -66,14 +66,14 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     _maplibreProvider = MaplibreMapProvider();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'NationalZoologicalPark', //NationalZoologicalPark
+        venueName: 'ApolloHospital',
         initialLocation: UnifiedCameraPosition(
             mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
             zoom: 3.0,
             bearing: 0.0,
             tilt: 0.0
         ),
-        url: "https://maps.iwayplus.in",
+        url: "https://dev.iwayplus.in",
         languageCode: "hi",
         providers: {MapProvider.mapLibre: _maplibreProvider,
           MapProvider.mappls: MapplsMapProvider()}
