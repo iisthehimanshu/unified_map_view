@@ -694,6 +694,49 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Current appearance override for the user puck, or null for the default.
+  UserMarkerStyle? get userMarkerStyle => _userMarkerStyle;
+  UserMarkerStyle? _userMarkerStyle;
+
+  /// Swaps the user puck's artwork at runtime; pass null to restore the
+  /// default blue arrow.
+  ///
+  /// Intended for hosts that need a visually distinct puck for a position that
+  /// is not a live fix — a simulated or replayed walk, say. The style is held
+  /// on the controller (not globally), so it dies with the map rather than
+  /// leaking into the next one, and it is re-read every time the puck is
+  /// rebuilt, so it survives floor changes.
+  ///
+  /// Awaits the redraw, so once this returns the new artwork is on screen.
+  Future<void> setUserMarkerStyle(UserMarkerStyle? style) async {
+    if (_userMarkerStyle == style) return;
+    _userMarkerStyle = style;
+    await _annotationController.refreshUserMarker();
+    notifyListeners();
+  }
+
+  /// Heading currently driving the user puck's rotation, or null when the
+  /// device compass is.
+  double? get userHeadingOverride => _userHeadingOverride;
+  double? _userHeadingOverride;
+
+  /// Points the user puck at [heading] (degrees from north) instead of the
+  /// device compass; pass null to hand rotation back to the sensor.
+  ///
+  /// Intended for a position that is not a live fix — a simulated or replayed
+  /// walk, where the puck should show the heading that was *recorded* rather
+  /// than the phone the simulation is running on. The map keeps its own
+  /// compass subscription, so without this the glyph spins with the device no
+  /// matter what the host writes into its own user state.
+  ///
+  /// Held on the controller (not globally), so it dies with the map.
+  Future<void> setUserHeadingOverride(double? heading) async {
+    _userHeadingOverride = heading;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setHeadingOverride(
+        _currentMapController, heading);
+  }
+
   @override
   void dispose() {
     currentProviderImplementation.dispose();

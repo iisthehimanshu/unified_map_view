@@ -22,7 +22,19 @@ class PredefinedMarkers{
     );
   }
 
-  static GeoJsonMarker getUserMarker(MapLocation location, String id){
+  /// The user puck.
+  ///
+  /// [style] lets a host swap the puck's artwork at runtime — pass null (the
+  /// default) for the stock blue arrow. It is deliberately generic: any asset
+  /// path the root bundle can resolve works, including one shipped by another
+  /// package as `packages/<name>/...`. Applied here rather than at the call
+  /// sites because this is the single place the puck marker is built, so an
+  /// override automatically survives the marker being re-created on a floor
+  /// change.
+  static GeoJsonMarker getUserMarker(MapLocation location, String id,
+      {UserMarkerStyle? style}){
+    print("getUserMarker: asset=${style?.assetPath ?? LandmarkAssetType.user.assetPath} "
+        "size=${style?.imageSize ?? const Size(35, 35)} (override=${style != null})");
     return GeoJsonMarker(
         id: id,
         position: location,
@@ -34,18 +46,20 @@ class PredefinedMarkers{
         // rasteriser: macOS `qlmanage` composites its output onto an opaque
         // white card, which still reports hasAlpha but drew a white square
         // behind the marker on the map. Native keeps user.png untouched.
-        assetPath: kIsWeb
-            ? 'packages/unified_map_view/assets/markers/userMarkerBlue.png'
-            : LandmarkAssetType.user.assetPath,
+        assetPath: style?.assetPath ??
+            (kIsWeb
+                ? 'packages/unified_map_view/assets/markers/userMarkerBlue.png'
+                : LandmarkAssetType.user.assetPath),
         iconName: "User",
         priority: true,
         // Web draws it at half size: the plain disc reads much heavier on the
         // floor plan than the old arrow did at the same 35pt.
-        imageSize: kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35),
+        imageSize: style?.imageSize ??
+            (kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35)),
       anchor: LandmarkAssetType.user.anchor,
       renderAnchor: Offset(0.5, 0.5),
       // renderAnchor: Offset(0.515, 0.66),
-      compassBasedRotation: true,
+      compassBasedRotation: style?.compassBasedRotation ?? true,
       customRendering: true
     );
   }

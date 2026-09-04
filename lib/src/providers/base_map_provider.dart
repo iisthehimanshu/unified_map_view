@@ -56,6 +56,15 @@ abstract class BaseMapProvider {
   /// Turn the temporary overlap override OFF for every marker it was set on.
   Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {}
 
+  /// Rotate the compass-driven markers (the user puck) from [heading] instead
+  /// of the device compass; null hands them back to the live sensor.
+  ///
+  /// For a host showing a position that is not a live fix — a simulated or
+  /// replayed walk — where the recorded heading, not the phone in the user's
+  /// hand, is what the puck should point at. Providers without a compass
+  /// subscription inherit a no-op.
+  Future<void> setHeadingOverride(dynamic controller, double? heading) async {}
+
   /// Get current camera position
   Future<MapLocation?> getCurrentLocation(dynamic controller);
 
