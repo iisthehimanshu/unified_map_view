@@ -68,6 +68,16 @@ abstract class BaseMapProvider {
   /// Turn the temporary overlap override OFF for every marker it was set on.
   Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {}
 
+  /// Apply a per-group visibility / opacity / tappability policy.
+  ///
+  /// [policy] is absolute, not a delta — it fully describes the desired state,
+  /// and groups it does not mention return to their defaults.
+  ///
+  /// Providers without layer-level control inherit this no-op, so only the
+  /// MapLibre provider implements it.
+  Future<void> setLayerPolicy(
+      dynamic controller, MapLayerPolicy policy) async {}
+
   /// Get current camera position
   Future<MapLocation?> getCurrentLocation(dynamic controller);
 

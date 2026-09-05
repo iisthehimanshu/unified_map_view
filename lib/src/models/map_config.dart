@@ -30,6 +30,11 @@ class MapConfig {
   /// idempotent.
   final void Function()? onVenueRendered;
 
+  /// Per-group visibility / opacity / tappability applied as the map's layers
+  /// are first created, so the map never briefly shows content the host asked
+  /// to hide. Change it after load with `UnifiedMapController.setLayers`.
+  final MapLayerPolicy initialLayerPolicy;
+
   final void Function({required MapLocation coordinates, required String markerId})? onMarkerTap;
   final void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap;
   final void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap;
@@ -49,8 +54,8 @@ class MapConfig {
     this.onMarkerTap,
     this.onPolygonTap,
     this.onPolylineTap,
-    this.immersive = true
-
+    this.immersive = true,
+    this.initialLayerPolicy = MapLayerPolicy.all,
   });
 
   MapConfig copyWith({
@@ -69,7 +74,8 @@ class MapConfig {
    void Function()? onVenueRendered,
    void Function({required MapLocation coordinates, required String markerId})? onMarkerTap,
    void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap,
-   void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap
+   void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap,
+   MapLayerPolicy? initialLayerPolicy,
   }) {
     return MapConfig(
       onMapCreated: onMapCreated ?? this.onMapCreated,
@@ -85,7 +91,8 @@ class MapConfig {
       onMarkerTap: onMarkerTap ?? this.onMarkerTap,
       onPolygonTap: onPolygonTap ?? this.onPolygonTap,
       onPolylineTap: onPolylineTap ?? this.onPolylineTap, onStyleLoadedCallback:onStyleLoadedCallback??this.onStyleLoadedCallback,
-        immersive:immersive??this.immersive
+        immersive:immersive??this.immersive,
+      initialLayerPolicy: initialLayerPolicy ?? this.initialLayerPolicy,
     );
   }
 }

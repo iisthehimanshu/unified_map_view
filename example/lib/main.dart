@@ -43,6 +43,15 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   late UnifiedMapController _unifiedMapController;
   bool _isLoading = false;
 
+  // ── layer-policy test harness ──────────────────────────────────────────────
+  String _lastTap = 'no tap yet';
+  int _tapCount = 0;
+  String _activePreset = 'all';
+  double _subSectionOpacity = 1.0;
+  bool _subSectionOverridden = false;
+  double _polygonOpacity = 1.0;
+  bool _polygonOverridden = false;
+
   Timer? _moveUserTimer;
 
   // Demo user marker ID
@@ -64,13 +73,29 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'ApolloHospital',
+        venueName: 'NationalZoologicalPark',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
           bearing: 0.0,
           tilt: 0.0
         ),
+      onPolygon: ({required String polygonId,
+          required List<MapLocation> coordinates}) {
+        setState(() {
+          _tapCount++;
+          _lastTap = 'POLYGON #$_tapCount  $polygonId';
+        });
+        print('HARNESS onPolygonTap -> $polygonId');
+      },
+      onMarker: ({required String markerId,
+          required MapLocation coordinates}) {
+        setState(() {
+          _tapCount++;
+          _lastTap = 'MARKER #$_tapCount  $markerId';
+        });
+        print('HARNESS onMarkerTap -> $markerId');
+      },
       url: "https://dev.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
@@ -82,6 +107,33 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     // Future.delayed(const Duration(seconds: 6), () {
     //   _addTestMarker();
     // });
+  }
+
+  Future<void> _applyPreset(String name, MapLayerPolicy policy) async {
+    await _unifiedMapController.setLayers(policy);
+    // Re-apply any active opacity override on top of the preset.
+    if (_polygonOverridden) {
+      await _unifiedMapController
+          .setLayer(MapLayer.polygons, opacity: _polygonOpacity);
+    }
+    if (_subSectionOverridden) {
+      await _unifiedMapController
+          .setLayer(MapLayer.subSections, opacity: _subSectionOpacity);
+    }
+    setState(() => _activePreset = name);
+    print('HARNESS preset -> $name  policy=${_unifiedMapController.layerPolicy}');
+  }
+
+  Widget _presetChip(String name, MapLayerPolicy policy) {
+    final active = _activePreset == name;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: ChoiceChip(
+        label: Text(name, style: const TextStyle(fontSize: 11)),
+        selected: active,
+        onSelected: (_) => _applyPreset(name, policy),
+      ),
+    );
   }
 
   Future<void> _addTestMarker() async {
@@ -320,6 +372,109 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                     ),
                   ],
                 ),
+              ],
+            ),
+          ),
+
+          // ── layer-policy test harness ──────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: Colors.amber.shade50,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    _presetChip('all', MapLayerPolicy.all),
+                    _presetChip('polygonsOnly', MapLayerPolicy.polygonsOnly),
+                    _presetChip(
+                        'polygonsOnlyNoTap', MapLayerPolicy.polygonsOnlyNoTap),
+                    _presetChip('markersOnly', MapLayerPolicy.markersOnly),
+                    // Control for the tap gate: pixel-identical to `all`, but
+                    // every group inert. Isolates tappability from visibility.
+                    _presetChip(
+                        'allNoTap',
+                        const MapLayerPolicy({
+                          MapLayer.markers: MapLayerState.untappable,
+                          MapLayer.polygons: MapLayerState.untappable,
+                          MapLayer.selection: MapLayerState.untappable,
+                          MapLayer.userLocation: MapLayerState.untappable,
+                          MapLayer.route: MapLayerState.untappable,
+                        })),
+                  ]),
+                ),
+                Row(children: [
+                  const Text('polygons opacity  ',
+                      style: TextStyle(fontSize: 11)),
+                  Expanded(
+                    child: Slider(
+                      value: _polygonOpacity,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 10,
+                      label: _polygonOpacity.toStringAsFixed(1),
+                      onChanged: (v) {
+                        setState(() {
+                          _polygonOpacity = v;
+                          _polygonOverridden = true;
+                        });
+                        _unifiedMapController.setLayer(MapLayer.polygons,
+                            opacity: v);
+                      },
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _polygonOpacity = 1.0;
+                        _polygonOverridden = false;
+                      });
+                      _unifiedMapController.setLayer(MapLayer.polygons,
+                          clearOpacity: true);
+                    },
+                    child: const Text('clear', style: TextStyle(fontSize: 11)),
+                  ),
+                ]),
+                Row(children: [
+                  const Text('subSections opacity',
+                      style: TextStyle(fontSize: 11)),
+                  Expanded(
+                    child: Slider(
+                      value: _subSectionOpacity,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 10,
+                      label: _subSectionOpacity.toStringAsFixed(1),
+                      onChanged: (v) {
+                        setState(() {
+                          _subSectionOpacity = v;
+                          _subSectionOverridden = true;
+                        });
+                        _unifiedMapController.setLayer(MapLayer.subSections,
+                            opacity: v);
+                      },
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _subSectionOpacity = 1.0;
+                        _subSectionOverridden = false;
+                      });
+                      _unifiedMapController.setLayer(MapLayer.subSections,
+                          clearOpacity: true);
+                    },
+                    child: const Text('clear', style: TextStyle(fontSize: 11)),
+                  ),
+                ]),
+                Text('tap: $_lastTap',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: _tapCount == 0
+                            ? Colors.grey
+                            : Colors.green.shade800)),
               ],
             ),
           ),

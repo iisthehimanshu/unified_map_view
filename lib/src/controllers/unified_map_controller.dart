@@ -25,6 +25,8 @@ class UnifiedMapController extends ChangeNotifier {
 
   String? onReadyLandmarkSelectionID;
 
+  MapLayerPolicy _layerPolicy = MapLayerPolicy.all;
+
   UnifiedMapController({
     required MapProvider initialProvider,
     required Map<MapProvider, BaseMapProvider> providers,
@@ -51,13 +53,19 @@ class UnifiedMapController extends ChangeNotifier {
 
     String? url,
 
-    String languageCode = 'en'
+    String languageCode = 'en',
 
+    /// Which map content is drawn, how strongly, and what responds to taps.
+    ///
+    /// Applied as the layers are first created, so the map never briefly shows
+    /// content the host asked to hide. Change it later with [setLayers].
+    MapLayerPolicy layerPolicy = MapLayerPolicy.all,
   }) {
     AppConfig.url = url;
     AppConfig.setLanguage(value: languageCode);
     _providers.addAll(providers);
     _currentProvider = initialProvider;
+    _layerPolicy = layerPolicy;
 
     _config = MapConfig(
         initialLocation: initialLocation,
@@ -72,6 +80,7 @@ class UnifiedMapController extends ChangeNotifier {
       onPolygonTap: onPolygon??onPolygonTap,
       onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback,
       onVenueRendered: onVenueRendered,
+      initialLayerPolicy: layerPolicy,
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
@@ -300,6 +309,63 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> clearAllMarkersAllowOverlap() async {
     if (_currentMapController == null) return;
     await currentProviderImplementation.clearAllMarkersAllowOverlap(_currentMapController);
+  }
+
+  /// Which map content is currently drawn, how strongly, and what responds to
+  /// taps.
+  MapLayerPolicy get layerPolicy => _layerPolicy;
+
+  /// Replace the whole layer policy.
+  ///
+  /// ```dart
+  /// controller.setLayers(MapLayerPolicy.polygonsOnlyNoTap);
+  /// ```
+  Future<void> setLayers(MapLayerPolicy policy) => _pushLayerPolicy(policy);
+
+  /// Change one group, leaving every other group and every unspecified field
+  /// alone.
+  ///
+  /// Pass [clearOpacity] to drop an opacity override and hand the group back to
+  /// the renderer's own opacity — `opacity: null` cannot say that, because null
+  /// already means "leave unchanged".
+  Future<void> setLayer(
+    MapLayer group, {
+    bool? visible,
+    double? opacity,
+    bool? tappable,
+    bool clearOpacity = false,
+  }) {
+    final current = _layerPolicy.states[group] ?? const MapLayerState();
+    return _pushLayerPolicy(_layerPolicy.withGroup(
+      group,
+      current.copyWith(
+        visible: visible,
+        opacity: opacity,
+        tappable: tappable,
+        clearOpacity: clearOpacity,
+      ),
+    ));
+  }
+
+  /// Field-wise merge of [patch] into the current policy.
+  Future<void> updateLayers(MapLayerPolicy patch) =>
+      _pushLayerPolicy(_layerPolicy.merge(patch));
+
+  /// Restore every group to visible, tappable, and the renderer's own opacity.
+  Future<void> resetLayers() => _pushLayerPolicy(MapLayerPolicy.all);
+
+  Future<void> _pushLayerPolicy(MapLayerPolicy next) async {
+    if (next == _layerPolicy) return;
+    _layerPolicy = next;
+    // Mirror it into the config so a map that has not been created yet — and a
+    // map rebuilt by switchProvider, which drops _currentMapController — seeds
+    // its layers from the same value instead of the stale one.
+    _config = _config.copyWith(initialLayerPolicy: next);
+    if (_currentMapController != null) {
+      await currentProviderImplementation
+          .setLayerPolicy(_currentMapController, next);
+    }
+    notifyListeners();
   }
 
   /// Get current camera location
