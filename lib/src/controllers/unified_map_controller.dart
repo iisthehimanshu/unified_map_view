@@ -311,29 +311,48 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
     print("addGeoJsonFeatures ${StackTrace.current}");
     // Add polygons
+    //
+    // Grouped into boundary/other/section/subSection purely to control the
+    // paint order within `_polygons` (see the provider's per-type fill
+    // layers) — NOT because each group needs its own native push. addPolygons
+    // re-serializes and re-pushes the *entire* accumulated `_polygons` list on
+    // every call, so previously calling it once per group meant every floor
+    // switch re-pushed the whole polygon set 4 times over. Concatenating the
+    // groups first and pushing once preserves the exact same final order and
+    // paint order with a single native round trip.
     final polygons = GeoJsonLoader.extractPolygons(collection);
     final sectionPolygons = polygons.where((p) => p.properties?["type"] == "Section").toList();
     final subSection = polygons.where((p) => p.properties?["type"] == "SubSection").toList();
     final boundaryPolygons = polygons.where((p) => p.properties?["type"] == "Boundary").toList();
-    final otherPolygons = polygons.where((p) => !sectionPolygons.contains(p) && !boundaryPolygons.contains(p)).toList();
-    await addPolygons(boundaryPolygons);
-    await addPolygons(otherPolygons);
-    await addPolygons(sectionPolygons);
-    await addPolygons(subSection);
+    final otherPolygons = polygons.where((p) =>
+        !sectionPolygons.contains(p) &&
+        !subSection.contains(p) &&
+        !boundaryPolygons.contains(p)).toList();
+    await addPolygons([
+      ...boundaryPolygons,
+      ...otherPolygons,
+      ...sectionPolygons,
+      ...subSection,
+    ]);
 
     final polylines = GeoJsonLoader.extractPolylines(collection);
     await addPolylines(polylines);
 
+    // Same reasoning as polygons above: addMarkers pushes the whole
+    // accumulated marker set on every call, so these groups (kept for
+    // paint-order clarity) are merged into a single call/push instead of 4.
     final markers = GeoJsonLoader.extractMarkers(collection);
     final urlMarkers = markers.where((marker)=> (marker.assetPath != null && marker.assetPath!.contains("http"))).toList();
-    await addMarkers(urlMarkers);
     final localMarkers = markers.where((marker)=> !urlMarkers.contains(marker)).toList();
     final sectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "Section").toList();
     final subSectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "SubSection").toList();
     final normalMarker = localMarkers.where((marker) => !sectionMarkers.contains(marker) && !subSectionMarkers.contains(marker)).toList();
-    await addMarkers(normalMarker);
-    await addMarkers(sectionMarkers);
-    await addMarkers(subSectionMarkers);
+    await addMarkers([
+      ...urlMarkers,
+      ...normalMarker,
+      ...sectionMarkers,
+      ...subSectionMarkers,
+    ]);
 
     // Point features carrying a "3dRef" part list are rendered as extruded 3D
     // furniture. Whether they also get a marker is decided by the

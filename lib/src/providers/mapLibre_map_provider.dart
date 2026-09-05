@@ -335,6 +335,9 @@ class MaplibreMapProvider extends BaseMapProvider {
           // _animalIconCache are still valid and get reused, only the
           // addImage() registration needs to happen again).
           _loadedAnimalIcons.clear();
+          // Same reset for regular/customRendering marker icons — the loop
+          // below re-registers every current marker's icon from scratch.
+          _registeredMarkerIconIds.clear();
           _isCircleLayersEnabled = false;
           _isFurnitureLayerEnabled = false;
           _isFurnitureExtrusionAdded = false;
@@ -550,9 +553,19 @@ class MaplibreMapProvider extends BaseMapProvider {
         await _removeFurnitureExtrusionLayer(controller);
       }
       try {
+        // Full property set, not just `visibility`: setLayerProperties
+        // *replaces* the layer's whole paint property set rather than
+        // merging into it (see _customRenderingLayerProps/_fixedMarkerLayerProps
+        // for the same gotcha elsewhere in this file). A visibility-only call
+        // here wiped `fill-color`/`fill-outline-color`, and the style-spec
+        // default fill-color when unset is black — which is exactly why every
+        // piece of furniture rendered solid black the moment 2D mode was
+        // entered, regardless of its actual per-part color.
         await controller.setLayerProperties(
           _furnitureFillLayerId,
           FillLayerProperties(
+            fillColor: ['get', 'color'],
+            fillOutlineColor: ['get', 'color'],
             visibility: isEnabled ? "none" : "visible",
           ),
         );
@@ -823,8 +836,15 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     final startTime = DateTime.now();
     bool pushBusy = false;
-    const double peakScale = 2.2;
-    const double peakLabelScale = 1.6;
+    // These scale the *unselected* baseline icon/text size (see
+    // _normalIconLayerProps etc.), which was retuned down after previously
+    // being halved. peakLabelScale in particular was left at 1.6 through that
+    // retune, so tapping a marker grew its label 60% off an already-larger
+    // baseline than before — reading as the label "becoming too big" on
+    // selection. Trimmed both peaks down to keep the pop noticeable without
+    // overshooting.
+    const double peakScale = 1.8;
+    const double peakLabelScale = 1.3;
 
     Future<void> pushAnimatedFeature(double scale, double shakeDeg, double labelScale) async {
       if (pushBusy) return;
@@ -2476,6 +2496,26 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// another decode/addImage round trip.
   final Set<String> _loadedAnimalIcons = {};
 
+  /// Marker ids whose icon has already been fetched/composited/registered via
+  /// addImage() in the current style session (mirrors [_loadedAnimalIcons] for
+  /// non-animal markers). A floor switch removes a marker from `_symbols`/the
+  /// GeoJSON source but never un-registers its native image — so without this,
+  /// switching away from a floor and back re-fetched the source asset/network
+  /// image and re-ran the Canvas compositing for every one of its markers
+  /// every single time, even though the exact same image was already sitting
+  /// in the native style. This is what made floor switching visibly slower
+  /// the more floors/markers a venue had and the more a user bounced between
+  /// them. Cleared on style reload (which wipes addImage()) alongside
+  /// _loadedAnimalIcons.
+  final Set<String> _registeredMarkerIconIds = {};
+
+  /// Anchor computed by compositing, for a marker id already covered by
+  /// [_registeredMarkerIconIds]. A floor revisit gets a freshly-parsed
+  /// [GeoJsonMarker] instance (same id, new object) that never itself ran
+  /// through compositing, so the anchor has to be restored from here rather
+  /// than recomputed.
+  final Map<String, Offset> _markerIconAnchorCache = {};
+
   bool _isAnimalMarker(GeoJsonMarker marker) =>
       marker.customRendering && marker.properties?['animalRef'] != null;
 
@@ -2791,6 +2831,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
+    if (_registeredMarkerIconIds.contains(marker.id)) {
+      final cachedAnchor = _markerIconAnchorCache[marker.id];
+      if (cachedAnchor != null) marker.anchor = cachedAnchor;
+      return true;
+    }
     try {
       if (marker.customRendering) {
         // Museum POI marker: photo card + tail + dot + title, baked into one PNG.
@@ -2832,6 +2877,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             _addImageSafe(controller, "${marker.id}-selected", poiSelected.icon),
           ]);
           marker.anchor = poiMarker.anchor;
+          _markerIconAnchorCache[marker.id] = poiMarker.anchor;
+          _registeredMarkerIconIds.add(marker.id);
           return true;
         }
         if(marker.properties?['pathStop']??false){
@@ -2841,6 +2888,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             stopName: marker.properties?['stopName'] ?? "",
           );
           await _addImageSafe(controller, marker.id, iconBytes);
+          _registeredMarkerIconIds.add(marker.id);
           return true;
         }else{
           double fontSize = marker.properties?["fontSize"]??14.5;
@@ -2913,6 +2961,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             _addImageSafe(controller, "${marker.id}-small", iconBytes2),
           ]);
           marker.anchor = markerIconWithAnchorWithText.anchor;
+          _markerIconAnchorCache[marker.id] = markerIconWithAnchorWithText.anchor;
+          _registeredMarkerIconIds.add(marker.id);
           return true;
         }
       } else {
@@ -2926,6 +2976,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         }
         if (iconBytes != null) {
           await _addImageSafe(controller, marker.id, iconBytes);
+          _registeredMarkerIconIds.add(marker.id);
           return true;
         }
       }
@@ -3005,9 +3056,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       SymbolLayerProperties(
         symbolSortKey: ["+", sortBase, _kSortKeyExpression],
         iconImage: ["get", "icon"],
-        // Halved (was 0.8). Covers the ordinary landmark icons — lift, entry,
-        // washroom and the rest — for both the with/without-sectionId layers.
-        iconSize: 0.4,
+        // Was 0.8, halved to 0.4 to stop icons dominating the floor plan —
+        // that overshot and read as "too small". 0.55 splits the difference.
+        iconSize: 0.8,
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
@@ -3079,12 +3130,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         textAnchor: "center",
         textAllowOverlap: false,
         iconImage: ["get", "icon"],
+        // Was 1.0, halved to 0.5 alongside the other layers — bumped back up
+        // to 0.65 to match the rest of the retune below.
         iconSize: [
           "interpolate",
           ["linear"],
           ["zoom"],
           18, 0.0,
-          22.0, 0.5,
+          22.0, 1.0,
         ],
         iconAnchor: ["get", "iconAnchor"],
         iconOpacity: [
@@ -3407,7 +3460,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 7000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          iconSize: 0.4, // halved (was 0.8)
+          iconSize: 0.8, // restored to original — see Layer 2
           iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
@@ -3455,7 +3508,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           SymbolLayerProperties(
             symbolSortKey: ["+", 6000, _kSortKeyExpression],
             iconImage: ["get", "icon"],
-            iconSize: 0.75, // halved (was 1.5) — subSection markers
+            iconSize: 1.5, // restored to original — subSection markers
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
@@ -3493,9 +3546,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 9000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          // Halved (was 1.5) to match the collision dots — the user arrow was
-          // dominating the floor plan it is meant to sit on.
-          iconSize: 0.75,
+          // Restored to the original 1.5 — halving it (twice-corrected down
+          // to 0.75, then 1.0) still read as too small.
+          iconSize: 1.5,
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,
@@ -3511,9 +3564,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 5000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          // Halved (was 1.5): same standalone-pin class as the user and
-          // selected markers, so it keeps the same visual weight as those.
-          iconSize: 0.75,
+          // Same standalone-pin class as the user marker above — kept in
+          // step with it (restored to 1.5).
+          iconSize: 1.5,
           iconAllowOverlap: true,
           textAllowOverlap: false,
         ),
@@ -3536,7 +3589,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 15000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          iconSize: 0.4, // halved (was 0.8) — overlap-override markers
+          iconSize: 0.8, // restored to original — keep in step with Layer 2
           iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
@@ -3604,7 +3657,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             "",
             ["get", "title"],
           ],
-          textSize: ["*", 14, 1.6], // keep this number equal to peakLabelScale above
+          textSize: ["*", 14, 1.3], // keep this number equal to peakLabelScale above
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
           textHaloWidth: 1.5,
@@ -4002,7 +4055,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       SymbolLayerProperties(
         symbolSortKey: ["+", 7000, _kSortKeyExpression],
         iconImage: ["get", "icon"],
-        iconSize: 0.4, // halved (was 0.8) — keep in step with the add above
+        iconSize: 0.8, // restored to original — keep in step with the add above
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
