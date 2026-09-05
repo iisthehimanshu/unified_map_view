@@ -22,7 +22,19 @@ class PredefinedMarkers{
     );
   }
 
-  static GeoJsonMarker getUserMarker(MapLocation location, String id){
+  /// The user puck.
+  ///
+  /// [style] lets a host swap the puck's artwork at runtime — pass null (the
+  /// default) for the stock blue arrow. It is deliberately generic: any asset
+  /// path the root bundle can resolve works, including one shipped by another
+  /// package as `packages/<name>/...`. Applied here rather than at the call
+  /// sites because this is the single place the puck marker is built, so an
+  /// override automatically survives the marker being re-created on a floor
+  /// change.
+  static GeoJsonMarker getUserMarker(MapLocation location, String id,
+      {UserMarkerStyle? style}){
+    print("getUserMarker: asset=${style?.assetPath ?? LandmarkAssetType.user.assetPath} "
+        "size=${style?.imageSize ?? const Size(35, 35)} (override=${style != null})");
     return GeoJsonMarker(
         id: id,
         position: location,
@@ -45,7 +57,7 @@ class PredefinedMarkers{
       anchor: LandmarkAssetType.user.anchor,
       renderAnchor: Offset(0.5, 0.5),
       // renderAnchor: Offset(0.515, 0.66),
-      compassBasedRotation: true,
+      compassBasedRotation: style?.compassBasedRotation ?? true,
       customRendering: true
     );
   }
