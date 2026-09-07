@@ -806,16 +806,53 @@ class UnifiedMapController extends ChangeNotifier {
     return _annotationController.addMultiPathGraph(path.map((map)=>Cell.fromJson(map)).toList());
   }
 
+  /// Whether drawing a path dims the rest of the map.
+  ///
+  /// Null means "use the venue's default", which is the historical behaviour:
+  /// on for zoo themes, off everywhere else. Set it explicitly to override that
+  /// per venue.
+  bool? _mapFadeOnPath;
+
+  /// Whether [annotatePath] will dim the map, taking the host override into
+  /// account and otherwise falling back to the theme default.
+  bool get mapFadeOnPath => _mapFadeOnPath ?? RenderingTheme.current.isZoo;
+
+  /// Turn the path map-fade on or off.
+  ///
+  /// The fade dims everything outside the drawn route so the path reads
+  /// clearly; it is applied by [annotatePath] and lifted by [clearPath]. Pass
+  /// null to hand the decision back to the venue's theme default.
+  ///
+  /// Takes effect on the NEXT [annotatePath]; it does not add or remove the
+  /// fade on a route that is already drawn — use [setMapFade] for that.
+  void setMapFadeOnPath(bool? enabled) {
+    _mapFadeOnPath = enabled;
+    notifyListeners();
+  }
+
+  /// Apply or lift the map fade right now, independently of any path.
+  Future<void> setMapFade(bool faded) async {
+    if (_currentMapController == null) return;
+    await (faded
+        ? currentProviderImplementation.addMapFade(_currentMapController)
+        : currentProviderImplementation.removeMapFade(_currentMapController));
+  }
+
   Future<void> clearPath() async {
     _annotationController.clearPath();
-    if(RenderingTheme.current.isZoo)await currentProviderImplementation.removeMapFade(_currentMapController);
+    // Lift the fade whenever one could be up. Deliberately NOT gated on the
+    // current toggle: a host that turns the toggle off while a faded path is
+    // drawn must still get the fade cleared, or the map stays dimmed forever.
+    await currentProviderImplementation.removeMapFade(_currentMapController);
     notifyListeners();
   }
 
   Future<void> annotatePath({required List<String> bids, required int sourceFloor, bool isTour = false}) async {
     deSelectLocation();
     _annotationController.isTourPath = isTour;
-    if(RenderingTheme.current.isZoo)await currentProviderImplementation.addMapFade(_currentMapController);
+    if (mapFadeOnPath) {
+      await currentProviderImplementation.addMapFade(_currentMapController);
+    }
     for (var bid in bids) {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }

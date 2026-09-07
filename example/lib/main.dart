@@ -15,7 +15,7 @@ void main() async {
   MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
   MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
   MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
-  await UnifiedMapViewPackage.initialize(venueName: 'NationalZoologicalPark');
+  await UnifiedMapViewPackage.initialize(venueName: 'AIGHospital');
   runApp(const GeoJsonExampleApp());
 }
 
@@ -52,6 +52,10 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   double _polygonOpacity = 1.0;
   bool _polygonOverridden = false;
 
+  /// Mirrors controller.mapFadeOnPath so the switch shows the effective value,
+  /// including the theme default before the host overrides it.
+  bool _fadeOnPath = false;
+
   Timer? _moveUserTimer;
 
   // Demo user marker ID
@@ -68,40 +72,41 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
   int _currentRouteIndex = 0;
 
-  /// Marker types currently allowed through, empty means "no filter active".
-  final Set<LandmarkAssetType> _markerTypes = {};
+  /// Raw marker types currently allowed through; empty means "no filter".
+  final Set<String> _markerTypes = {};
 
-  /// The types this harness exposes — the amenity set a host would realistically
-  /// let a user toggle.
-  static const Map<String, LandmarkAssetType> _typeChoices = {
-    'washroom': LandmarkAssetType.washroom,
-    'female WC': LandmarkAssetType.femaleWashroom,
-    'male WC': LandmarkAssetType.maleWashroom,
-    'lift': LandmarkAssetType.lift,
-    'stairs': LandmarkAssetType.stairs,
-    'escalator': LandmarkAssetType.escalator,
-    'ramp': LandmarkAssetType.ramp,
-    'first aid': LandmarkAssetType.firstAid,
-  };
+  /// What this venue actually contains. Populated from the map once markers
+  /// have loaded — deliberately NOT a hardcoded list, because the vocabulary is
+  /// per-venue (this one has Male/Female Washroom and no generic Washroom at
+  /// all, and no lifts whatsoever).
+  List<MarkerTypeInfo> _availableTypes = const [];
 
-  Future<void> _toggleMarkerType(LandmarkAssetType type) async {
+  Future<void> _refreshAvailableTypes() async {
+    final types = _unifiedMapController.availableMarkerTypes;
+    setState(() => _availableTypes = types);
+    print('HARNESS available types -> '
+        '${types.map((t) => "${t.rawType}(${t.count})").join(", ")}');
+  }
+
+  Future<void> _toggleMarkerType(String rawType) async {
     setState(() {
-      if (!_markerTypes.remove(type)) _markerTypes.add(type);
+      if (!_markerTypes.remove(rawType)) _markerTypes.add(rawType);
     });
     await _unifiedMapController
         .showMarkerTypes(_markerTypes.isEmpty ? null : _markerTypes);
     print('HARNESS marker types -> '
-        '${_markerTypes.isEmpty ? "ALL" : _markerTypes.map((t) => t.name).join(",")}');
+        '${_markerTypes.isEmpty ? "ALL" : _markerTypes.join(",")}');
   }
 
-  Widget _typeChip(String label, LandmarkAssetType type) {
-    final on = _markerTypes.contains(type);
+  Widget _typeChip(MarkerTypeInfo info) {
+    final on = _markerTypes.contains(info.rawType);
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: FilterChip(
-        label: Text(label, style: const TextStyle(fontSize: 11)),
+        label: Text('${info.rawType} (${info.count})',
+            style: const TextStyle(fontSize: 11)),
         selected: on,
-        onSelected: (_) => _toggleMarkerType(type),
+        onSelected: (_) => _toggleMarkerType(info.rawType),
         visualDensity: VisualDensity.compact,
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
@@ -113,7 +118,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'NationalZoologicalPark',
+        venueName: 'AIGHospital',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
@@ -426,20 +431,37 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(children: [
+                    TextButton(
+                      onPressed: () => _unifiedMapController.setMapFade(true),
+                      child: const Text('fade now',
+                          style: TextStyle(fontSize: 11)),
+                    ),
+                    TextButton(
+                      onPressed: () => _unifiedMapController.setMapFade(false),
+                      child: const Text('unfade',
+                          style: TextStyle(fontSize: 11)),
+                    ),
+                    const SizedBox(width: 12),
                     const Text('types: ',
                         style: TextStyle(
                             fontSize: 11, fontWeight: FontWeight.bold)),
-                    ..._typeChoices.entries
-                        .map((e) => _typeChip(e.key, e.value)),
-                    TextButton(
-                      onPressed: () async {
-                        setState(_markerTypes.clear);
-                        await _unifiedMapController.clearMarkerTypeFilter();
-                        print('HARNESS marker types -> ALL');
-                      },
-                      child: const Text('all types',
-                          style: TextStyle(fontSize: 11)),
-                    ),
+                    if (_availableTypes.isEmpty)
+                      TextButton(
+                        onPressed: _refreshAvailableTypes,
+                        child: const Text('load types',
+                            style: TextStyle(fontSize: 11)),
+                      ),
+                    ..._availableTypes.map(_typeChip),
+                    if (_availableTypes.isNotEmpty)
+                      TextButton(
+                        onPressed: () async {
+                          setState(_markerTypes.clear);
+                          await _unifiedMapController.clearMarkerTypeFilter();
+                          print('HARNESS marker types -> ALL');
+                        },
+                        child: const Text('all types',
+                            style: TextStyle(fontSize: 11)),
+                      ),
                   ]),
                 ),
                 SingleChildScrollView(

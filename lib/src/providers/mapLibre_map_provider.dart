@@ -229,6 +229,30 @@ class MaplibreMapProvider extends BaseMapProvider {
   final Map<String, LayerProperties Function(_OpacityResolver)> _propBuilders =
       {};
 
+  /// How to REBUILD a layer that `setLayerProperties` cannot touch.
+  ///
+  /// maplibre_gl's Android `layer#setProperties` handler is an if-chain over
+  /// Line/Fill/Circle/Symbol/Raster/Hillshade and falls through to
+  /// `UNSUPPORTED_LAYER_TYPE` for anything else — so **every fill-extrusion
+  /// layer silently rejects every property push**, opacity included. That is a
+  /// plugin gap, not something this file can set differently.
+  ///
+  /// The way through is the one already used for `patch-above-markers-layer`:
+  /// remove the layer and add it again with the properties we want. Each entry
+  /// re-adds one layer with its original source, filter, anchor and zoom range —
+  /// those MUST match the creation call or the layer silently changes z-order or
+  /// stops matching features.
+  final Map<String, Future<void> Function()> _layerReAdders = {};
+
+  /// Last opacity actually pushed through a re-adder, per layer.
+  ///
+  /// A re-add is a remove + add of a real layer — visibly a flicker, and far
+  /// more expensive than setting a property. [_applyLayerPolicy] runs on far
+  /// more than opacity changes (selection, camera idle, furniture setup), so
+  /// without this every one of those rebuilds all three extrusion layers for no
+  /// change at all. Keyed absent = never pushed.
+  final Map<String, double?> _reAddedOpacity = {};
+
   /// Layers we have written a policy value to at least once.
   ///
   /// [_applyLayerPolicy] skips layers whose resolved state is the default, so a
@@ -311,7 +335,32 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Wrapped per layer: `furniture-layer`, `patch-above-markers-layer` and
   /// `section-markers-layer` are removed and re-added at runtime, so a write can
   /// legitimately land on a layer that does not exist right now.
+  /// Tail of the serialised chain of policy applies.
+  ///
+  /// Applies MUST NOT interleave. A fill-extrusion layer is updated by removing
+  /// and re-adding it (see [_layerReAdders]), so two overlapping applies run
+  /// remove(A) → remove(B) → add(A) → add(B), and the second add throws
+  /// `CannotAddLayerException: already exists`. An opacity slider produces
+  /// exactly that overlap, several times a second.
+  ///
+  /// Chaining rather than dropping: the last value dragged to is the one that
+  /// must end up applied, so every request has to run, just strictly in order.
+  Future<void>? _policyApplyChain;
+
   Future<void> _applyLayerPolicy(
+    MapLibreMapController controller, {
+    Iterable<String>? only,
+    bool force = false,
+  }) {
+    final next = (_policyApplyChain ?? Future<void>.value())
+        .then((_) => _applyLayerPolicyOnce(controller, only: only, force: force));
+    // The chain must survive a failed link, or one error strands every later
+    // apply behind it.
+    _policyApplyChain = next.catchError((_) {});
+    return next;
+  }
+
+  Future<void> _applyLayerPolicyOnce(
     MapLibreMapController controller, {
     Iterable<String>? only,
     bool force = false,
@@ -325,10 +374,29 @@ class MaplibreMapProvider extends BaseMapProvider {
       if (!force && isDefault && !_everApplied.contains(id)) continue;
       if (!isDefault) _everApplied.add(id);
       try {
-        await controller.setLayerProperties(
-            id, build((base) => state.opacity ?? base));
-      } catch (_) {
-        // Layer not present right now (furniture in 2D, or mid re-add).
+        final reAdd = _layerReAdders[id];
+        if (reAdd != null) {
+          // Fill-extrusion: setLayerProperties would throw
+          // UNSUPPORTED_LAYER_TYPE, so rebuild the layer instead. The builder
+          // registered for it reads the live policy, so the re-add picks up the
+          // override on its own.
+          if (_reAddedOpacity.containsKey(id) &&
+              _reAddedOpacity[id] == state.opacity) {
+            continue; // nothing changed — do not pay a rebuild
+          }
+          await reAdd();
+          _reAddedOpacity[id] = state.opacity;
+          print('layer policy: $id rebuilt <- opacity ${state.opacity}');
+        } else {
+          await controller.setLayerProperties(
+              id, build((base) => state.opacity ?? base));
+        }
+      } catch (e) {
+        // Usually benign: the layer is not present right now (furniture in 2D,
+        // or mid re-add). It was swallowed silently, which also hid real
+        // failures — a push that throws here is indistinguishable from one that
+        // worked, and the group simply never changes.
+        print('layer policy: $id push failed: $e');
       }
     }
   }
@@ -601,6 +669,9 @@ class MaplibreMapProvider extends BaseMapProvider {
               _isCircleLayersEnabled = false;
               _isFurnitureLayerEnabled = false;
               _isFurnitureExtrusionAdded = false;
+              // The layers this was building are gone with the style, so a
+              // fresh setup must be allowed to start rather than joining it.
+              _furnitureLayerSetup = null;
               // Every layer is about to be rebuilt, and each builder closes over
               // the fade zoom and 2D/3D mode of the style it was registered
               // under — so the stale ones must go. `_policy` deliberately does
@@ -609,6 +680,10 @@ class MaplibreMapProvider extends BaseMapProvider {
               // the state the host asked for.
               _propBuilders.clear();
               _everApplied.clear();
+              // These close over layers the style reload just destroyed; the
+              // re-creation below registers fresh ones.
+              _layerReAdders.clear();
+              _reAddedOpacity.clear();
 
               // Re-register all marker icons — style reload wipes addImage() calls
               //
@@ -869,33 +944,18 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.animateCamera(CameraUpdate.tiltTo(targetTilt));
 
     // Explicitly disable extrusion rendering in 2D to avoid any residual shading.
-    try {
-      await controller.setLayerProperties(
-        _selectedExtrudedPolygonLayerId,
-        _layerProps(_selectedExtrudedPolygonLayerId,
-            (op) => FillExtrusionLayerProperties(
-          visibility: _visibility(_selectedExtrudedPolygonLayerId),
-          fillExtrusionColor: "#4CAF50",
-          fillExtrusionHeight: ["get", "height"],
-          fillExtrusionBase: ["get", "base_height"],
-          // The 2D zero is an internal off and wins over a host override.
-          fillExtrusionOpacity: isEnabled ? op(1.0) : 0.0,
-        )),
-      );
-    } catch (_) {}
-    try {
-      await controller.setLayerProperties(
-        _extrudedPolygonLayerId,
-        _layerProps(_extrudedPolygonLayerId,
-            (op) => FillExtrusionLayerProperties(
-          visibility: _visibility(_extrudedPolygonLayerId),
-          fillExtrusionColor: ["get", "fillColor"],
-          fillExtrusionHeight: ["get", "height"],
-          fillExtrusionBase: ["get", "base_height"],
-          fillExtrusionOpacity: isEnabled ? op(1.0) : 0.0,
-        )),
-      );
-    } catch (_) {}
+    // Both of these are fill-extrusion layers, so setLayerProperties is
+    // rejected with UNSUPPORTED_LAYER_TYPE — it always was, silently, under the
+    // bare catches that used to be here. Rebuilding is the only way to change
+    // them, and the registered builders read `_config.immersive`, which was
+    // updated above, so the re-add picks up the new mode by itself.
+    for (final id in [_selectedExtrudedPolygonLayerId, _extrudedPolygonLayerId]) {
+      try {
+        await _layerReAdders[id]?.call();
+      } catch (e) {
+        print('set3DViewEnabled: rebuild of $id failed: $e');
+      }
+    }
     try {
       // Full property set. This used to send `visibility` alone, which — given
       // setLayerProperties replaces rather than merges — also reset this
@@ -1979,7 +2039,27 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> _enableFurnitureLayer(MapLibreMapController controller) async {
+  /// Setup currently in progress, so concurrent callers await it instead of
+  /// each starting their own.
+  ///
+  /// `_isFurnitureLayerEnabled` alone cannot do this: it is set at the END of
+  /// [_enableFurnitureLayerOnce], several awaits after the guard reads it, so
+  /// two callers both pass the guard and both add the source and layers. There
+  /// ARE two — [addFurniture] and onStyleLoadedCallback — and the loser threw
+  /// `CannotAddLayerException: Layer furniture-fill-layer already exists`
+  /// UNHANDLED (neither call site catches), taking the app down on any venue
+  /// that actually has furniture. The zoo has none, which is why this only
+  /// surfaced on a hospital.
+  Future<void>? _furnitureLayerSetup;
+
+  Future<void> _enableFurnitureLayer(MapLibreMapController controller) {
+    if (_isFurnitureLayerEnabled) return Future<void>.value();
+    return _furnitureLayerSetup ??= _enableFurnitureLayerOnce(controller)
+        .whenComplete(() => _furnitureLayerSetup = null);
+  }
+
+  Future<void> _enableFurnitureLayerOnce(
+      MapLibreMapController controller) async {
     if (_isFurnitureLayerEnabled) return;
 
     await controller.addSource(
@@ -2015,6 +2095,21 @@ class MaplibreMapProvider extends BaseMapProvider {
       ),
     );
 
+    // Drop any survivor before adding. `_isFurnitureLayerEnabled` is reset in
+    // onStyleLoadedCallback on the assumption the style was replaced and took
+    // every layer with it — but that callback can fire again WITHOUT a style
+    // swap, leaving the flag saying "no layers" while the layers are still
+    // there. The add then threw CannotAddLayerException, unhandled, because the
+    // onStyleLoaded call site has no catch. removeLayer no-ops when the layer is
+    // absent, so this is free in the normal case.
+    //
+    // addSource above needs no equivalent: the plugin already logs
+    // "source with id 'furniture-source' already exists, skipping" and carries
+    // on rather than throwing.
+    try {
+      await controller.removeLayer(_furnitureFillLayerId);
+    } catch (_) {}
+
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
     await controller.addFillLayer(
@@ -2049,6 +2144,12 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _addFurnitureExtrusionLayer(
       MapLibreMapController controller) async {
     if (!_isFurnitureLayerEnabled || _isFurnitureExtrusionAdded) return;
+    // Same stale-flag hazard as the flat fill layer: _isFurnitureExtrusionAdded
+    // is reset in onStyleLoadedCallback, which can fire without the style
+    // actually being replaced. See the note there.
+    try {
+      await controller.removeLayer(_furnitureLayerId);
+    } catch (_) {}
     await controller.addFillExtrusionLayer(
       _furnitureSourceId,
       _furnitureLayerId,
@@ -2062,6 +2163,23 @@ class MaplibreMapProvider extends BaseMapProvider {
       minzoom: _furnitureMinZoom,
     );
     _isFurnitureExtrusionAdded = true;
+    // Same plugin gap as the polygon extrusions: setLayerProperties rejects
+    // fill-extrusion layers, so policy changes have to rebuild this one.
+    _layerReAdders[_furnitureLayerId] = () async {
+      await controller.removeLayer(_furnitureLayerId);
+      await controller.addFillExtrusionLayer(
+        _furnitureSourceId,
+        _furnitureLayerId,
+        _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
+              visibility: _visibility(_furnitureLayerId),
+              fillExtrusionColor: ['get', 'color'],
+              fillExtrusionBase: ['get', 'base'],
+              fillExtrusionHeight: ['get', 'height'],
+              fillExtrusionOpacity: op(null),
+            )),
+        minzoom: _furnitureMinZoom,
+      );
+    };
     await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
   }
 
@@ -2070,6 +2188,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _removeFurnitureExtrusionLayer(
       MapLibreMapController controller) async {
     if (!_isFurnitureExtrusionAdded) return;
+    // Removing the re-adder matters: _applyLayerPolicy would otherwise rebuild
+    // the extrusion we are deliberately taking away for 2D.
+    _layerReAdders.remove(_furnitureLayerId);
     try {
       await controller.removeLayer(_furnitureLayerId);
     } catch (_) {}
@@ -3893,6 +4014,30 @@ class MaplibreMapProvider extends BaseMapProvider {
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
       );
+      _layerReAdders[_selectedExtrudedPolygonLayerId] = () async {
+        await controller.removeLayer(_selectedExtrudedPolygonLayerId);
+        await controller.addFillExtrusionLayer(
+          _polygonSourceId,
+          _selectedExtrudedPolygonLayerId,
+          _layerProps(_selectedExtrudedPolygonLayerId,
+              (op) => FillExtrusionLayerProperties(
+                    visibility: _visibility(_selectedExtrudedPolygonLayerId),
+                    fillExtrusionColor: "#4CAF50",
+                    fillExtrusionHeight: ["get", "height"],
+                    fillExtrusionBase: ["get", "base_height"],
+                    fillExtrusionOpacity:
+                        _config.immersive ? op(1.0) : 0.0,
+                  )),
+          filter: [
+            "all",
+            ['has', 'height'],
+            ["to-boolean", ["get", "isSelected"]],
+          ],
+          enableInteraction: true,
+          belowLayerId: await _webSafeBelowLayerId(
+              controller, _subSectionPolygonLayerId),
+        );
+      };
 
       /// 4️⃣ EXTRUDED
       await controller.addFillExtrusionLayer(
@@ -3913,6 +4058,29 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
         belowLayerId: await _webSafeBelowLayerId(controller, _selectedPlainPolygonLayerId),
       );
+      _layerReAdders[_extrudedPolygonLayerId] = () async {
+        await controller.removeLayer(_extrudedPolygonLayerId);
+        await controller.addFillExtrusionLayer(
+          _polygonSourceId,
+          _extrudedPolygonLayerId,
+          _layerProps(_extrudedPolygonLayerId,
+              (op) => FillExtrusionLayerProperties(
+                    visibility: _visibility(_extrudedPolygonLayerId),
+                    fillExtrusionColor: ["get", "fillColor"],
+                    fillExtrusionHeight: ["get", "height"],
+                    fillExtrusionBase: ["get", "base_height"],
+                    fillExtrusionOpacity:
+                        _config.immersive ? op(1.0) : 0.0,
+                  )),
+          filter: [
+            "all",
+            ['has', 'height'],
+            ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ],
+          belowLayerId: await _webSafeBelowLayerId(
+              controller, _selectedPlainPolygonLayerId),
+        );
+      };
 
       /// 5️⃣ NORMAL
       await controller.addFillLayer(
