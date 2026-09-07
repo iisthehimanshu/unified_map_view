@@ -287,13 +287,6 @@ class MapLayerPolicy {
     MapLayer.selection: MapLayerState.untappable,
   });
 
-  /// Markers only. Polygons, route and furniture are hidden.
-  static const MapLayerPolicy markersOnly = MapLayerPolicy({
-    MapLayer.polygons: MapLayerState.hidden,
-    MapLayer.route: MapLayerState.hidden,
-    MapLayer.furniture: MapLayerState.hidden,
-  });
-
   bool get isEmpty => states.isEmpty;
 
   /// This policy with [group] set to [state], replacing any existing entry.

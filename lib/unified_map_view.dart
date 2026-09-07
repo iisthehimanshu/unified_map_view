@@ -23,6 +23,8 @@ export 'src/models/user.dart';
 export 'src/models/user_marker_style.dart';
 export 'src/models/CameraBound.dart';
 export 'src/models/map_layer.dart';
+export 'src/utils/LandmarkAssetType.dart';
+export 'src/models/marker_type_info.dart';
 
 // Controllers
 export 'src/controllers/unified_map_controller.dart';

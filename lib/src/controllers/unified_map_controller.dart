@@ -9,6 +9,7 @@ import 'package:unified_map_view/src/utils/perf_trace.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
+import '../utils/LandmarkAssetType.dart';
 
 /// Main controller for managing map providers and operations
 class UnifiedMapController extends ChangeNotifier {
@@ -310,6 +311,51 @@ class UnifiedMapController extends ChangeNotifier {
     if (_currentMapController == null) return;
     await currentProviderImplementation.clearAllMarkersAllowOverlap(_currentMapController);
   }
+
+  /// The landmark types currently drawn, or null when every type is drawn.
+  Set<String>? get markerTypeFilter =>
+      _markerTypeFilter == null ? null : Set.unmodifiable(_markerTypeFilter!);
+  Set<String>? _markerTypeFilter;
+
+  /// Every landmark type the loaded venue actually contains, commonest first.
+  ///
+  /// Build the type UI from THIS rather than a hardcoded list — the vocabulary
+  /// is per-venue. One venue has `Male Washroom`/`Female Washroom` and no
+  /// generic `Washroom` at all; another has neither. A fixed list shows dead
+  /// options on one venue and silently misses types on the next.
+  ///
+  /// ```dart
+  /// for (final t in controller.availableMarkerTypes) {
+  ///   chips.add(Chip(label: Text('${t.rawType} (${t.count})')));
+  /// }
+  /// ```
+  ///
+  /// Empty until markers have loaded — read it after the venue is rendered.
+  List<MarkerTypeInfo> get availableMarkerTypes =>
+      currentProviderImplementation.availableMarkerTypes();
+
+  /// Draw only the markers whose landmark type is in [types].
+  ///
+  /// Types are the raw GeoJSON spellings reported by [availableMarkerTypes];
+  /// matching is case- and whitespace-insensitive, so `'Male Washroom'` matches
+  /// data spelling it `'male washroom'`.
+  ///
+  /// ```dart
+  /// controller.showMarkerTypes({'Male Washroom', 'First Aid'});
+  /// ```
+  ///
+  /// Source and destination pins are always drawn, filter or not. Passing an
+  /// empty set hides every other marker; pass null, or call
+  /// [clearMarkerTypeFilter], to draw them all again.
+  Future<void> showMarkerTypes(Set<String>? types) async {
+    _markerTypeFilter = types == null ? null : Set.of(types);
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setMarkerTypeFilter(
+        _currentMapController, _markerTypeFilter);
+  }
+
+  /// Draw every marker type again, undoing [showMarkerTypes].
+  Future<void> clearMarkerTypeFilter() => showMarkerTypes(null);
 
   /// Which map content is currently drawn, how strongly, and what responds to
   /// taps.

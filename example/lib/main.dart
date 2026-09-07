@@ -68,6 +68,46 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
   int _currentRouteIndex = 0;
 
+  /// Marker types currently allowed through, empty means "no filter active".
+  final Set<LandmarkAssetType> _markerTypes = {};
+
+  /// The types this harness exposes — the amenity set a host would realistically
+  /// let a user toggle.
+  static const Map<String, LandmarkAssetType> _typeChoices = {
+    'washroom': LandmarkAssetType.washroom,
+    'female WC': LandmarkAssetType.femaleWashroom,
+    'male WC': LandmarkAssetType.maleWashroom,
+    'lift': LandmarkAssetType.lift,
+    'stairs': LandmarkAssetType.stairs,
+    'escalator': LandmarkAssetType.escalator,
+    'ramp': LandmarkAssetType.ramp,
+    'first aid': LandmarkAssetType.firstAid,
+  };
+
+  Future<void> _toggleMarkerType(LandmarkAssetType type) async {
+    setState(() {
+      if (!_markerTypes.remove(type)) _markerTypes.add(type);
+    });
+    await _unifiedMapController
+        .showMarkerTypes(_markerTypes.isEmpty ? null : _markerTypes);
+    print('HARNESS marker types -> '
+        '${_markerTypes.isEmpty ? "ALL" : _markerTypes.map((t) => t.name).join(",")}');
+  }
+
+  Widget _typeChip(String label, LandmarkAssetType type) {
+    final on = _markerTypes.contains(type);
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: FilterChip(
+        label: Text(label, style: const TextStyle(fontSize: 11)),
+        selected: on,
+        onSelected: (_) => _toggleMarkerType(type),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -386,11 +426,29 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(children: [
+                    const Text('types: ',
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.bold)),
+                    ..._typeChoices.entries
+                        .map((e) => _typeChip(e.key, e.value)),
+                    TextButton(
+                      onPressed: () async {
+                        setState(_markerTypes.clear);
+                        await _unifiedMapController.clearMarkerTypeFilter();
+                        print('HARNESS marker types -> ALL');
+                      },
+                      child: const Text('all types',
+                          style: TextStyle(fontSize: 11)),
+                    ),
+                  ]),
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
                     _presetChip('all', MapLayerPolicy.all),
                     _presetChip('polygonsOnly', MapLayerPolicy.polygonsOnly),
                     _presetChip(
                         'polygonsOnlyNoTap', MapLayerPolicy.polygonsOnlyNoTap),
-                    _presetChip('markersOnly', MapLayerPolicy.markersOnly),
                     // Control for the tap gate: pixel-identical to `all`, but
                     // every group inert. Isolates tappability from visibility.
                     _presetChip(
@@ -437,25 +495,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                   ),
                 ]),
                 Row(children: [
-                  const Text('subSections opacity',
-                      style: TextStyle(fontSize: 11)),
-                  Expanded(
-                    child: Slider(
-                      value: _subSectionOpacity,
-                      min: 0.0,
-                      max: 1.0,
-                      divisions: 10,
-                      label: _subSectionOpacity.toStringAsFixed(1),
-                      onChanged: (v) {
-                        setState(() {
-                          _subSectionOpacity = v;
-                          _subSectionOverridden = true;
-                        });
-                        _unifiedMapController.setLayer(MapLayer.subSections,
-                            opacity: v);
-                      },
-                    ),
-                  ),
                   TextButton(
                     onPressed: () {
                       setState(() {

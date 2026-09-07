@@ -95,13 +95,6 @@ void main() {
       expect(p.resolve(MapLayer.extrusions).tappable, isFalse);
     });
 
-    test('markersOnly hides polygons and route', () {
-      const p = MapLayerPolicy.markersOnly;
-      expect(p.resolve(MapLayer.rooms).visible, isFalse);
-      expect(p.resolve(MapLayer.routeLine).visible, isFalse);
-      expect(p.resolve(MapLayer.landmarkMarkers).visible, isTrue);
-    });
-
     test('all is the empty policy', () {
       expect(MapLayerPolicy.all.isEmpty, isTrue);
       for (final leaf in MapLayer.allLeaves) {

@@ -26,6 +26,8 @@ import '../models/geojson_models.dart';
 import '../models/map_layer.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:http/http.dart' as http;
+import '../utils/LandmarkAssetType.dart';
+import '../models/marker_type_info.dart';
 
 /// Substitutes a host's absolute opacity override for the value a layer would
 /// natively use. Returns [base] unchanged when no override applies.
@@ -108,6 +110,23 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// collision, until cleared.
   final Set<String> _overlapOverrideIds = {};
 
+  /// Landmark types the host wants drawn, normalised, or null for "draw
+  /// everything".
+  ///
+  /// Holds raw GeoJSON type strings rather than [LandmarkAssetType] because the
+  /// vocabulary is per-venue: the enum is an *icon* choice, it collapses
+  /// distinct types onto one asset (`entry`/`entrance`/`exit` all become
+  /// [LandmarkAssetType.mainEntry]) and resolves to null for anything it has no
+  /// case for, so it can neither address every type a venue has nor tell two of
+  /// them apart.
+  ///
+  /// Applied where the cluster source is built rather than as a per-layer
+  /// filter: a filtered-out marker is then absent from the source entirely, so
+  /// it takes no part in MapLibre's collision pass. A layer filter would leave
+  /// it competing for space and suppressing neighbours it is no longer drawn
+  /// next to — and it would have to be repeated across all ten marker layers.
+  Set<String>? _markerTypeFilter;
+
   final String _rotationSourceId = 'rotation-markers-source';
   final String _rotationMarkerLayerId = 'rotation-marker-layer';
 
@@ -173,10 +192,10 @@ class MaplibreMapProvider extends BaseMapProvider {
     // polygons
     _normalPolygonLayerId: MapLayer.rooms,
     _patternPolygonLayerId: MapLayer.rooms,
-    _sectionPolygonLayerId: MapLayer.sections,
-    _subSectionPolygonLayerId: MapLayer.subSections,
-    _patchBelowPolygonLayerId: MapLayer.venueBoundary,
-    _patchAbovePolygonLayerId: MapLayer.venueBoundary,
+    // _sectionPolygonLayerId: MapLayer.sections,
+    // _subSectionPolygonLayerId: MapLayer.subSections,
+    // _patchBelowPolygonLayerId: MapLayer.venueBoundary,
+    // _patchAbovePolygonLayerId: MapLayer.venueBoundary,
     _extrudedPolygonLayerId: MapLayer.extrusions,
     // polylines
     _pathSolidLayerId: MapLayer.routeLine,
@@ -271,6 +290,21 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// provider — are always tappable, so behaviour is unchanged for them.
   bool _tapAllowedForLayer(String layerId) =>
       _stateForLayer(layerId).tappable != false;
+
+  /// Whether any marker group is still drawn under the current policy.
+  ///
+  /// [_selectedMarkerLayerId] belongs to [MapLayer.selection], which presets
+  /// like [MapLayerPolicy.polygonsOnly] deliberately leave alone so that
+  /// tapping a room still highlights it. That exemption is meant for the
+  /// selected-POLYGON layers; applied to the selected-marker layer it resurrects
+  /// a marker the host just hid — tap a room with markers off and one marker
+  /// pops back, because selectLocation flags the tapped landmark's feature
+  /// `isSelected` and that layer's filter is exactly `isSelected`.
+  ///
+  /// So the marker half of the selection is additionally gated on markers being
+  /// drawn at all. The polygon half is untouched.
+  bool get _anyMarkerGroupVisible => MapLayer.markers.leaves
+      .any((g) => _policy.resolve(g).visible != false);
 
   /// Re-push the full property set for [only], or every registered layer.
   ///
@@ -416,15 +450,25 @@ class MaplibreMapProvider extends BaseMapProvider {
 
             config.onMapCreated(controller);
 
-            // Handle feature taps (polygons & markers)
-            // maplibre_gl 0.21 OnFeatureInteractionCallback:
-            // (dynamic id, Point<double> point, LatLng coordinates, String layerId)
-            controller.onFeatureTapped.add((dynamic rawId, Point<double> point,
-                LatLng coordinates, String layerId) async {
-              // `id` arrives as dynamic from the platform channel (String on
-              // native, num on web for numeric feature ids), so normalise it
-              // before the String-typed helpers below touch it.
-              final String id = rawId?.toString() ?? "";
+            // Handle feature taps (polygons & markers).
+            //
+            // maplibre_gl 0.26 OnFeatureInteractionCallback — note the arg
+            // ORDER, which differs from 0.21's (that one led with a dynamic id
+            // and had no annotation):
+            //   (Point<double> point, LatLng coordinates, String id,
+            //    String layerId, Annotation? annotation)
+            // The controller normalises the id with `payload["id"].toString()`
+            // before calling us, so `id` is always a String and never null.
+            // It CAN be empty: symbol layers deliver no feature id (observed on
+            // collision-dot and normalIcon taps), so the `id.isNotEmpty` gate
+            // further down skips them and markers are resolved by
+            // queryRenderedFeatures instead. Only polygon layers arrive here
+            // with a usable composite id.
+            controller.onFeatureTapped.add((Point<double> point,
+                LatLng coordinates,
+                String id,
+                String layerId,
+                Annotation? annotation) async {
               print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
               // if (_symbols
               //     .where((s) => s.id.toLowerCase().contains("path"))
@@ -1326,7 +1370,23 @@ class MaplibreMapProvider extends BaseMapProvider {
         return;
       }
 
-      final features = symbols.map((marker) {
+      // The type filter belongs to the landmark cluster source only. The
+      // rotation source carries the user puck, which is not host content and
+      // must never be filtered away.
+      final visible = sourceID == _clusterSourceId
+          ? symbols.where(_passesMarkerTypeFilter).toList(growable: false)
+          : symbols;
+
+      // Diagnostic for the type filter. Deliberately does NOT report
+      // _bakedIconCache/_smallIconIds: plain icon markers register their image
+      // through a direct addImage() that never touches those maps, so a "not
+      // baked" reading there means nothing for them.
+      if (sourceID == _clusterSourceId && _markerTypeFilter != null) {
+        print('marker type filter: kept ${visible.length}/${symbols.length}'
+            ' types=${_markerTypeFilter!.join(",")}');
+      }
+
+      final features = visible.map((marker) {
         final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
             ? "center"
             : "bottom";
@@ -1519,6 +1579,60 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is! MapLibreMapController) return;
     if (_overlapOverrideIds.isEmpty) return;
     _overlapOverrideIds.clear();
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId);
+  }
+
+  /// Whether [marker] survives the active [_markerTypeFilter].
+  ///
+  /// Source/destination pins are exempt: they are navigation endpoints, and a
+  /// content filter must not be able to hide where the user is walking to.
+  /// Everything else is a strict allowlist — a marker carrying no type at all is
+  /// filtered out too, since it is by definition not one of the types asked for.
+  bool _passesMarkerTypeFilter(GeoJsonMarker marker) {
+    final filter = _markerTypeFilter;
+    if (filter == null) return true;
+    if (marker.priority == true) return true;
+    final raw = RenderingUtilities.rawLandmarkType(marker.properties);
+    return raw != null &&
+        filter.contains(RenderingUtilities.normaliseLandmarkType(raw));
+  }
+
+  /// Every landmark type present in the loaded venue, with counts.
+  @override
+  List<MarkerTypeInfo> availableMarkerTypes() {
+    // Keyed by the normalised form so 'Male Washroom' and 'male washroom' are
+    // one entry, while the first spelling seen is what the host displays.
+    final byKey = <String, MarkerTypeInfo>{};
+    for (final marker in _symbols) {
+      final raw = RenderingUtilities.rawLandmarkType(marker.properties);
+      if (raw == null || raw.trim().isEmpty) continue;
+      final key = RenderingUtilities.normaliseLandmarkType(raw);
+      final existing = byKey[key];
+      byKey[key] = MarkerTypeInfo(
+        rawType: existing?.rawType ?? raw,
+        assetType: existing?.assetType ??
+            RenderingUtilities.getAssetForLandmark(marker.properties),
+        count: (existing?.count ?? 0) + 1,
+      );
+    }
+    final types = byKey.values.toList();
+    // Commonest first: a host rendering chips wants the useful ones up front.
+    types.sort((a, b) => b.count != a.count
+        ? b.count.compareTo(a.count)
+        : a.rawType.toLowerCase().compareTo(b.rawType.toLowerCase()));
+    return List.unmodifiable(types);
+  }
+
+  /// Draw only the markers whose raw landmark type is in [types]; null draws all.
+  @override
+  Future<void> setMarkerTypeFilter(
+      dynamic controller, Set<String>? types) async {
+    if (controller is! MapLibreMapController) return;
+    // An empty set means "show nothing", which is a legitimate request and
+    // deliberately not folded into null ("show everything").
+    _markerTypeFilter = types == null
+        ? null
+        : types.map(RenderingUtilities.normaliseLandmarkType).toSet();
     await setGeoJsonSource(controller, _symbols, _clusterSourceId);
   }
 
@@ -3613,7 +3727,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         _selectedMarkerLayerId,
         _layerProps(_selectedMarkerLayerId, (op) => SymbolLayerProperties(
-          visibility: _visibility(_selectedMarkerLayerId),
+          visibility: _visibility(_selectedMarkerLayerId,
+              internalVisible: _anyMarkerGroupVisible),
           symbolSortKey: ["+", 8000, _kSortKeyExpression],
           iconImage: [
             "case",
@@ -3666,12 +3781,18 @@ class MaplibreMapProvider extends BaseMapProvider {
         _layerProps(
             _sectionPolygonLayerId,
             (op) => _sectionPolygonProps(
-                  op(const [
+                  // `op` sits on the ramp's PEAK stop, not around the whole
+                  // expression. Wrapping the expression let a host override
+                  // replace the ramp with a constant, so a dimmed venue drew
+                  // section fills at every zoom instead of only across their
+                  // fade window. Here the override sets how strong the peak is
+                  // and the 0.0 stops stay 0.0.
+                  [
                     "interpolate", ["linear"], ["zoom"],
                     16, 0.0,
-                    17, 1.0,
+                    17, op(1.0),
                     17.5, 0.0
-                  ]),
+                  ],
                   visibility: _visibility(_sectionPolygonLayerId),
                 )),
         filter: [
@@ -3865,13 +3986,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         _layerProps(_patchAbovePolygonLayerId, (op) => FillLayerProperties(
           visibility: _visibility(_patchAbovePolygonLayerId),
           fillColor: ["get", "fillColorSecondary"],
-          fillOpacity: op(const [
+          // Override on the peak stop only — see the section layer above.
+          fillOpacity: [
             "interpolate",
             ["linear"],
             ["zoom"],
-            13, 1.0,
+            13, op(1.0),
             14, 0.0
-          ]),
+          ],
           fillOutlineColor: ["get", "strokeColor"],
         )),
         filter: [
@@ -3943,11 +4065,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       _layerProps(_patchAbovePolygonLayerId, (op) => FillLayerProperties(
         visibility: _visibility(_patchAbovePolygonLayerId),
         fillColor: ["get", "fillColorSecondary"],
-        fillOpacity: op([
+        fillOpacity: [
           "interpolate", ["linear"], ["zoom"],
-          fadeInZoom, 1.0,
+          fadeInZoom, op(1.0),
           fadeOutZoom, 0.0,
-        ]),
+        ],
         fillOutlineColor: ["get", "strokeColor"],
       )),
     );
@@ -3983,11 +4105,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       _layerProps(
           _sectionPolygonLayerId,
           (op) => _sectionPolygonProps(
-                op([
+                [
                   "interpolate", ["linear"], ["zoom"],
-                  fadeOutZoom + 1.5, 1.0,
+                  fadeOutZoom + 1.5, op(1.0),
                   fadeOutZoom + 2.0, 0.0,
-                ]),
+                ],
                 visibility: _visibility(_sectionPolygonLayerId),
               )),
     );

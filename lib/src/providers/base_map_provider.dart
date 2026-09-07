@@ -6,6 +6,8 @@ import '../models/CameraBound.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
+import '../utils/LandmarkAssetType.dart';
+import '../models/marker_type_info.dart';
 
 /// Abstract base class for all map providers
 /// Implement this class to add a new map provider
@@ -67,6 +69,22 @@ abstract class BaseMapProvider {
 
   /// Turn the temporary overlap override OFF for every marker it was set on.
   Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {}
+
+  /// Draw only the markers whose raw GeoJSON landmark type is in [types].
+  ///
+  /// Pass null to clear the filter and draw every marker again. Source and
+  /// destination pins (`marker.priority`) are always drawn, filter or not —
+  /// hiding a navigation endpoint would break wayfinding.
+  ///
+  /// Providers without support inherit a no-op.
+  Future<void> setMarkerTypeFilter(
+      dynamic controller, Set<String>? types) async {}
+
+  /// Every landmark type present in the loaded venue, with counts, so a host can
+  /// build its type UI from the data instead of a hardcoded list.
+  ///
+  /// Providers without support inherit an empty list.
+  List<MarkerTypeInfo> availableMarkerTypes() => const [];
 
   /// Apply a per-group visibility / opacity / tappability policy.
   ///

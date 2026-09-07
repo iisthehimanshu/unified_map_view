@@ -99,6 +99,28 @@ class RenderingUtilities{
     return "#bdbdbd";
   }
 
+  /// The landmark's type exactly as the venue's GeoJSON spells it, or null when
+  /// the properties carry none.
+  ///
+  /// This is the single source of truth for "what type is this marker" — both
+  /// [getAssetForLandmark] and the host-facing type filter read it, so a venue
+  /// whose spelling changes cannot make the two disagree. Returned verbatim
+  /// (original case, untrimmed content) because hosts show it in UI; compare it
+  /// with [normaliseLandmarkType].
+  static String? rawLandmarkType(Map<String, dynamic>? landmarkProperties) {
+    if (landmarkProperties == null) return null;
+    if (landmarkProperties['global'] == true) {
+      return landmarkProperties['type'] as String?;
+    }
+    final element = landmarkProperties['element'] as Map<String, dynamic>?;
+    if (element == null) return null;
+    return (element['subType'] ?? element['type']) as String?;
+  }
+
+  /// Comparison form of a raw type: lowercased and trimmed, so a host passing
+  /// 'Male Washroom' matches data spelling it 'male washroom'.
+  static String normaliseLandmarkType(String raw) => raw.toLowerCase().trim();
+
   static LandmarkAssetType? getAssetForLandmark(Map<String, dynamic>? landmarkProperties) {
     try {
       if (landmarkProperties == null) return null;
