@@ -417,8 +417,14 @@ class MaplibreMapProvider extends BaseMapProvider {
             config.onMapCreated(controller);
 
             // Handle feature taps (polygons & markers)
-            // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
-            controller.onFeatureTapped.add((Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation) async {
+            // maplibre_gl 0.21 OnFeatureInteractionCallback:
+            // (dynamic id, Point<double> point, LatLng coordinates, String layerId)
+            controller.onFeatureTapped.add((dynamic rawId, Point<double> point,
+                LatLng coordinates, String layerId) async {
+              // `id` arrives as dynamic from the platform channel (String on
+              // native, num on web for numeric feature ids), so normalise it
+              // before the String-typed helpers below touch it.
+              final String id = rawId?.toString() ?? "";
               print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
               // if (_symbols
               //     .where((s) => s.id.toLowerCase().contains("path"))
@@ -3894,6 +3900,26 @@ class MaplibreMapProvider extends BaseMapProvider {
       MapLibreMapController controller, {
         Size? screenSize,
       }) async {
+    // Steps 2-4 below remove/re-add the patch-above and section MARKER layers
+    // and then set properties on the rest of them, so none of it can run before
+    // [enableMarkerLayers] has created them.
+    //
+    // It could: enablePolygonLayers runs first in onStyleLoadedCallback and
+    // ends by pushing its source, which reaches here via _updatePolygonSource →
+    // _refreshPatchFadeIfStale. That path used to re-add
+    // patch-above-markers-layer while marker layers did not exist yet, and the
+    // damage was silent and total — removeLayer no-ops on a missing layer, so
+    // the re-add SUCCEEDED and left the layer sitting there. enableMarkerLayers
+    // then threw CannotAddLayerException("Layer patch-above-markers-layer
+    // already exists") partway through, aborting before `_isClusteringEnabled =
+    // true` and before it pushed `_symbols` to the source, so the map rendered
+    // with no markers at all and only a caught print to show for it.
+    //
+    // Nothing is lost by skipping: onStyleLoadedCallback calls this again after
+    // every enable*Layers has run, which is where the real fade thresholds get
+    // applied.
+    if (!_isClusteringEnabled) return;
+
     final boundaryPolygons = _polygons.where((p) =>
     p.properties?['type']?.toString().toLowerCase() == 'boundary'
     ).toList();
