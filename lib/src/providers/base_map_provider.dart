@@ -70,7 +70,7 @@ abstract class BaseMapProvider {
   /// Turn the temporary overlap override OFF for every marker it was set on.
   Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {}
 
-  /// Draw only the markers whose raw GeoJSON landmark type is in [types].
+  /// Draw only the markers whose landmark type CONTAINS one of [types].
   ///
   /// Pass null to clear the filter and draw every marker again. Source and
   /// destination pins (`marker.priority`) are always drawn, filter or not —
@@ -85,6 +85,11 @@ abstract class BaseMapProvider {
   ///
   /// Providers without support inherit an empty list.
   List<MarkerTypeInfo> availableMarkerTypes() => const [];
+
+  /// Draw the map desaturated, or back in full colour.
+  ///
+  /// Providers without support inherit a no-op.
+  Future<void> setGreyscale(dynamic controller, bool enabled) async {}
 
   /// Apply a per-group visibility / opacity / tappability policy.
   ///

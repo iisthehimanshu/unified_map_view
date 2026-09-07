@@ -334,15 +334,28 @@ class UnifiedMapController extends ChangeNotifier {
   List<MarkerTypeInfo> get availableMarkerTypes =>
       currentProviderImplementation.availableMarkerTypes();
 
-  /// Draw only the markers whose landmark type is in [types].
+  /// Draw only the markers whose landmark type matches one of [types].
   ///
-  /// Types are the raw GeoJSON spellings reported by [availableMarkerTypes];
-  /// matching is case- and whitespace-insensitive, so `'Male Washroom'` matches
-  /// data spelling it `'male washroom'`.
+  /// Two ways to name a type, and they mix freely:
+  ///
+  /// * [MarkerTypes] constants, known at compile time — use these when the UI
+  ///   must exist before markers load, or when no venue API is wired up yet.
+  /// * Exact spellings from [availableMarkerTypes], once the venue has loaded.
   ///
   /// ```dart
-  /// controller.showMarkerTypes({'Male Washroom', 'First Aid'});
+  /// controller.showMarkerTypes({
+  ///   MarkerTypes.washroom,      // every washroom, however this venue spells it
+  ///   MarkerTypes.lift,
+  ///   'Pharmacy / Dispensary',   // this venue's exact wording
+  /// });
   /// ```
+  ///
+  /// A type matches when the marker's own type CONTAINS it, case- and
+  /// whitespace-insensitively — the same rule the renderer uses to choose an
+  /// icon. So `MarkerTypes.washroom` catches `Male Washroom` and
+  /// `Accessible Washroom` alike, and broad values are broad on purpose:
+  /// `MarkerTypes.room` also matches `Room Door`. Pass an exact spelling when
+  /// you need precision.
   ///
   /// Source and destination pins are always drawn, filter or not. Passing an
   /// empty set hides every other marker; pass null, or call
@@ -356,6 +369,27 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Draw every marker type again, undoing [showMarkerTypes].
   Future<void> clearMarkerTypeFilter() => showMarkerTypes(null);
+
+  /// Whether the map is currently drawn in greyscale.
+  bool get isGreyscale => _greyscale;
+  bool _greyscale = false;
+
+  /// Draw the map in greyscale, or back in full colour (the default).
+  ///
+  /// ```dart
+  /// controller.setGreyscale(true);
+  /// ```
+  ///
+  /// Covers the basemap, polygons and polylines. Marker ICONS keep their
+  /// colour: each is a PNG composited when the venue loads, so desaturating
+  /// them would mean re-baking every icon — seconds of work on a large venue.
+  Future<void> setGreyscale(bool enabled) async {
+    _greyscale = enabled;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setGreyscale(
+        _currentMapController, enabled);
+    notifyListeners();
+  }
 
   /// Which map content is currently drawn, how strongly, and what responds to
   /// taps.

@@ -56,6 +56,8 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   /// including the theme default before the host overrides it.
   bool _fadeOnPath = false;
 
+  bool _greyscale = false;
+
   Timer? _moveUserTimer;
 
   // Demo user marker ID
@@ -420,7 +422,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               ],
             ),
           ),
-
           // ── layer-policy test harness ──────────────────────────────────
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -431,6 +432,19 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(children: [
+                    const Text('grey: ',
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.bold)),
+                    Switch(
+                      value: _greyscale,
+                      onChanged: (v) {
+                        setState(() => _greyscale = v);
+                        _unifiedMapController.setGreyscale(v);
+                        print('HARNESS greyscale -> $v');
+                      },
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    const SizedBox(width: 12),
                     TextButton(
                       onPressed: () => _unifiedMapController.setMapFade(true),
                       child: const Text('fade now',
@@ -452,6 +466,24 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                             style: TextStyle(fontSize: 11)),
                       ),
                     ..._availableTypes.map(_typeChip),
+                    // Exercises the BROAD path: a compile-time constant that
+                    // no venue spells exactly, matched by substring. Here it
+                    // should catch Male/Female/Accessible Washroom together.
+                    TextButton(
+                      onPressed: () async {
+                        setState(() {
+                          _markerTypes
+                            ..clear()
+                            ..add(MarkerTypes.washroom);
+                        });
+                        await _unifiedMapController
+                            .showMarkerTypes({MarkerTypes.washroom});
+                        print('HARNESS marker types -> '
+                            'MarkerTypes.washroom (broad)');
+                      },
+                      child: const Text('const: washroom',
+                          style: TextStyle(fontSize: 11)),
+                    ),
                     if (_availableTypes.isNotEmpty)
                       TextButton(
                         onPressed: () async {

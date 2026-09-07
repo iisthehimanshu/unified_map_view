@@ -145,6 +145,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
+  /// The basemap raster layer declared in [osmRasterStyle]. Named here so
+  /// greyscale can set raster-saturation on it.
+  final String _baseMapRasterLayerId = 'osm-tiles-layer';
   final String _furnitureSourceId = 'furniture-source';
 
   /// 3D extruded furniture (shown in immersive/3D mode).
@@ -1642,19 +1645,95 @@ class MaplibreMapProvider extends BaseMapProvider {
     await setGeoJsonSource(controller, _symbols, _clusterSourceId);
   }
 
+  /// Whether venue content is drawn desaturated.
+  ///
+  /// Applied where colours are WRITTEN INTO THE SOURCE rather than as a layer
+  /// paint property: MapLibre has no saturation control for fill/line layers
+  /// (only raster ones), and every polygon here takes its colour from a
+  /// per-feature `fillColor`, so the only place to intervene is the push.
+  bool _greyscale = false;
+
+  /// [color] as the current mode wants it drawn.
+  Color _shade(Color color) =>
+      _greyscale ? RenderingUtilities.toGreyscale(color) : color;
+
+  /// [hex] as the current mode wants it drawn.
+  ///
+  /// Polylines carry their colour as a hex string straight from host data
+  /// rather than as a parsed Color, so this parses, shades and re-encodes.
+  /// Anything unparseable is passed through untouched — a bad colour should
+  /// render as it always did, not vanish.
+  String _shadeHex(String hex) {
+    if (!_greyscale) return hex;
+    try {
+      final shaded = RenderingUtilities.toGreyscale(
+          RenderingUtilities.hexToColor(hex));
+      return '#${RenderingUtilities.colorToMapplsHex(shaded)}';
+    } catch (_) {
+      return hex;
+    }
+  }
+
+  /// Draw the map in greyscale, or back in full colour.
+  ///
+  /// Covers the basemap (via raster-saturation), polygons and polylines. Marker
+  /// icons are NOT covered: each is a PNG composited at load time and would
+  /// have to be re-baked, which costs seconds for a large venue.
+  @override
+  Future<void> setGreyscale(dynamic controller, bool enabled) async {
+    if (controller is! MapLibreMapController) return;
+    if (_greyscale == enabled) return;
+    _greyscale = enabled;
+
+    // The basemap is a raster layer, which DOES have a saturation property —
+    // the one place this can be done without rewriting data.
+    try {
+      await controller.setLayerProperties(
+        _baseMapRasterLayerId,
+        RasterLayerProperties(rasterSaturation: enabled ? -1.0 : 0.0),
+      );
+    } catch (e) {
+      print('setGreyscale: basemap saturation failed: $e');
+    }
+
+    // Re-push whatever carries colour, so the new shade is written in.
+    if (_polygons.isNotEmpty) await _updatePolygonSource(controller);
+    if (_lines.isNotEmpty) await _updatePolylineSource(controller);
+  }
+
   /// Whether [marker] survives the active [_markerTypeFilter].
   ///
   /// Source/destination pins are exempt: they are navigation endpoints, and a
   /// content filter must not be able to hide where the user is walking to.
   /// Everything else is a strict allowlist — a marker carrying no type at all is
   /// filtered out too, since it is by definition not one of the types asked for.
+  /// Cache of whole-word matchers, one per filter value.
+  ///
+  /// Rebuilt rarely (only when a host changes the filter) but consulted once
+  /// per marker per push, so the RegExp is worth keeping.
+  final Map<String, RegExp> _wholeWordCache = {};
+
+  RegExp _wholeWord(String wanted) => _wholeWordCache.putIfAbsent(
+      wanted,
+      () => RegExp('(?<![a-z0-9])${RegExp.escape(wanted)}(?![a-z0-9])'));
+
   bool _passesMarkerTypeFilter(GeoJsonMarker marker) {
     final filter = _markerTypeFilter;
     if (filter == null) return true;
     if (marker.priority == true) return true;
     final raw = RenderingUtilities.rawLandmarkType(marker.properties);
-    return raw != null &&
-        filter.contains(RenderingUtilities.normaliseLandmarkType(raw));
+    if (raw == null) return false;
+    final normalised = RenderingUtilities.normaliseLandmarkType(raw);
+    // Contained as a WHOLE WORD, not a bare substring. Venues spell the same
+    // concept differently ('Male Washroom' vs 'Accessible Washroom'), so
+    // MarkerTypes exposes broad values like 'washroom' that a host can use
+    // without knowing this venue's wording — and an exact spelling from
+    // availableMarkerTypes still matches, since a string contains itself.
+    //
+    // The word boundaries are load-bearing. Plain `contains` makes
+    // 'male washroom' match "FEmale washroom" and 'room' match "washROOM", so
+    // filtering to male washrooms silently returned the female ones too.
+    return filter.any((wanted) => _wholeWord(wanted).hasMatch(normalised));
   }
 
   /// Every landmark type present in the loaded venue, with counts.
@@ -1860,10 +1939,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           'id': polygon.id,
           'type': type ?? 'default',
           'fillColor':
-          '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
+          '#${RenderingUtilities.colorToMapplsHex(_shade(fillColor))}',
           'strokeColor':
-          '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillColorSecondary':'#${RenderingUtilities.colorToMapplsHex(fillColorSecondary)}',
+          '#${RenderingUtilities.colorToMapplsHex(_shade(strokeColor))}',
+          'fillColorSecondary':
+          '#${RenderingUtilities.colorToMapplsHex(_shade(fillColorSecondary))}',
           'fillOpacity': fillColor.a,
           'isSelected': polygon.id == selectPolygonId,
           'boundary': polygon.properties?['type'] == "Boundary",
@@ -2427,7 +2507,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           'id': line.id,
           'type': 'default',
           'isSelected': false,
-          'lineColor': line.properties?['fillColor'] ?? '#000000',
+          'lineColor': _shadeHex(line.properties?['fillColor'] ?? '#000000'),
           'lineOpacity': line.properties?['fillOpacity'] ?? 1.0,
           'lineWidth': line.properties?['width']?.toDouble() ?? 4.0,
           'path': line.properties?['path'] ??

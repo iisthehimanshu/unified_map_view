@@ -62,6 +62,21 @@ class RenderingUtilities{
     'default': {'strokeColor': Color(0xffCCCCCC), 'fillColor': Color(0xffE6E6E6)},
   };
 
+  /// [color] reduced to its grey equivalent, preserving alpha.
+  ///
+  /// Uses the Rec. 601 luma weights (0.299/0.587/0.114) on the sRGB components
+  /// rather than [Color.computeLuminance], which is gamma-corrected relative
+  /// luminance and renders noticeably darker than what people mean by
+  /// "greyscale".
+  static Color toGreyscale(Color color) {
+    final argb = color.value;
+    final r = (argb >> 16) & 0xFF;
+    final g = (argb >> 8) & 0xFF;
+    final b = argb & 0xFF;
+    final grey = (0.299 * r + 0.587 * g + 0.114 * b).round().clamp(0, 255);
+    return Color.fromARGB((argb >> 24) & 0xFF, grey, grey, grey);
+  }
+
   static String colorToMapplsHex(Color color) {
     return color.value
         .toRadixString(16)
