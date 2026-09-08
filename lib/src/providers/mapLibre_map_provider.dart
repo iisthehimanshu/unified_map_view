@@ -1189,50 +1189,149 @@ class MaplibreMapProvider extends BaseMapProvider {
   StreamSubscription<CompassEvent>? _compassSub;
   double? _currentHeading;
 
+  /// Externally supplied heading that stands in for the device compass while
+  /// set. See [setHeadingOverride].
+  double? _headingOverride;
+
+  @override
+  Future<void> setHeadingOverride(dynamic controller, double? heading) async {
+    _headingOverride = heading;
+    // Written through to _currentHeading so the *position* repaint
+    // (_updateUserLocation, which runs on every move) carries the same value
+    // the compass path would have written. Without this a move would push a
+    // feature bearing the last live heading and undo the override.
+    if (heading != null) _currentHeading = heading;
+    if (controller is! MapLibreMapController) return;
+    await _updateUserLocation(controller);
+  }
+
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) async {
-      if (event.heading == null) return;
-      _currentHeading = event.heading;
+    _compassSub = FlutterCompass.events?.listen((event) {
+      final heading = event.heading;
+      if (heading == null) return;
+      // Ignore the sensor rather than cancelling the subscription. There *is*
+      // a restart path — removeMarker() cancels and nulls _compassSub when the
+      // puck goes, and _startCompassListening re-subscribes when it comes back
+      // — but it only runs on a marker remove/add cycle. Cancelling here would
+      // leave the puck frozen from the moment the override is cleared until the
+      // next floor change happens to rebuild the marker.
+      if (_headingOverride != null) return;
+      _currentHeading = heading;
       // A style reload wipes the rotation source; compass events keep arriving
       // during the rebuild, and pushing then NPEs natively on a null source.
       if (!_markerSourcesReady) return;
-      final cameraPos = controller.cameraPosition;
-      if (cameraPos == null) return;
-
-      final features = _rotatingSymbols
-          .map((marker) => {
-        'type': 'Feature',
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [
-            marker.position.longitude,
-            marker.position.latitude
-          ],
-        },
-        'properties': {
-          'title': '',
-          'id': marker.id,
-          if (marker.iconName != null || true) 'icon': marker.id,
-          'isPriority': marker.priority ?? false,
-          'intractable': marker.properties?["polyId"] != null,
-          if (marker.compassBasedRotation) "bearing": event.heading!,
-        }
-      })
-          .toList();
-
-      try {
-        await controller.setGeoJsonSource(sourceID, {
-          "type": "FeatureCollection",
-          "features": features,
-        });
-      } catch (e) {
-        // Lost the race with a style reload / map teardown: the next compass
-        // event repaints once the source is back.
-        print("compass setGeoJsonSource skipped: $e");
-      }
+      // ANR guard: the compass fires 20–50Hz and each setGeoJsonSource makes
+      // MapLibre re-parse the source + relayout on the render thread while
+      // holding the native map lock. Pushing on every event backed the UI
+      // thread up past the ANR threshold. Coalesce instead — see
+      // [_requestRotationPush] / [_flushRotationPush].
+      _requestRotationPush(controller, sourceID, heading);
     });
+  }
+
+  // ANR throttle for the compass-driven rotation source. Tunables: at most one
+  // native push every 100ms (~10Hz ceiling), and ignore heading changes below
+  // 2° so a stationary device sends nothing at all.
+  static const int _kCompassMinPushMs = 100;
+  static const double _kCompassMinHeadingDeg = 2.0;
+
+  Timer? _compassThrottleTimer;
+  double? _pendingCompassHeading;
+  double? _lastPushedHeading;
+  DateTime _lastCompassPush = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _compassPushInFlight = false;
+
+  /// Smallest angular difference between two headings, in degrees (0..180),
+  /// accounting for the 360°→0° wrap.
+  double _headingDelta(double a, double b) {
+    final d = (a - b).abs() % 360;
+    return d > 180 ? 360 - d : d;
+  }
+
+  /// Records the newest heading and arms a single coalescing timer. Runs on
+  /// every compass event, so it stays cheap and allocation-free.
+  void _requestRotationPush(
+      MapLibreMapController controller, String sourceID, double heading) {
+    _pendingCompassHeading = heading;
+    // A flush is already scheduled or running; it will pick up the value above.
+    if (_compassThrottleTimer != null || _compassPushInFlight) return;
+    _armCompassTimer(controller, sourceID);
+  }
+
+  void _armCompassTimer(MapLibreMapController controller, String sourceID) {
+    final sinceLast =
+        DateTime.now().difference(_lastCompassPush).inMilliseconds;
+    final wait =
+        sinceLast >= _kCompassMinPushMs ? 0 : _kCompassMinPushMs - sinceLast;
+    _compassThrottleTimer = Timer(Duration(milliseconds: wait), () {
+      _compassThrottleTimer = null;
+      _flushRotationPush(controller, sourceID);
+    });
+  }
+
+  /// Pushes the latest pending heading to the rotation source, at most one in
+  /// flight at a time. Re-arms itself if newer events arrived mid-push so the
+  /// final orientation is never dropped.
+  Future<void> _flushRotationPush(
+      MapLibreMapController controller, String sourceID) async {
+    final heading = _pendingCompassHeading;
+    if (heading == null) return;
+
+    // Sub-threshold jitter: not worth a full source rewrite.
+    final last = _lastPushedHeading;
+    if (last != null && _headingDelta(heading, last) < _kCompassMinHeadingDeg) {
+      _pendingCompassHeading = null;
+      return;
+    }
+    // Same readiness guards the per-event path used to apply inline.
+    if (!_markerSourcesReady || controller.cameraPosition == null) {
+      _pendingCompassHeading = null;
+      return;
+    }
+
+    _pendingCompassHeading = null;
+    _compassPushInFlight = true;
+    _lastCompassPush = DateTime.now();
+    _lastPushedHeading = heading;
+
+    final features = _rotatingSymbols
+        .map((marker) => {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [
+                  marker.position.longitude,
+                  marker.position.latitude
+                ],
+              },
+              'properties': {
+                'title': '',
+                'id': marker.id,
+                if (marker.iconName != null || true) 'icon': marker.id,
+                'isPriority': marker.priority ?? false,
+                'intractable': marker.properties?["polyId"] != null,
+                if (marker.compassBasedRotation) "bearing": heading,
+              }
+            })
+        .toList();
+
+    try {
+      await controller.setGeoJsonSource(sourceID, {
+        "type": "FeatureCollection",
+        "features": features,
+      });
+    } catch (e) {
+      // Lost the race with a style reload / map teardown: the next compass
+      // event repaints once the source is back.
+      print("compass setGeoJsonSource skipped: $e");
+    } finally {
+      _compassPushInFlight = false;
+      if (_pendingCompassHeading != null) {
+        _armCompassTimer(controller, sourceID);
+      }
+    }
   }
 
   /// Temporarily force icon/text overlap ON for the given marker ids so they
@@ -1278,6 +1377,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             .isNotEmpty) {
           _compassSub?.cancel();
           _compassSub = null;
+          _compassThrottleTimer?.cancel();
+          _compassThrottleTimer = null;
+          _pendingCompassHeading = null;
         }
         _rotatingSymbols.removeWhere(
                 (marker) => marker.id.toLowerCase().contains(markerId));
@@ -4365,6 +4467,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     _isCircleLayersEnabled = false;
     _compassSub?.cancel();
     _compassSub = null;
+    _compassThrottleTimer?.cancel();
+    _compassThrottleTimer = null;
+    _pendingCompassHeading = null;
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
   }
