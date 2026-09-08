@@ -1,11 +1,15 @@
 // lib/src/controllers/unified_map_controller.dart
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show EdgeInsets;
 import 'package:unified_map_view/src/enums/Theme.dart';
+import 'package:unified_map_view/src/utils/perf_trace.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
+import '../utils/LandmarkAssetType.dart';
 
 /// Main controller for managing map providers and operations
 class UnifiedMapController extends ChangeNotifier {
@@ -21,6 +25,8 @@ class UnifiedMapController extends ChangeNotifier {
   late AnnotationController _annotationController;
 
   String? onReadyLandmarkSelectionID;
+
+  MapLayerPolicy _layerPolicy = MapLayerPolicy.all;
 
   UnifiedMapController({
     required MapProvider initialProvider,
@@ -41,15 +47,26 @@ class UnifiedMapController extends ChangeNotifier {
 
     this.onReadyLandmarkSelectionID,
 
+    /// Fired when the venue is actually drawn (see [MapConfig.onVenueRendered]).
+    /// Hosts that need to move the camera at startup must wait for this rather
+    /// than onMapCreated/onStyleLoaded, which fire seconds earlier.
+    void Function()? onVenueRendered,
+
     String? url,
 
-    String languageCode = 'en'
+    String languageCode = 'en',
 
+    /// Which map content is drawn, how strongly, and what responds to taps.
+    ///
+    /// Applied as the layers are first created, so the map never briefly shows
+    /// content the host asked to hide. Change it later with [setLayers].
+    MapLayerPolicy layerPolicy = MapLayerPolicy.all,
   }) {
     AppConfig.url = url;
     AppConfig.setLanguage(value: languageCode);
     _providers.addAll(providers);
     _currentProvider = initialProvider;
+    _layerPolicy = layerPolicy;
 
     _config = MapConfig(
         initialLocation: initialLocation,
@@ -62,7 +79,9 @@ class UnifiedMapController extends ChangeNotifier {
       onCameraMove: onCameraMove,
       onMarkerTap: onMarker??onMarkerTap,
       onPolygonTap: onPolygon??onPolygonTap,
-      onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback
+      onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback,
+      onVenueRendered: onVenueRendered,
+      initialLayerPolicy: layerPolicy,
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
@@ -168,7 +187,9 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Animate camera to a specific location
   Future<void> animateCamera(MapLocation location, {double? zoom, double? bearing, double? tilt, Duration? duration}) async {
-    print("animateCamera ${StackTrace.current}");
+    // StackTrace.current is expensive to capture and format under dart2js, and
+    // this sits on a hot path. Native keeps the trace.
+    if (!kIsWeb) print("animateCamera ${StackTrace.current}");
     if (_currentMapController == null) return;
     await currentProviderImplementation.animateCamera(
       _currentMapController,
@@ -291,6 +312,142 @@ class UnifiedMapController extends ChangeNotifier {
     await currentProviderImplementation.clearAllMarkersAllowOverlap(_currentMapController);
   }
 
+  /// The landmark types currently drawn, or null when every type is drawn.
+  Set<String>? get markerTypeFilter =>
+      _markerTypeFilter == null ? null : Set.unmodifiable(_markerTypeFilter!);
+  Set<String>? _markerTypeFilter;
+
+  /// Every landmark type the loaded venue actually contains, commonest first.
+  ///
+  /// Build the type UI from THIS rather than a hardcoded list — the vocabulary
+  /// is per-venue. One venue has `Male Washroom`/`Female Washroom` and no
+  /// generic `Washroom` at all; another has neither. A fixed list shows dead
+  /// options on one venue and silently misses types on the next.
+  ///
+  /// ```dart
+  /// for (final t in controller.availableMarkerTypes) {
+  ///   chips.add(Chip(label: Text('${t.rawType} (${t.count})')));
+  /// }
+  /// ```
+  ///
+  /// Empty until markers have loaded — read it after the venue is rendered.
+  List<MarkerTypeInfo> get availableMarkerTypes =>
+      currentProviderImplementation.availableMarkerTypes();
+
+  /// Draw only the markers whose landmark type matches one of [types].
+  ///
+  /// Two ways to name a type, and they mix freely:
+  ///
+  /// * [MarkerTypes] constants, known at compile time — use these when the UI
+  ///   must exist before markers load, or when no venue API is wired up yet.
+  /// * Exact spellings from [availableMarkerTypes], once the venue has loaded.
+  ///
+  /// ```dart
+  /// controller.showMarkerTypes({
+  ///   MarkerTypes.washroom,      // every washroom, however this venue spells it
+  ///   MarkerTypes.lift,
+  ///   'Pharmacy / Dispensary',   // this venue's exact wording
+  /// });
+  /// ```
+  ///
+  /// A type matches when the marker's own type CONTAINS it, case- and
+  /// whitespace-insensitively — the same rule the renderer uses to choose an
+  /// icon. So `MarkerTypes.washroom` catches `Male Washroom` and
+  /// `Accessible Washroom` alike, and broad values are broad on purpose:
+  /// `MarkerTypes.room` also matches `Room Door`. Pass an exact spelling when
+  /// you need precision.
+  ///
+  /// Source and destination pins are always drawn, filter or not. Passing an
+  /// empty set hides every other marker; pass null, or call
+  /// [clearMarkerTypeFilter], to draw them all again.
+  Future<void> showMarkerTypes(Set<String>? types) async {
+    _markerTypeFilter = types == null ? null : Set.of(types);
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setMarkerTypeFilter(
+        _currentMapController, _markerTypeFilter);
+  }
+
+  /// Draw every marker type again, undoing [showMarkerTypes].
+  Future<void> clearMarkerTypeFilter() => showMarkerTypes(null);
+
+  /// Whether the map is currently drawn in greyscale.
+  bool get isGreyscale => _greyscale;
+  bool _greyscale = false;
+
+  /// Draw the map in greyscale, or back in full colour (the default).
+  ///
+  /// ```dart
+  /// controller.setGreyscale(true);
+  /// ```
+  ///
+  /// Covers the basemap, polygons and polylines. Marker ICONS keep their
+  /// colour: each is a PNG composited when the venue loads, so desaturating
+  /// them would mean re-baking every icon — seconds of work on a large venue.
+  Future<void> setGreyscale(bool enabled) async {
+    _greyscale = enabled;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setGreyscale(
+        _currentMapController, enabled);
+    notifyListeners();
+  }
+
+  /// Which map content is currently drawn, how strongly, and what responds to
+  /// taps.
+  MapLayerPolicy get layerPolicy => _layerPolicy;
+
+  /// Replace the whole layer policy.
+  ///
+  /// ```dart
+  /// controller.setLayers(MapLayerPolicy.polygonsOnlyNoTap);
+  /// ```
+  Future<void> setLayers(MapLayerPolicy policy) => _pushLayerPolicy(policy);
+
+  /// Change one group, leaving every other group and every unspecified field
+  /// alone.
+  ///
+  /// Pass [clearOpacity] to drop an opacity override and hand the group back to
+  /// the renderer's own opacity — `opacity: null` cannot say that, because null
+  /// already means "leave unchanged".
+  Future<void> setLayer(
+    MapLayer group, {
+    bool? visible,
+    double? opacity,
+    bool? tappable,
+    bool clearOpacity = false,
+  }) {
+    final current = _layerPolicy.states[group] ?? const MapLayerState();
+    return _pushLayerPolicy(_layerPolicy.withGroup(
+      group,
+      current.copyWith(
+        visible: visible,
+        opacity: opacity,
+        tappable: tappable,
+        clearOpacity: clearOpacity,
+      ),
+    ));
+  }
+
+  /// Field-wise merge of [patch] into the current policy.
+  Future<void> updateLayers(MapLayerPolicy patch) =>
+      _pushLayerPolicy(_layerPolicy.merge(patch));
+
+  /// Restore every group to visible, tappable, and the renderer's own opacity.
+  Future<void> resetLayers() => _pushLayerPolicy(MapLayerPolicy.all);
+
+  Future<void> _pushLayerPolicy(MapLayerPolicy next) async {
+    if (next == _layerPolicy) return;
+    _layerPolicy = next;
+    // Mirror it into the config so a map that has not been created yet — and a
+    // map rebuilt by switchProvider, which drops _currentMapController — seeds
+    // its layers from the same value instead of the stale one.
+    _config = _config.copyWith(initialLayerPolicy: next);
+    if (_currentMapController != null) {
+      await currentProviderImplementation
+          .setLayerPolicy(_currentMapController, next);
+    }
+    notifyListeners();
+  }
+
   /// Get current camera location
   Future<MapLocation?> getCurrentLocation() async {
     if (_currentMapController == null) return null;
@@ -309,31 +466,35 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Add GeoJSON feature collection to map
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
-    print("addGeoJsonFeatures ${StackTrace.current}");
+    // See note on animateCamera above — dart2js stack capture on a hot path.
+    if (!kIsWeb) print("addGeoJsonFeatures ${StackTrace.current}");
     // Add polygons
     final polygons = GeoJsonLoader.extractPolygons(collection);
     final sectionPolygons = polygons.where((p) => p.properties?["type"] == "Section").toList();
     final subSection = polygons.where((p) => p.properties?["type"] == "SubSection").toList();
     final boundaryPolygons = polygons.where((p) => p.properties?["type"] == "Boundary").toList();
     final otherPolygons = polygons.where((p) => !sectionPolygons.contains(p) && !boundaryPolygons.contains(p)).toList();
-    await addPolygons(boundaryPolygons);
-    await addPolygons(otherPolygons);
-    await addPolygons(sectionPolygons);
-    await addPolygons(subSection);
+    // Each addPolygons call re-serialises the ENTIRE accumulated polygon set,
+    // so these four rebuild the whole source four times. Collapsing them is
+    // Phase 3 of the perf plan; measuring them first.
+    await PerfTrace.timeAsync('addPolygons boundary (${boundaryPolygons.length})',
+        () => addPolygons(boundaryPolygons));
+    await PerfTrace.timeAsync('addPolygons other (${otherPolygons.length})',
+        () => addPolygons(otherPolygons));
+    await PerfTrace.timeAsync('addPolygons section (${sectionPolygons.length})',
+        () => addPolygons(sectionPolygons));
+    await PerfTrace.timeAsync('addPolygons subSection (${subSection.length})',
+        () => addPolygons(subSection));
 
     final polylines = GeoJsonLoader.extractPolylines(collection);
-    await addPolylines(polylines);
+    await PerfTrace.timeAsync('addPolylines (${polylines.length})',
+        () => addPolylines(polylines));
 
+    // Markers are deliberately NOT added here — see the deferred block at the
+    // end of this method. They used to sit between the polylines above and the
+    // furniture below, awaited, so every icon bake blocked the rest of the
+    // venue from reaching the map.
     final markers = GeoJsonLoader.extractMarkers(collection);
-    final urlMarkers = markers.where((marker)=> (marker.assetPath != null && marker.assetPath!.contains("http"))).toList();
-    await addMarkers(urlMarkers);
-    final localMarkers = markers.where((marker)=> !urlMarkers.contains(marker)).toList();
-    final sectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "Section").toList();
-    final subSectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "SubSection").toList();
-    final normalMarker = localMarkers.where((marker) => !sectionMarkers.contains(marker) && !subSectionMarkers.contains(marker)).toList();
-    await addMarkers(normalMarker);
-    await addMarkers(sectionMarkers);
-    await addMarkers(subSectionMarkers);
 
     // Point features carrying a "3dRef" part list are rendered as extruded 3D
     // furniture. Whether they also get a marker is decided by the
@@ -360,8 +521,80 @@ class UnifiedMapController extends ChangeNotifier {
       });
     }
     if (furnitureItems.isNotEmpty) {
-      await addFurniture(furnitureItems);
+      await PerfTrace.timeAsync('addFurniture (${furnitureItems.length})',
+          () => addFurniture(furnitureItems));
     }
+
+    // ---- Markers last, and detached ----
+    //
+    // Everything above (polygons, polylines, furniture) is what makes the venue
+    // appear. Marker icon baking is CPU-bound and by far the most expensive
+    // part of the load — measured on device at NationalZoologicalPark: skipping
+    // markers entirely took time-to-venue from 25.7s to 11.4s. Awaiting them
+    // here meant the user stared at a grey basemap for the whole bake even
+    // though the venue itself was ready.
+    //
+    // Detached (not awaited), so addGeoJsonFeatures completes — and the venue
+    // paints — as soon as the geometry is in. Markers then stream onto the map
+    // as their icons finish. notifyListeners() below fires on the geometry, not
+    // on the markers, which is the point.
+    //
+    // Ordering within the marker work is preserved: url-backed icons start
+    // first (they have network latency to hide), then local ones.
+    unawaited(() async {
+      try {
+        // Wait for the polygons to actually be on screen before starting any
+        // icon baking. Web is single-threaded: starting the bake immediately
+        // (even detached) means it competes with the polygon paint, which is
+        // why time-to-venue sat at 14.3s against an 11.4s markers-off floor.
+        // Polygons take ~850ms and markers take seconds — there is nothing to
+        // gain from overlapping them, and the venue appearing sooner is what
+        // the user actually perceives as "fast".
+        //
+        // Timed out rather than awaited unconditionally: if the venue-rendered
+        // signal never arrives (a venue with no polygons at all, say), markers
+        // must still render rather than be lost.
+        await PerfTrace.timeAsync(
+            'deferred markers: waiting for venue render',
+            () => currentProviderImplementation.venueRendered
+                .timeout(const Duration(seconds: 20), onTimeout: () {
+              print('deferred markers: venue-render signal never came, '
+                  'starting markers anyway');
+            }));
+
+        final urlMarkers = markers
+            .where((m) => m.assetPath != null && m.assetPath!.contains("http"))
+            .toList();
+        final localMarkers =
+            markers.where((m) => !urlMarkers.contains(m)).toList();
+        final sectionMarkers = localMarkers
+            .where((m) => m.properties?["type"] == "Section")
+            .toList();
+        final subSectionMarkers = localMarkers
+            .where((m) => m.properties?["type"] == "SubSection")
+            .toList();
+        final normalMarker = localMarkers
+            .where((m) =>
+                !sectionMarkers.contains(m) && !subSectionMarkers.contains(m))
+            .toList();
+
+        await PerfTrace.timeAsync('deferred addMarkers url (${urlMarkers.length})',
+            () => addMarkers(urlMarkers));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers normal (${normalMarker.length})',
+            () => addMarkers(normalMarker));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers section (${sectionMarkers.length})',
+            () => addMarkers(sectionMarkers));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers subSection (${subSectionMarkers.length})',
+            () => addMarkers(subSectionMarkers));
+        notifyListeners();
+      } catch (e) {
+        // Detached, so an escape here would be an unhandled async error.
+        print('deferred marker rendering failed: $e');
+      }
+    }());
 
     notifyListeners();
   }
@@ -607,16 +840,53 @@ class UnifiedMapController extends ChangeNotifier {
     return _annotationController.addMultiPathGraph(path.map((map)=>Cell.fromJson(map)).toList());
   }
 
+  /// Whether drawing a path dims the rest of the map.
+  ///
+  /// Null means "use the venue's default", which is the historical behaviour:
+  /// on for zoo themes, off everywhere else. Set it explicitly to override that
+  /// per venue.
+  bool? _mapFadeOnPath;
+
+  /// Whether [annotatePath] will dim the map, taking the host override into
+  /// account and otherwise falling back to the theme default.
+  bool get mapFadeOnPath => _mapFadeOnPath ?? RenderingTheme.current.isZoo;
+
+  /// Turn the path map-fade on or off.
+  ///
+  /// The fade dims everything outside the drawn route so the path reads
+  /// clearly; it is applied by [annotatePath] and lifted by [clearPath]. Pass
+  /// null to hand the decision back to the venue's theme default.
+  ///
+  /// Takes effect on the NEXT [annotatePath]; it does not add or remove the
+  /// fade on a route that is already drawn — use [setMapFade] for that.
+  void setMapFadeOnPath(bool? enabled) {
+    _mapFadeOnPath = enabled;
+    notifyListeners();
+  }
+
+  /// Apply or lift the map fade right now, independently of any path.
+  Future<void> setMapFade(bool faded) async {
+    if (_currentMapController == null) return;
+    await (faded
+        ? currentProviderImplementation.addMapFade(_currentMapController)
+        : currentProviderImplementation.removeMapFade(_currentMapController));
+  }
+
   Future<void> clearPath() async {
     _annotationController.clearPath();
-    if(RenderingTheme.current.isZoo)await currentProviderImplementation.removeMapFade(_currentMapController);
+    // Lift the fade whenever one could be up. Deliberately NOT gated on the
+    // current toggle: a host that turns the toggle off while a faded path is
+    // drawn must still get the fade cleared, or the map stays dimmed forever.
+    await currentProviderImplementation.removeMapFade(_currentMapController);
     notifyListeners();
   }
 
   Future<void> annotatePath({required List<String> bids, required int sourceFloor, bool isTour = false}) async {
     deSelectLocation();
     _annotationController.isTourPath = isTour;
-    if(RenderingTheme.current.isZoo)await currentProviderImplementation.addMapFade(_currentMapController);
+    if (mapFadeOnPath) {
+      await currentProviderImplementation.addMapFade(_currentMapController);
+    }
     for (var bid in bids) {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }

@@ -33,32 +33,19 @@ class PredefinedMarkers{
   /// change.
   static GeoJsonMarker getUserMarker(MapLocation location, String id,
       {UserMarkerStyle? style}){
-    print("getUserMarker: asset=${style?.assetPath ?? LandmarkAssetType.user.assetPath} "
-        "size=${style?.imageSize ?? const Size(35, 35)} (override=${style != null})");
     return GeoJsonMarker(
         id: id,
         position: location,
         title: "",
         snippet: "",
-        // Web draws the user as a blue disc with a white ring — the source
-        // marker's design recoloured. Regenerate it with `tool/make_marker.py`
-        // (colours are constants at the top) rather than exporting from a
-        // rasteriser: macOS `qlmanage` composites its output onto an opaque
-        // white card, which still reports hasAlpha but drew a white square
-        // behind the marker on the map. Native keeps user.png untouched.
-        assetPath: style?.assetPath ??
-            (kIsWeb
-                ? 'packages/unified_map_view/assets/markers/userMarkerBlue.png'
-                : LandmarkAssetType.user.assetPath),
+        assetPath: kIsWeb
+            ? 'packages/unified_map_view/assets/markers/userMarkerBlue.png'
+            : LandmarkAssetType.user.assetPath,
         iconName: "User",
         priority: true,
-        // Web draws it at half size: the plain disc reads much heavier on the
-        // floor plan than the old arrow did at the same 35pt.
-        imageSize: style?.imageSize ??
-            (kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35)),
+        imageSize: kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35),
       anchor: LandmarkAssetType.user.anchor,
       renderAnchor: Offset(0.5, 0.5),
-      // renderAnchor: Offset(0.515, 0.66),
       compassBasedRotation: style?.compassBasedRotation ?? true,
       customRendering: true
     );

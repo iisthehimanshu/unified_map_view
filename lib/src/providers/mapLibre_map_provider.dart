@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:unified_map_view/src/utils/perf_trace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -15,7 +16,6 @@ import 'package:unified_map_view/src/models/selectedLocation.dart';
 import '../utils/UnifiedMarkerCreator.dart';
 import '../utils/geoJson/geoJsonUtils.dart';
 import '../utils/geoJson/predefined_markers.dart';
-import '../utils/mapCalculations.dart';
 import '../utils/renderingUtilities.dart';
 import '../enums/Theme.dart';
 import '../VenueManager/VenueData.dart';
@@ -23,17 +23,47 @@ import 'base_map_provider.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
+import '../models/map_layer.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:http/http.dart' as http;
+import '../utils/LandmarkAssetType.dart';
+import '../models/marker_type_info.dart';
+
+/// Substitutes a host's absolute opacity override for the value a layer would
+/// natively use. Returns [base] unchanged when no override applies.
+typedef _OpacityResolver = dynamic Function(dynamic base);
+
+/// Everything a custom-rendering marker needs registered with the map style,
+/// kept so a style reload — which wipes every addImage() call — can re-upload
+/// without re-fetching the source photo or re-entering the bake path.
+class _BakedMarkerIcon {
+  /// Full composite, with the label baked in. Registered under the marker id.
+  final Uint8List main;
+
+  /// Image id the zoomed-out (label-less) variant is registered under. Shared
+  /// between every marker whose photo and pill geometry match; equal to the
+  /// marker id when the label is hidden, since both bakes are then identical.
+  final String smallIconId;
+
+  /// Bytes for [smallIconId]. Null when it aliases [main].
+  final Uint8List? small;
+
+  /// Museum POI highlight variant, registered under '<id>-selected'.
+  final Uint8List? selected;
+
+  final Offset anchor;
+
+  const _BakedMarkerIcon({
+    required this.main,
+    required this.smallIconId,
+    required this.anchor,
+    this.small,
+    this.selected,
+  });
+}
 
 /// MapLibre GL implementation of BaseMapProvider
 /// Supports MapLibre — an open-source vector map rendering engine
-/// How a marker reacts when it is tapped / selected.
-///
-/// [none] is the default — the marker just gets highlighted, with no motion.
-/// Set [MaplibreMapProvider.markerSelectionAnimationStyle] to one of the other
-/// values when you actually want the tap animation.
-enum MarkerSelectionAnimationStyle { none, growShrink, shakeVertical }
 class MaplibreMapProvider extends BaseMapProvider {
   MapLibreMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
@@ -41,9 +71,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   final List<GeoJsonMarker> _rotatingSymbols = [];
   final List<GeoJsonPolygon> _polygons = [];
   final List<GeoJsonPolyline> _lines = [];
-
-  final ValueNotifier<String?> bannerText = ValueNotifier(null);
-  final ValueNotifier<IconData?> bannerIcon = ValueNotifier(null);
 
   /// Raw GeoJSON point-feature maps whose properties carry a "3dRef"
   /// part list — rendered as extruded 3D furniture. Kept so the source
@@ -61,8 +88,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
-  final String _animatedMarkerSourceId = 'animated-marker-source';
-  final String _animatedMarkerLayerId = 'animated-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
@@ -79,15 +104,28 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const String _kDotAssetPath =
       'packages/unified_map_view/assets/markers/room_dot.png';
 
-  /// Map image id for the path direction arrow.
-  static const String _kPathArrowImageId = '__path_arrow__'; 
-  static const String _kPathBigArrowImageId = '__path_big_arrow__';
-
   /// Marker ids for which icon/text overlap is temporarily forced on. These
   /// markers are routed into a dedicated always-visible layer (and excluded
   /// from the collision-subject normal layers) so they are never hidden by
   /// collision, until cleared.
   final Set<String> _overlapOverrideIds = {};
+
+  /// Landmark types the host wants drawn, normalised, or null for "draw
+  /// everything".
+  ///
+  /// Holds raw GeoJSON type strings rather than [LandmarkAssetType] because the
+  /// vocabulary is per-venue: the enum is an *icon* choice, it collapses
+  /// distinct types onto one asset (`entry`/`entrance`/`exit` all become
+  /// [LandmarkAssetType.mainEntry]) and resolves to null for anything it has no
+  /// case for, so it can neither address every type a venue has nor tell two of
+  /// them apart.
+  ///
+  /// Applied where the cluster source is built rather than as a per-layer
+  /// filter: a filtered-out marker is then absent from the source entirely, so
+  /// it takes no part in MapLibre's collision pass. A layer filter would leave
+  /// it competing for space and suppressing neighbours it is no longer drawn
+  /// next to — and it would have to be repeated across all ten marker layers.
+  Set<String>? _markerTypeFilter;
 
   final String _rotationSourceId = 'rotation-markers-source';
   final String _rotationMarkerLayerId = 'rotation-marker-layer';
@@ -107,6 +145,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
+  /// The basemap raster layer declared in [osmRasterStyle]. Named here so
+  /// greyscale can set raster-saturation on it.
+  final String _baseMapRasterLayerId = 'osm-tiles-layer';
   final String _furnitureSourceId = 'furniture-source';
 
   /// 3D extruded furniture (shown in immersive/3D mode).
@@ -121,21 +162,255 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const double _furnitureMinZoom = 17.5;
 
   final String _polylineSourceId = 'polylines-source';
-  final String _pathCornerSourceId = 'path-corners-source';
-  final String _pathBigArrowLayerId = 'path-big-arrow-layer';
-  final String _pathShineSourceId = 'path-shine-source';
-  final String _pathShineLayerId = 'path-shine-layer';
-  static const String _kShineImageId = '__path_shine__';
-  Timer? _pathShineTimer;
-  double _pathShineProgress = 0.0;
-  List<Map<String, dynamic>> _allCornerFeatures = [];
-  final String _turnBubbleLayerId = 'turn-bubble-layer';
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
   final String _pathOutlineLayerId = 'path-solid-outline-polyline-layer';
   final String _pathDashedLayerId = 'path-dashed-polyline-layer';
-  final String _pathArrowLayerId = 'path-arrow-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
   final String _greyOverlayLayerId = 'grey-overlay-polyline-layer';
+
+  // ---------------------------------------------------------------------------
+  // Layer policy
+  // ---------------------------------------------------------------------------
+
+  /// Which [MapLayer] leaf group each real style layer belongs to.
+  ///
+  /// This is the only place layer ids are tied to the host-facing taxonomy, and
+  /// it must cover every layer this provider actually creates. Note
+  /// [_normalIconMarkerLayerId] is deliberately absent: no layer is ever created
+  /// under that bare id, it only serves as a `belowLayerId` anchor. The two
+  /// `-with/withoutSectionId` variants are the real layers.
+  late final Map<String, MapLayer> _layerGroups = {
+    // markers
+    _dotMarkerLayerId: MapLayer.landmarkMarkers,
+    _normalTextMarkerLayerId: MapLayer.landmarkMarkers,
+    '$_normalIconMarkerLayerId-withSectionId': MapLayer.landmarkMarkers,
+    '$_normalIconMarkerLayerId-withoutSectionId': MapLayer.landmarkMarkers,
+    _customRenderingMarkerLayerId: MapLayer.landmarkMarkers,
+    _overlapOverrideMarkerLayerId: MapLayer.landmarkMarkers,
+    _fixedMarkerLayerId: MapLayer.entryMarkers,
+    _priorityMarkerLayerId: MapLayer.priorityMarkers,
+    _sectionMarkerLayerId: MapLayer.sectionLabels,
+    _subSectionMarkerLayerId: MapLayer.subSectionLabels,
+    _patchAboveMarkerLayerId: MapLayer.venueLabel,
+    // polygons
+    _normalPolygonLayerId: MapLayer.rooms,
+    _patternPolygonLayerId: MapLayer.rooms,
+    // _sectionPolygonLayerId: MapLayer.sections,
+    // _subSectionPolygonLayerId: MapLayer.subSections,
+    // _patchBelowPolygonLayerId: MapLayer.venueBoundary,
+    // _patchAbovePolygonLayerId: MapLayer.venueBoundary,
+    _extrudedPolygonLayerId: MapLayer.extrusions,
+    // polylines
+    _pathSolidLayerId: MapLayer.routeLine,
+    _pathOutlineLayerId: MapLayer.routeLine,
+    _pathDashedLayerId: MapLayer.routeLine,
+    _greyOverlayLayerId: MapLayer.routeTraveled,
+    _polylineLayerId: MapLayer.polylines,
+    // furniture
+    _furnitureFillLayerId: MapLayer.furniture,
+    _furnitureLayerId: MapLayer.furniture,
+    // user location
+    _rotationMarkerLayerId: MapLayer.userLocation,
+    _normalCircleLayerId: MapLayer.userLocation,
+    // selection
+    _selectedMarkerLayerId: MapLayer.selection,
+    _selectedPlainPolygonLayerId: MapLayer.selection,
+    _selectedPlainPolygonStrokeLayerId: MapLayer.selection,
+    _selectedExtrudedPolygonLayerId: MapLayer.selection,
+  };
+
+  MapLayerPolicy _policy = MapLayerPolicy.all;
+
+  /// Full-property builders, keyed by layer id, registered by [_layerProps] as
+  /// each layer is created or refreshed.
+  ///
+  /// These have to be *full* property sets, not partial ones:
+  /// `MapLibreMapController.setLayerProperties` serialises with
+  /// `toJson(skipNulls: false)`, so every field left unset is sent as an
+  /// explicit null and resets that property to its default. Re-applying a
+  /// policy therefore has to be able to regenerate everything the layer had.
+  final Map<String, LayerProperties Function(_OpacityResolver)> _propBuilders =
+      {};
+
+  /// How to REBUILD a layer that `setLayerProperties` cannot touch.
+  ///
+  /// maplibre_gl's Android `layer#setProperties` handler is an if-chain over
+  /// Line/Fill/Circle/Symbol/Raster/Hillshade and falls through to
+  /// `UNSUPPORTED_LAYER_TYPE` for anything else — so **every fill-extrusion
+  /// layer silently rejects every property push**, opacity included. That is a
+  /// plugin gap, not something this file can set differently.
+  ///
+  /// The way through is the one already used for `patch-above-markers-layer`:
+  /// remove the layer and add it again with the properties we want. Each entry
+  /// re-adds one layer with its original source, filter, anchor and zoom range —
+  /// those MUST match the creation call or the layer silently changes z-order or
+  /// stops matching features.
+  final Map<String, Future<void> Function()> _layerReAdders = {};
+
+  /// Last opacity actually pushed through a re-adder, per layer.
+  ///
+  /// A re-add is a remove + add of a real layer — visibly a flicker, and far
+  /// more expensive than setting a property. [_applyLayerPolicy] runs on far
+  /// more than opacity changes (selection, camera idle, furniture setup), so
+  /// without this every one of those rebuilds all three extrusion layers for no
+  /// change at all. Keyed absent = never pushed.
+  final Map<String, double?> _reAddedOpacity = {};
+
+  /// Layers we have written a policy value to at least once.
+  ///
+  /// [_applyLayerPolicy] skips layers whose resolved state is the default, so a
+  /// host that never touches this API sees no extra channel traffic at all.
+  /// Without this set, that fast path would also skip the write that *restores*
+  /// a layer after a host un-hides it or clears an opacity override.
+  final Set<String> _everApplied = {};
+
+  MapLayerState _stateForLayer(String layerId) {
+    final group = _layerGroups[layerId];
+    return group == null ? MapLayerState.defaults : _policy.resolve(group);
+  }
+
+  /// Registers [layerId]'s full property set as a function of the opacity
+  /// resolver, and returns the properties to push right now.
+  ///
+  /// Every opacity write in this file goes through here. [build] receives a
+  /// resolver: wrap each opacity value the layer would natively use in
+  /// `op(...)`, and the host's absolute override is substituted when one is set.
+  P _layerProps<P extends LayerProperties>(
+      String layerId, P Function(_OpacityResolver op) build) {
+    _propBuilders[layerId] = build;
+    final override = _stateForLayer(layerId).opacity;
+    return build((base) => override ?? base);
+  }
+
+  /// Registers [layerId]'s full property set without pushing it.
+  ///
+  /// For the handful of call sites that deliberately push a *partial* set —
+  /// the native branch of [_refreshMarkerLayerMinZooms] — so that a later
+  /// policy re-apply regenerates the state that branch intended rather than the
+  /// creation-time one.
+  void _registerLayerProps<P extends LayerProperties>(
+      String layerId, P Function(_OpacityResolver op) build) {
+    _propBuilders[layerId] = build;
+  }
+
+  /// The opacity resolver for [layerId], for call sites that build their own
+  /// property set rather than going through [_layerProps].
+  _OpacityResolver _opFor(String layerId) {
+    final override = _stateForLayer(layerId).opacity;
+    return (base) => override ?? base;
+  }
+
+  /// The `visibility` layout value for [layerId], composing the host policy with
+  /// the renderer's own intent.
+  ///
+  /// The host can subtract but never add: passing `internalVisible: false` (the
+  /// 2D/3D rules) hides the layer no matter what the policy says, because those
+  /// rules exist to stop the renderer drawing something incoherent.
+  String _visibility(String layerId, {bool internalVisible = true}) =>
+      (_stateForLayer(layerId).visible == false || !internalVisible)
+          ? "none"
+          : "visible";
+
+  /// Whether taps on [layerId] should be acted on.
+  ///
+  /// Layers with no binding — the basemap raster, anything added outside this
+  /// provider — are always tappable, so behaviour is unchanged for them.
+  bool _tapAllowedForLayer(String layerId) =>
+      _stateForLayer(layerId).tappable != false;
+
+  /// Whether any marker group is still drawn under the current policy.
+  ///
+  /// [_selectedMarkerLayerId] belongs to [MapLayer.selection], which presets
+  /// like [MapLayerPolicy.polygonsOnly] deliberately leave alone so that
+  /// tapping a room still highlights it. That exemption is meant for the
+  /// selected-POLYGON layers; applied to the selected-marker layer it resurrects
+  /// a marker the host just hid — tap a room with markers off and one marker
+  /// pops back, because selectLocation flags the tapped landmark's feature
+  /// `isSelected` and that layer's filter is exactly `isSelected`.
+  ///
+  /// So the marker half of the selection is additionally gated on markers being
+  /// drawn at all. The polygon half is untouched.
+  bool get _anyMarkerGroupVisible => MapLayer.markers.leaves
+      .any((g) => _policy.resolve(g).visible != false);
+
+  /// Re-push the full property set for [only], or every registered layer.
+  ///
+  /// Wrapped per layer: `furniture-layer`, `patch-above-markers-layer` and
+  /// `section-markers-layer` are removed and re-added at runtime, so a write can
+  /// legitimately land on a layer that does not exist right now.
+  /// Tail of the serialised chain of policy applies.
+  ///
+  /// Applies MUST NOT interleave. A fill-extrusion layer is updated by removing
+  /// and re-adding it (see [_layerReAdders]), so two overlapping applies run
+  /// remove(A) → remove(B) → add(A) → add(B), and the second add throws
+  /// `CannotAddLayerException: already exists`. An opacity slider produces
+  /// exactly that overlap, several times a second.
+  ///
+  /// Chaining rather than dropping: the last value dragged to is the one that
+  /// must end up applied, so every request has to run, just strictly in order.
+  Future<void>? _policyApplyChain;
+
+  Future<void> _applyLayerPolicy(
+    MapLibreMapController controller, {
+    Iterable<String>? only,
+    bool force = false,
+  }) {
+    final next = (_policyApplyChain ?? Future<void>.value())
+        .then((_) => _applyLayerPolicyOnce(controller, only: only, force: force));
+    // The chain must survive a failed link, or one error strands every later
+    // apply behind it.
+    _policyApplyChain = next.catchError((_) {});
+    return next;
+  }
+
+  Future<void> _applyLayerPolicyOnce(
+    MapLibreMapController controller, {
+    Iterable<String>? only,
+    bool force = false,
+  }) async {
+    final ids = (only ?? _propBuilders.keys).toList(growable: false);
+    for (final id in ids) {
+      final build = _propBuilders[id];
+      if (build == null) continue;
+      final state = _stateForLayer(id);
+      final isDefault = state.opacity == null && state.visible != false;
+      if (!force && isDefault && !_everApplied.contains(id)) continue;
+      if (!isDefault) _everApplied.add(id);
+      try {
+        final reAdd = _layerReAdders[id];
+        if (reAdd != null) {
+          // Fill-extrusion: setLayerProperties would throw
+          // UNSUPPORTED_LAYER_TYPE, so rebuild the layer instead. The builder
+          // registered for it reads the live policy, so the re-add picks up the
+          // override on its own.
+          if (_reAddedOpacity.containsKey(id) &&
+              _reAddedOpacity[id] == state.opacity) {
+            continue; // nothing changed — do not pay a rebuild
+          }
+          await reAdd();
+          _reAddedOpacity[id] = state.opacity;
+          print('layer policy: $id rebuilt <- opacity ${state.opacity}');
+        } else {
+          await controller.setLayerProperties(
+              id, build((base) => state.opacity ?? base));
+        }
+      } catch (e) {
+        // Usually benign: the layer is not present right now (furniture in 2D,
+        // or mid re-add). It was swallowed silently, which also hid real
+        // failures — a push that throws here is indistinguishable from one that
+        // worked, and the group simply never changes.
+        print('layer policy: $id push failed: $e');
+      }
+    }
+  }
+
+  @override
+  Future<void> setLayerPolicy(
+      dynamic controller, MapLayerPolicy policy) async {
+    _policy = policy;
+    if (controller is! MapLibreMapController) return;
+    await _applyLayerPolicy(controller, force: true);
+  }
 
   /// Resolves a `belowLayerId` anchor safely.
   ///
@@ -161,10 +436,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isPolylineLayersEnabled = false;
   bool _isCircleLayersEnabled = false;
   bool _isFurnitureLayerEnabled = false;
-
-  /// Pending self-heal retry timers per GeoJSON source id — see the comment
-  /// in [setGeoJsonSource].
-  final Map<String, List<Timer>> _settleTimers = {};
 
   /// Whether [_clusterSourceId]/[_rotationSourceId] currently exist natively.
   /// A style reload wipes every source, so anything pushing GeoJSON from a
@@ -211,225 +482,391 @@ class MaplibreMapProvider extends BaseMapProvider {
   // ---------------------------------------------------------------------------
 
   @override
+  /// Captured from [buildMap]'s config, because `config` is a parameter there
+  /// rather than a field and [_refreshPatchAboveOpacity] — which is where the
+  /// venue actually finishes drawing — cannot reach it.
+  void Function()? _onVenueRenderedCb;
+
+  final Completer<void> _venueRenderedCompleter = Completer<void>();
+
+  /// Completes when the venue geometry is drawn. See [BaseMapProvider.venueRendered].
+  @override
+  Future<void> get venueRendered => _venueRenderedCompleter.future;
+
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
-    // The plugin's actual default (despite its doc comment claiming
-    // otherwise) is Virtual Display, not Hybrid Composition — see
-    // maplibre_gl_platform_interface's MapLibreMethodChannel.useHybridComposition,
-    // which is initialized to `false`. On Android, Virtual Display composites
-    // this GL-backed native view into an offscreen buffer and blits it into
-    // the Flutter tree, which is a well-known source of partial-transparency/
-    // ghosting artifacts for embedded GL/SurfaceView content — worst exactly
-    // during interaction (camera rotate/tilt), since that's when the native
-    // view's content is changing fastest relative to the composited copy.
-    // That reads as "furniture randomly turns transparent and it's worse
-    // when I rotate the camera" even though the map itself is rendering
-    // every frame correctly. Hybrid Composition embeds the native view
-    // directly instead of compositing a copy, which removes this whole
-    // class of artifact.
-    MapLibreMap.useHybridComposition = true;
-    return MapLibreMap(
-      trackCameraPosition: true,
-      initialCameraPosition: CameraPosition(
-          target: LatLng(
-            config.initialLocation.mapLocation.latitude,
-            config.initialLocation.mapLocation.longitude,
+    _onVenueRenderedCb = config.onVenueRendered;
+    // Seeded on every rebuild, not just the first: this is the only path by
+    // which the policy reaches the provider before onMapCreated and the
+    // enableXxxLayers calls run, so the layers are created in the state the host
+    // asked for instead of flashing the default first. UnifiedMapController
+    // mirrors every runtime change back into the config, so the two never drift.
+    _policy = config.initialLayerPolicy;
+    return Stack(
+      children: [
+        MapLibreMap(
+          trackCameraPosition: true,
+          initialCameraPosition: CameraPosition(
+              target: LatLng(
+                config.initialLocation.mapLocation.latitude,
+                config.initialLocation.mapLocation.longitude,
+              ),
+              zoom: config.initialLocation.zoom,
+              tilt: config.initialLocation.tilt,
+              bearing: config.initialLocation.bearing
           ),
-          zoom: config.initialLocation.zoom,
-          tilt: config.initialLocation.tilt,
-          bearing: config.initialLocation.bearing
-      ),
-      styleString: osmRasterStyle,
-      onMapCreated: (MapLibreMapController controller) async {
-        _config = config;
-        _controller = controller;
+          styleString: osmRasterStyle,
+          onMapCreated: (MapLibreMapController controller) async {
+            _config = config;
+            _controller = controller;
 
-        config.onMapCreated(controller);
+            config.onMapCreated(controller);
 
-        // Handle feature taps (polygons & markers)
-        // MapLibre signature: (Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation)
-        controller.onFeatureTapped.add((Point<double> point, LatLng coordinates, String id, String layerId, Annotation? annotation) async {
-          print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
-          // if (_symbols
-          //     .where((s) => s.id.toLowerCase().contains("path"))
-          //     .isNotEmpty) return;
-          try {
-            // Query rendered features at the tap point for marker layers
-            final markerFeatures = await controller.queryRenderedFeatures(
-              point,
-              [
-                _normalTextMarkerLayerId,
-                "$_normalIconMarkerLayerId-withSectionId",
-                "$_normalIconMarkerLayerId-withoutSectionId",
-                _fixedMarkerLayerId,
-                _customRenderingMarkerLayerId,
-                _priorityMarkerLayerId,
-                _rotationMarkerLayerId,
-                _dotMarkerLayerId,
-              ],
-              null,
-            );
+            // Handle feature taps (polygons & markers).
+            //
+            // maplibre_gl 0.26 OnFeatureInteractionCallback — note the arg
+            // ORDER, which differs from 0.21's (that one led with a dynamic id
+            // and had no annotation):
+            //   (Point<double> point, LatLng coordinates, String id,
+            //    String layerId, Annotation? annotation)
+            // The controller normalises the id with `payload["id"].toString()`
+            // before calling us, so `id` is always a String and never null.
+            // It CAN be empty: symbol layers deliver no feature id (observed on
+            // collision-dot and normalIcon taps), so the `id.isNotEmpty` gate
+            // further down skips them and markers are resolved by
+            // queryRenderedFeatures instead. Only polygon layers arrive here
+            // with a usable composite id.
+            controller.onFeatureTapped.add((Point<double> point,
+                LatLng coordinates,
+                String id,
+                String layerId,
+                Annotation? annotation) async {
+              print("MapLibre onFeatureTapped id $id $point $coordinates layerId $layerId");
+              // if (_symbols
+              //     .where((s) => s.id.toLowerCase().contains("path"))
+              //     .isNotEmpty) return;
+              try {
+                // Query rendered features at the tap point for marker layers
+                // Only query layers whose group still accepts taps. Hidden
+                // layers are already excluded by MapLibre's own query, so
+                // `visible: false` implies untappable for free.
+                final tappableMarkerLayers = <String>[
+                  _normalTextMarkerLayerId,
+                  "$_normalIconMarkerLayerId-withSectionId",
+                  "$_normalIconMarkerLayerId-withoutSectionId",
+                  _fixedMarkerLayerId,
+                  _customRenderingMarkerLayerId,
+                  _priorityMarkerLayerId,
+                  _rotationMarkerLayerId,
+                  _dotMarkerLayerId,
+                ].where(_tapAllowedForLayer).toList();
 
-            print("queryRenderedFeatures count: ${markerFeatures.length}");
+                // An empty layer list is NOT "query nothing" — MapLibre drops
+                // the `layers` option entirely and queries the whole style,
+                // basemap raster included. Skip the call instead.
+                final markerFeatures = tappableMarkerLayers.isEmpty
+                    ? const <dynamic>[]
+                    : await controller.queryRenderedFeatures(
+                        point,
+                        tappableMarkerLayers,
+                        null,
+                      );
 
-            if (markerFeatures.isNotEmpty) {
-              final feature = markerFeatures.first;
-              print(
-                  "feature $feature ${feature['properties']?['id']}");
-              final markerId =
-              _extractPolygonIdFromTap(feature['properties']?['id']);
-              print("Marker tapped with ID: $markerId");
+                print("queryRenderedFeatures count: ${markerFeatures.length}");
 
-              if (markerId != null) {
-                selectLocation(controller, markerId);
-                return;
-              }
-            }
+                if (markerFeatures.isNotEmpty) {
+                  final feature = markerFeatures.first;
+                  print(
+                      "feature $feature ${feature['properties']?['id']}");
+                  final markerId =
+                  _extractPolygonIdFromTap(feature['properties']?['id']);
+                  print("Marker tapped with ID: $markerId");
 
-            final tappedPolygon = _hitTestPolygons(
-              coordinates.latitude,
-              coordinates.longitude,
-            );
-
-            print("tappedPolygon.id ${tappedPolygon?.id}");
-
-            if (tappedPolygon != null &&
-                !tappedPolygon.id.toLowerCase().contains("boundary")) {
-              final polygonId = _extractPolygonIdFromTap(tappedPolygon.id);
-              if (polygonId != null &&
-                  !polygonId.toLowerCase().contains("boundary")) {
-                selectLocation(controller, polygonId);
-              }
-              return;
-            }
-
-            // Fall through to polygon tap
-            if (id.isNotEmpty) {
-              final polygonId = _extractPolygonIdFromTap(id);
-              if (polygonId != null &&
-                  !polygonId.toLowerCase().contains("boundary")) {
-                selectLocation(controller, polygonId);
-              }
-            }
-          } catch (e) {
-            print("Error handling feature tap: $e");
-          }
-        });
-      },
-      onStyleLoadedCallback: () async {
-        if (_controller != null) {
-          await config.onStyleLoadedCallback(_controller);
-          // Style reload wipes ALL sources, layers, and addImage() calls —
-          // reset flags so enableXxxLayers() re-creates everything cleanly.
-          _isClusteringEnabled = false;
-          // Sources are gone until enableMarkerLayers() re-adds them below;
-          // block async GeoJSON pushes for the whole rebuild window.
-          _markerSourcesReady = false;
-          _isPolygonLayersEnabled = false;
-          _isPolylineLayersEnabled = false;
-          // Registered dot images are wiped too; allow re-registration.
-          _registeredDotImageIds.clear();
-          _registeredCornerArrowAngles.clear();
-          // Registered path arrow is wiped too.
-          await _loadPathArrowImage(_controller!);
-          // Registered animal icons are wiped too (the composited bytes in
-          // _animalIconCache are still valid and get reused, only the
-          // addImage() registration needs to happen again).
-          _loadedAnimalIcons.clear();
-          _isCircleLayersEnabled = false;
-          _isFurnitureLayerEnabled = false;
-          _isFurnitureExtrusionAdded = false;
-
-          // Re-register all marker icons — style reload wipes addImage() calls
-          for (final marker in [..._symbols, ..._rotatingSymbols]) {
-            try {
-              await _loadMarkerIcon(_controller!, marker);
-            } catch (e) {
-              print('Warning: failed to reload icon for ${marker.id}: $e');
-            }
-          }
-
-          await enablePolygonLayers(_controller!);
-          await enablePolylineLayers(_controller!);
-          await enableCircleLayers(_controller!);
-          await enableMarkerLayers(_controller!);
-
-          // enableMarkerLayers re-pushes _symbols, but not _rotatingSymbols
-          if (_rotatingSymbols.isNotEmpty) {
-            await setGeoJsonSource(_controller!, _rotatingSymbols, _rotationSourceId);
-          }
-          // Re-push polygons, polylines, and circles that existed before reload.
-          // Style reload wipes addImage() pattern bitmaps too, so re-register
-          // them BEFORE re-pushing the source — otherwise fill-pattern resolves
-          // to a missing image and the polygon renders grey.
-          if (_polygons.isNotEmpty) {
-            await Future.wait(
-              _polygons.map((polygon) async {
-                try {
-                  await RenderingUtilities.registerLandmarkPattern(_controller!, polygon);
-                } catch (e) {
-                  print('Warning: failed to re-register pattern for ${polygon.id}: $e');
+                  if (markerId != null) {
+                    _selectFromTap(controller, markerId,
+                        _markerGroupFor(feature['properties'] as Map?));
+                    return;
+                  }
                 }
-              }),
-            );
-            await _updatePolygonSource(_controller!);
-          }
-          if (_lines.isNotEmpty) {
-            await _updatePolylineSource(_controller!);
-          }
-          if (_circles.isNotEmpty) {
-            await _setGeoJsonCircle(_controller!);
-          }
-          if (_furnitureItems.isNotEmpty) {
-            await _enableFurnitureLayer(_controller!);
-            await _updateFurnitureSource(_controller!);
-          }
-          _screenSize = MediaQuery.of(context).size;
-          await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
-        }
-      },
-      onCameraIdle: () async {
-        if (_controller != null) {
-          try {
-            if (_allCornerFeatures.isNotEmpty && _controller != null) {
-              _refreshCornerVisibility(_controller!);
-            }
-            final cameraPos = _controller!.cameraPosition;
-            if(cameraPos == null) return;
-            final target = cameraPos.target;
-            final bearing = cameraPos.bearing;
-            final tilt = cameraPos.tilt;
-            final zoom = cameraPos.zoom;
-            print("tilt $tilt");
-            print("zoom $zoom");
-            print("bearing $bearing");
-            var unifiedCameraPosition = UnifiedCameraPosition(
-                mapLocation: MapLocation(
-                  latitude: target.latitude,
-                  longitude: target.longitude,
-                ),
-                zoom: zoom,
-                bearing: bearing,
-                tilt: tilt
-            );
-            config.onCameraMove(unifiedCameraPosition);
 
-            if(onCameraMove != null){
-              onCameraMove(unifiedCameraPosition);
+                final tappedPolygon = _hitTestPolygons(
+                  coordinates.latitude,
+                  coordinates.longitude,
+                  allow: (p) => _tapAllowedForGroup(_polygonGroupFor(p)),
+                );
+
+                print("tappedPolygon.id ${tappedPolygon?.id}");
+
+                if (tappedPolygon != null &&
+                    !tappedPolygon.id.toLowerCase().contains("boundary")) {
+                  final polygonId = _extractPolygonIdFromTap(tappedPolygon.id);
+                  if (polygonId != null &&
+                      !polygonId.toLowerCase().contains("boundary")) {
+                    _selectFromTap(controller, polygonId,
+                        _polygonGroupFor(tappedPolygon));
+                  }
+                  return;
+                }
+
+                // Fall through to polygon tap. This is the only route by which
+                // the label and selected-marker layers reach selection — none of
+                // them are in the query list above — so gate on the layer the
+                // tap actually came from, which every platform populates.
+                if (id.isNotEmpty && _tapAllowedForLayer(layerId)) {
+                  final polygonId = _extractPolygonIdFromTap(id);
+                  if (polygonId != null &&
+                      !polygonId.toLowerCase().contains("boundary")) {
+                    GeoJsonPolygon? matched;
+                    for (final p in _polygons) {
+                      if (p.id.contains(polygonId)) {
+                        matched = p;
+                        break;
+                      }
+                    }
+                    _selectFromTap(
+                      controller,
+                      polygonId,
+                      matched == null
+                          ? MapLayer.rooms
+                          : _polygonGroupFor(matched),
+                    );
+                  }
+                }
+              } catch (e) {
+                print("Error handling feature tap: $e");
+              }
+            });
+          },
+          onStyleLoadedCallback: () async {
+            if (_controller != null) {
+              // Host-supplied; a throw here would skip the entire layer rebuild
+              // below and leave the map permanently blank. Same reasoning as
+              // the try around the icon rebake.
+              try {
+                await config.onStyleLoadedCallback(_controller);
+              } catch (e) {
+                print('style-loaded: host onStyleLoadedCallback threw: $e');
+              }
+              // Style reload wipes ALL sources, layers, and addImage() calls —
+              // reset flags so enableXxxLayers() re-creates everything cleanly.
+              _isClusteringEnabled = false;
+              // Sources are gone until enableMarkerLayers() re-adds them below;
+              // block async GeoJSON pushes for the whole rebuild window.
+              _markerSourcesReady = false;
+              _isPolygonLayersEnabled = false;
+              _isPolylineLayersEnabled = false;
+              // Registered dot images are wiped too; allow re-registration.
+              _registeredDotImageIds.clear();
+              // Same for the shared label-less icons. The baked bytes in
+              // _bakedIconCache stay valid — only the addImage() registration
+              // is gone — so the rebake pass below is upload-only.
+              _registeredSmallIconIds.clear();
+              // Registered animal icons are wiped too (the composited bytes in
+              // _animalIconCache are still valid and get reused, only the
+              // addImage() registration needs to happen again).
+              _loadedAnimalIcons.clear();
+              // Re-arm the deferred labelled bake: its addImage() calls are
+              // gone with the style, so the next camera idle at label zoom has
+              // to re-register them. The bytes survive in _animalIconCache, so
+              // that pass is upload-only.
+              _labelledAnimalsStarted = false;
+              _isCircleLayersEnabled = false;
+              _isFurnitureLayerEnabled = false;
+              _isFurnitureExtrusionAdded = false;
+              // The layers this was building are gone with the style, so a
+              // fresh setup must be allowed to start rather than joining it.
+              _furnitureLayerSetup = null;
+              // Every layer is about to be rebuilt, and each builder closes over
+              // the fade zoom and 2D/3D mode of the style it was registered
+              // under — so the stale ones must go. `_policy` deliberately does
+              // NOT reset: it is the host's setting, not style state, and the
+              // enableXxxLayers calls below read it to recreate the layers in
+              // the state the host asked for.
+              _propBuilders.clear();
+              _everApplied.clear();
+              // These close over layers the style reload just destroyed; the
+              // re-creation below registers fresh ones.
+              _layerReAdders.clear();
+              _reAddedOpacity.clear();
+
+              // Re-register all marker icons — style reload wipes addImage() calls
+              //
+              // Animal markers are split out and rebaked through
+              // _batchLoadAnimalIcons below. _loadMarkerIcon is the *generic*
+              // path: it re-registers an image under the marker's own id but
+              // never repopulates _loadedAnimalIcons, which is the set
+              // _animalDisplayIconId consults to decide between the real
+              // composite and the paw placeholder. Since the reset above
+              // clears that set and _batchLoadAnimalIcons only otherwise runs
+              // from addMarkers (which does not re-run after a style reload),
+              // sending animals through the generic path left every one of
+              // them pinned to its paw placeholder for good, at every zoom.
+              final allIconMarkers = [..._symbols, ..._rotatingSymbols];
+              final animalIconMarkers =
+                  allIconMarkers.where(_isAnimalMarker).toList();
+              final iconMarkers =
+                  allIconMarkers.where((m) => !_isAnimalMarker(m)).toList();
+              // The enable*Layers calls below MUST run. Every layer flag was
+              // reset to false at the top of this callback, so if anything in
+              // the icon rebake throws and we bail out here, those flags stay
+              // false for the lifetime of the map — and setGeoJsonSource,
+              // _updatePolygonSource and _updatePolylineSource all silently
+              // early-return on a false flag. The result is a permanent grey
+              // basemap with no venue and no error anywhere: the exact symptom
+              // seen on web on 2026-08-27. A missing icon is cosmetic; a
+              // missing layer is fatal. So the bake is best-effort and the
+              // enables are unconditional.
+              try {
+              await PerfTrace.timeAsync(
+                  'style-loaded: rebake of ${iconMarkers.length} icons', () async {
+                if (kIsWeb) {
+                  // Fanned out instead of a sequential `for ... await`. This
+                  // pass runs *after* the basemap paints, so serially baking
+                  // ~190 icons was the bulk of "base map instant, then elements
+                  // trickle in for ~12s". The wall-clock total barely moves
+                  // (single-threaded, CPU-bound), but the work interleaves and
+                  // the URL-icon fetches overlap, which reads as noticeably
+                  // faster. Sequencing is preserved: every icon is registered
+                  // before enable*Layers below.
+                  await Future.wait(iconMarkers.map((marker) async {
+                    try {
+                      await _loadMarkerIcon(_controller!, marker);
+                    } catch (e) {
+                      print('Warning: failed to reload icon for ${marker.id}: $e');
+                    }
+                  }));
+                } else {
+                  for (final marker in iconMarkers) {
+                    try {
+                      await _loadMarkerIcon(_controller!, marker);
+                    } catch (e) {
+                      print('Warning: failed to reload icon for ${marker.id}: $e');
+                    }
+                  }
+                }
+              });
+
+              // NOT awaited — this is the single biggest cost on the whole web
+              // load path. Measured on device (NationalZoologicalPark, 112
+              // animals, release): **14,053ms**, against a 25,725ms
+              // time-to-venue. Skipping markers entirely rendered the venue in
+              // 11,446ms, so this one call was 14.3s of the 14.3s that markers
+              // cost. It ran here, awaited, *before* enable*Layers — so the map
+              // sat blank for 14s re-registering icons for a venue it could
+              // already have drawn.
+              //
+              // The comment this replaces argued it had to be awaited so
+              // _loadedAnimalIcons was filled before enableMarkerLayers pushes
+              // the source, "otherwise that push serialises every animal
+              // feature with the paw id". That is true and it is fine: the paw
+              // IS the designed load-state fallback (_animalDisplayIconId), and
+              // _scheduleAnimalIconRefresh re-pushes the source as each icon
+              // lands. Paws for a couple of seconds beats a blank map for
+              // fourteen.
+              if (animalIconMarkers.isNotEmpty) {
+                unawaited(PerfTrace.timeAsync(
+                        'style-loaded: rebake of ${animalIconMarkers.length} animal icons',
+                        () => _batchLoadAnimalIcons(
+                            _controller!, animalIconMarkers))
+                    .catchError((e) {
+                  // Unawaited, so a throw here would be an unhandled async
+                  // error rather than something the try below can catch.
+                  print('style-loaded: animal rebake failed: $e');
+                }));
+              }
+              } catch (e, stack) {
+                print('style-loaded: icon rebake failed, continuing to enable '
+                    'layers anyway: $e');
+                print(stack);
+              }
+
+              await enablePolygonLayers(_controller!);
+              await enablePolylineLayers(_controller!);
+              await enableCircleLayers(_controller!);
+              await enableMarkerLayers(_controller!);
+
+              // enableMarkerLayers re-pushes _symbols, but not _rotatingSymbols
+              if (_rotatingSymbols.isNotEmpty) {
+                await setGeoJsonSource(_controller!, _rotatingSymbols, _rotationSourceId);
+              }
+              // Re-push polygons, polylines, and circles that existed before reload.
+              // Style reload wipes addImage() pattern bitmaps too, so re-register
+              // them BEFORE re-pushing the source — otherwise fill-pattern resolves
+              // to a missing image and the polygon renders grey.
+              if (_polygons.isNotEmpty) {
+                await Future.wait(
+                  _polygons.map((polygon) async {
+                    try {
+                      await RenderingUtilities.registerLandmarkPattern(_controller!, polygon);
+                    } catch (e) {
+                      print('Warning: failed to re-register pattern for ${polygon.id}: $e');
+                    }
+                  }),
+                );
+                await _updatePolygonSource(_controller!);
+              }
+              if (_lines.isNotEmpty) {
+                await _updatePolylineSource(_controller!);
+              }
+              if (_circles.isNotEmpty) {
+                await _setGeoJsonCircle(_controller!);
+              }
+              if (_furnitureItems.isNotEmpty) {
+                await _enableFurnitureLayer(_controller!);
+                await _updateFurnitureSource(_controller!);
+              }
+              _screenSize = MediaQuery.of(context).size;
+              await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
             }
-          } catch (e) {
-            print("Error getting camera position: $e");
-          }
-        }
-      },
-      myLocationEnabled: config.showUserLocation,
-      myLocationTrackingMode: MyLocationTrackingMode.none,
-      compassEnabled: false,
-      rotateGesturesEnabled: config.rotateGesturesEnabled,
-      scrollGesturesEnabled: config.scrollGesturesEnabled,
-      tiltGesturesEnabled: config.tiltGesturesEnabled,
-      zoomGesturesEnabled: config.zoomControlsEnabled,
-      minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
-      logoViewMargins: const Point(50, 5),
+          },
+          onCameraIdle: () async {
+            if (_controller != null) {
+              try {
+                final cameraPos = _controller!.cameraPosition;
+                if(cameraPos == null) return;
+                final target = cameraPos.target;
+                final bearing = cameraPos.bearing;
+                final tilt = cameraPos.tilt;
+                final zoom = cameraPos.zoom;
+                print("tilt $tilt");
+                print("zoom $zoom");
+                print("bearing $bearing");
+                // The labelled animal composites are only drawn from
+                // _kLabelZoomThreshold up, so they are baked the first time the
+                // camera actually settles there instead of during load. Not
+                // awaited: this callback should not block the camera.
+                if (zoom >= _kLabelZoomThreshold) {
+                  unawaited(_ensureLabelledAnimalIcons(_controller!));
+                }
+                var unifiedCameraPosition = UnifiedCameraPosition(
+                    mapLocation: MapLocation(
+                      latitude: target.latitude,
+                      longitude: target.longitude,
+                    ),
+                    zoom: zoom,
+                    bearing: bearing,
+                    tilt: tilt
+                );
+                config.onCameraMove(unifiedCameraPosition);
+
+                if(onCameraMove != null){
+                  onCameraMove(unifiedCameraPosition);
+                }
+              } catch (e) {
+                print("Error getting camera position: $e");
+              }
+            }
+          },
+          myLocationEnabled: config.showUserLocation,
+          myLocationTrackingMode: MyLocationTrackingMode.none,
+          compassEnabled: false,
+          rotateGesturesEnabled: config.rotateGesturesEnabled,
+          scrollGesturesEnabled: config.scrollGesturesEnabled,
+          tiltGesturesEnabled: config.tiltGesturesEnabled,
+          zoomGesturesEnabled: config.zoomControlsEnabled,
+          minMaxZoomPreference: const MinMaxZoomPreference(12.0, 23.0),
+          logoViewMargins: const Point(50, 5),
+        ),
+      ],
     );
   }
 
@@ -510,34 +947,33 @@ class MaplibreMapProvider extends BaseMapProvider {
     await controller.animateCamera(CameraUpdate.tiltTo(targetTilt));
 
     // Explicitly disable extrusion rendering in 2D to avoid any residual shading.
+    // Both of these are fill-extrusion layers, so setLayerProperties is
+    // rejected with UNSUPPORTED_LAYER_TYPE — it always was, silently, under the
+    // bare catches that used to be here. Rebuilding is the only way to change
+    // them, and the registered builders read `_config.immersive`, which was
+    // updated above, so the re-add picks up the new mode by itself.
+    for (final id in [_selectedExtrudedPolygonLayerId, _extrudedPolygonLayerId]) {
+      try {
+        await _layerReAdders[id]?.call();
+      } catch (e) {
+        print('set3DViewEnabled: rebuild of $id failed: $e');
+      }
+    }
     try {
-      await controller.setLayerProperties(
-        _selectedExtrudedPolygonLayerId,
-        FillExtrusionLayerProperties(
-          fillExtrusionColor: "#4CAF50",
-          fillExtrusionHeight: ["get", "height"],
-          fillExtrusionBase: ["get", "base_height"],
-          fillExtrusionOpacity: isEnabled ? 1.0 : 0.0,
-        ),
-      );
-    } catch (_) {}
-    try {
-      await controller.setLayerProperties(
-        _extrudedPolygonLayerId,
-        FillExtrusionLayerProperties(
-          fillExtrusionColor: ["get", "fillColor"],
-          fillExtrusionHeight: ["get", "height"],
-          fillExtrusionBase: ["get", "base_height"],
-          fillExtrusionOpacity: isEnabled ? 1.0 : 0.0,
-        ),
-      );
-    } catch (_) {}
-    try {
+      // Full property set. This used to send `visibility` alone, which — given
+      // setLayerProperties replaces rather than merges — also reset this
+      // layer's icon-image, text-field and symbol-sort-key every time the user
+      // toggled 2D/3D.
       await controller.setLayerProperties(
         _fixedMarkerLayerId,
-        SymbolLayerProperties(
-          visibility: isEnabled ? "none" : "visible",
-        ),
+        _layerProps(
+            _fixedMarkerLayerId,
+            (op) => _fixedMarkerLayerProps(
+                  iconOpacity: op(_kDefaultMarkerOpacity),
+                  textOpacity: op(null),
+                  visibility: _visibility(_fixedMarkerLayerId,
+                      internalVisible: !isEnabled),
+                )),
       );
     } catch (_) {}
 
@@ -552,9 +988,13 @@ class MaplibreMapProvider extends BaseMapProvider {
       try {
         await controller.setLayerProperties(
           _furnitureFillLayerId,
-          FillLayerProperties(
-            visibility: isEnabled ? "none" : "visible",
-          ),
+          _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
+            fillColor: ['get', 'color'],
+            fillOutlineColor: ['get', 'color'],
+            visibility: _visibility(_furnitureFillLayerId,
+                internalVisible: !isEnabled),
+            fillOpacity: op(null),
+          )),
         );
       } catch (_) {}
     }
@@ -662,64 +1102,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  /// Upper zoom edge for the flat "section" fill (the coloured campus patches
-  /// that sit on top of the buildings). At this zoom the patches are gone and
-  /// the buildings show unobstructed; they ramp out over the 0.2 levels below
-  /// it. The *lower* edge is not fixed — the patches stay visible all the way
-  /// down until the "<venue name>" boundary layer fades in, then hand off to
-  /// it. Tune per venue via `_maplibreProvider.sectionLayerMaxZoom = ...`
-  /// before the map is built.
-  double sectionLayerMaxZoom = 18.0;
-
-  /// Fallback lower edge used only before the venue's real fit zoom is known
-  /// (i.e. for the section layer's initial creation, before
-  /// [_refreshPatchAboveOpacity] runs).
-  double sectionLayerMinZoom = 15.0;
-
-  /// Zoom at which plain building-name labels (text-only markers, and the
-  /// icon+text markers grouped under a sectionId) start to appear. Was a hard
-  /// 18.0; lowered so the building name is already readable while the coloured
-  /// section patch is still up (the patch spans up to [sectionLayerMaxZoom]).
-  double buildingLabelMinZoom = 17.0;
-
-  /// Opacity `interpolate` expression for the section fill / labels.
-  ///
-  /// Visible from [lowEdge] (where the boundary layer hands off) up to
-  /// [sectionLayerMaxZoom] (where the buildings take over), fading in/out over
-  /// a short ramp at each end. [lowEdge] defaults to [sectionLayerMinZoom]; the
-  /// runtime refresh passes the venue's boundary fade-out zoom so the patches
-  /// only disappear on zoom-out once the "<venue name>" layer appears.
-  List<dynamic> _sectionZoomWindowOpacity({double? lowEdge}) {
-    final hi = sectionLayerMaxZoom;
-    final loFull = lowEdge ?? sectionLayerMinZoom;
-    // Keep the four zoom stops strictly increasing regardless of tuning.
-    final a = loFull - 0.2;
-    final b = max(loFull, a + 0.01);
-    final c = max(hi - 0.2, b + 0.01);
-    final d = max(hi, c + 0.01);
-    return [
-      "interpolate", ["linear"], ["zoom"],
-      a, 0.0,
-      b, 1.0,
-      c, 1.0,
-      d, 0.0,
-    ];
-  }
-
-  /// Animation played when a marker is tapped / selected. Defaults to
-  /// [MarkerSelectionAnimationStyle.none] (highlight only, no motion) — set
-  /// it to [MarkerSelectionAnimationStyle.growShrink] or
-  /// [MarkerSelectionAnimationStyle.shakeVertical] when the tap animation is
-  /// wanted.
-  MarkerSelectionAnimationStyle markerSelectionAnimationStyle =
-      MarkerSelectionAnimationStyle.none;
-
   Timer? _circleAnimationTimer;
   bool _circleExpanding = true;
-  Timer? _iconAnimationTimer;
-  final Map<String, double> _markerIconScale = {};
-  final Map<String, double> _markerIconShakeDeg = {};
-  String? _animatingMarkerId;
 
   void _startCircleAnimation(
       MapLibreMapController controller, GeoJsonCircle circle) {
@@ -738,16 +1122,17 @@ class MaplibreMapProvider extends BaseMapProvider {
       const double opacity = 1.0 - ((staticRadius - 5.0) / 15.0) * 0.7;
       controller
           .setLayerProperties(
-        _normalCircleLayerId,
-        CircleLayerProperties(
-          circleRadius: staticRadius,
-          circleColor: '#4CAF50',
-          circleOpacity: opacity * 0.3,
-          circleStrokeWidth: 2.0,
-          circleStrokeColor: '#4CAF50',
-          circleStrokeOpacity: opacity * 0.8,
-        ),
-      )
+            _normalCircleLayerId,
+            _layerProps(_normalCircleLayerId, (op) => CircleLayerProperties(
+              visibility: _visibility(_normalCircleLayerId),
+              circleRadius: staticRadius,
+              circleColor: '#4CAF50',
+              circleOpacity: op(opacity * 0.3),
+              circleStrokeWidth: 2.0,
+              circleStrokeColor: '#4CAF50',
+              circleStrokeOpacity: op(opacity * 0.8),
+            )),
+          )
           .catchError((_) {});
       return;
     }
@@ -770,14 +1155,15 @@ class MaplibreMapProvider extends BaseMapProvider {
           try {
             await controller.setLayerProperties(
               _normalCircleLayerId,
-              CircleLayerProperties(
+              _layerProps(_normalCircleLayerId, (op) => CircleLayerProperties(
+                visibility: _visibility(_normalCircleLayerId),
                 circleRadius: circleRadius,
                 circleColor: '#4CAF50',
-                circleOpacity: opacity * 0.3,
+                circleOpacity: op(opacity * 0.3),
                 circleStrokeWidth: 2.0,
                 circleStrokeColor: '#4CAF50',
-                circleStrokeOpacity: opacity * 0.8,
-              ),
+                circleStrokeOpacity: op(opacity * 0.8),
+              )),
             );
           } catch (e) {
             // Ignore animation errors
@@ -785,137 +1171,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         });
   }
 
-
   void stopCircleAnimation() {
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
-  }
-  ///
-  Future<void> animateMarkerSelection(
-      MapLibreMapController controller,
-      String markerId, {
-        MarkerSelectionAnimationStyle style = MarkerSelectionAnimationStyle.none,
-      }) async {
-    // `none` means "no tap animation" — nothing to run.
-    if (style == MarkerSelectionAnimationStyle.none) return;
-    if (_animatingMarkerId != null && _animatingMarkerId != markerId) {
-      _markerIconScale[_animatingMarkerId!] = 1.0;
-      _markerIconShakeDeg[_animatingMarkerId!] = 0.0;
-    }
-    _iconAnimationTimer?.cancel();
-    _animatingMarkerId = markerId;
-
-    final matches = _symbols.where((m) => m.id == markerId);
-    if (matches.isEmpty) return;
-    final marker = matches.first;
-    if (marker.assetPath == null) return;
-
-    // Awaited: static icon must be confirmed hidden before the animated
-    // layer starts drawing, otherwise both are visible for a frame or two.
-    await setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: markerId);
-    await Future.delayed(const Duration(milliseconds: 200)); // let native finish hiding it
-
-    const growShrinkDuration = Duration(milliseconds: 2400);
-    const shakeDuration = Duration(milliseconds: 1400);
-    final totalDuration = style == MarkerSelectionAnimationStyle.growShrink
-        ? growShrinkDuration
-        : shakeDuration;
-
-    final startTime = DateTime.now();
-    bool pushBusy = false;
-    const double peakScale = 2.2;
-    const double peakLabelScale = 1.6;
-
-    Future<void> pushAnimatedFeature(double scale, double shakeDeg, double labelScale) async {
-      if (pushBusy) return;
-      pushBusy = true;
-      try {
-        await controller.setGeoJsonSource(_animatedMarkerSourceId, {
-          'type': 'FeatureCollection',
-          'features': [
-            {
-              'type': 'Feature',
-              'geometry': {
-                'type': 'Point',
-                'coordinates': [marker.position.longitude, marker.position.latitude],
-              },
-              'properties': {
-                // Animal/POI photo markers are registered under a
-                // content-derived id (see _animalDisplayIconId), not
-                // marker.id — using marker.id here for them referenced an
-                // image that was never registered, so the animated layer
-                // had nothing to draw and the marker visually vanished for
-                // the whole tap animation instead of growing/shrinking.
-                'icon': _isAnimalMarker(marker)
-                    ? _animalDisplayIconId(marker)
-                    : marker.id,
-                'iconScaleFactor': scale,
-                'iconShake': shakeDeg,
-                'labelScale': labelScale,
-                // Custom-rendering markers bake their label into the icon, so
-                // the animated layer must not draw ["get","title"] on top of
-                // it — same duplicate-label glitch as the selected layer.
-                'title': (marker.textVisibility && !marker.customRendering)
-                    ? creator.formatText(marker.title ?? "", TextFormat.smartWrap)
-                    : '',
-              },
-            }
-          ],
-        });
-      } finally {
-        pushBusy = false;
-      }
-    }
-
-    // First animated frame pushed and awaited BEFORE starting the timer, so
-    // there's no gap where neither the static nor animated icon is on screen.
-    await pushAnimatedFeature(1.0, 0.0, 1.0);
-
-    _iconAnimationTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
-      final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
-      final t = (elapsedMs / totalDuration.inMilliseconds).clamp(0.0, 1.0);
-
-      const double growPhaseEnd = 0.45;
-      const double shakeStart = 0.55;
-      double scale;
-      double shakeDeg = 0.0;
-
-      if (style == MarkerSelectionAnimationStyle.growShrink) {
-        const p1 = 0.25, p2 = 0.5, p3 = 0.75;
-        if (t < p1) {
-          scale = 1.0 + (peakScale - 1.0) * (t / p1);
-        } else if (t < p2) {
-          scale = peakScale + (1.0 - peakScale) * ((t - p1) / (p2 - p1));
-        } else if (t < p3) {
-          scale = 1.0 + (peakScale - 1.0) * ((t - p2) / (p3 - p2));
-        } else {
-          scale = peakScale;
-        }
-      } else {
-        if (t < growPhaseEnd) {
-          scale = 1.0 + (peakScale - 1.0) * (t / growPhaseEnd);
-        } else {
-          scale = peakScale;
-          if (t >= shakeStart) {
-            final settleT = ((t - shakeStart) / (1.0 - shakeStart)).clamp(0.0, 1.0);
-            final decay = (1.0 - settleT).clamp(0.0, 1.0);
-            shakeDeg = sin(settleT * pi * 6) * 14.0 * decay;
-          }
-        }
-      }
-
-      final growthFraction = ((scale - 1.0) / (peakScale - 1.0)).clamp(0.0, 1.0);
-      final labelScale = 1.0 + (peakLabelScale - 1.0) * growthFraction;
-
-      await pushAnimatedFeature(scale, shakeDeg, labelScale);
-
-      if (t >= 1.0) {
-        timer.cancel();
-        _markerIconScale[markerId] = peakScale;
-        _markerIconShakeDeg[markerId] = 0.0;
-        await pushAnimatedFeature(peakScale, 0.0, peakLabelScale);
-      }
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -930,7 +1188,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           .isNotEmpty) {
         return;
       }
-      print("localizeUser ${StackTrace.current}");
+      // dart2js stack capture/format is expensive; native keeps the trace.
+      if (!kIsWeb) print("localizeUser ${StackTrace.current}");
       _rotatingSymbols.add(marker);
       await _loadMarkerIcon(controller, marker);
       try {
@@ -948,16 +1207,37 @@ class MaplibreMapProvider extends BaseMapProvider {
       await _loadMarkerIcon(controller, marker);
       _symbols.add(marker);
       try {
-        await setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
+        setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
       } catch (e) {
         print("error adding marker $e");
       }
     }
   }
 
+  /// Diagnostic switch: build with `--dart-define=SKIP_MARKERS=true` to render
+  /// the venue with NO markers at all — no icon bake, no symbol push, and
+  /// nothing for the style-loaded rebake to redo (it iterates `_symbols`, which
+  /// stays empty because this returns before the adds).
+  ///
+  /// Exists to answer one question: is the load time dominated by the marker
+  /// bake specifically, or is the whole pipeline slow? Compare time-to-
+  /// `fadeOutZoom` with and without it. Not a feature — never ship it true.
+  static const bool kSkipMarkersForProfiling =
+      bool.fromEnvironment('SKIP_MARKERS');
+
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
-    print("markers $markers");
+    if (kSkipMarkersForProfiling) {
+      print('PROFILE: skipping ${markers.length} markers (SKIP_MARKERS=true)');
+      return;
+    }
+    return _addMarkers(controller, markers);
+  }
+
+  Future<void> _addMarkers(controller, List<GeoJsonMarker> markers) async {
+    // Calls toString() on every marker in the venue, and addMarkers runs 3-4
+    // times per render, so this stringifies the whole marker set repeatedly.
+    if (!kIsWeb) print("markers $markers");
     if (controller is MapLibreMapController) {
       final animalMarkers = <GeoJsonMarker>[];
       final otherMarkers = <GeoJsonMarker>[];
@@ -975,6 +1255,26 @@ class MaplibreMapProvider extends BaseMapProvider {
       // time — _loadMarkerIcon already fetches/decodes/registers everything
       // this loop used to redundantly fetch a second time, so there's no
       // separate per-marker fetch here anymore, just the fan-out await.
+      //
+      // DO NOT skip, defer or reorder this bake. Three attempts on 2026-08-12
+      // each left the map a blank grey canvas with no base map at all:
+      //   • push the source first and stream icons in afterwards;
+      //   • skip baking while `!_isClusteringEnabled` and let
+      //     onStyleLoadedCallback do it — the reasoning looked sound (the push
+      //     is dropped anyway, and the style load that follows wipes every
+      //     addImage this loop makes) but the style-loaded handler does not
+      //     recover it in practice;
+      //   • bake only markers inside the viewport, rest on camera idle — this
+      //     one WORKED (4.6s → 3ms) and was reverted by request.
+      // There is an ordering dependency here that is not yet understood. Fix the
+      // style-ready race first (setGeoJsonSource/_updatePolygonSource/
+      // _updatePolylineSource silently early-return when their layer flag is
+      // false) before touching this again.
+      //
+      // Cost, for the record: ~4.5s for 189 markers on a Redmi. Each marker's
+      // label is painted into its own PNG (UnifiedMarkerCreator keys its cache
+      // on the text), so the images are genuinely unique — neither dedup nor
+      // concurrency can help, since web is single-threaded.
       await Future.wait(otherMarkers.map((marker) async {
         try {
           await _loadMarkerIcon(controller, marker);
@@ -987,7 +1287,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         // (or the shared icon, if it's already loaded from an earlier call)
         // via _animalDisplayIconId, so nothing renders blank while the real
         // photos are still being fetched/decoded.
-        await setGeoJsonSource(controller, _symbols, _clusterSourceId);
+        setGeoJsonSource(controller, _symbols, _clusterSourceId);
       } catch (e) {
         print("error adding markers $e");
       }
@@ -1133,11 +1433,24 @@ class MaplibreMapProvider extends BaseMapProvider {
         return;
       }
 
-      Map<String, dynamic> buildFeature(GeoJsonMarker marker) {
-        final bool isAnimatingThisMarker = marker.id == _animatingMarkerId;
-        final anchor = isAnimatingThisMarker
-            ? "center"
-            : (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
+      // The type filter belongs to the landmark cluster source only. The
+      // rotation source carries the user puck, which is not host content and
+      // must never be filtered away.
+      final visible = sourceID == _clusterSourceId
+          ? symbols.where(_passesMarkerTypeFilter).toList(growable: false)
+          : symbols;
+
+      // Diagnostic for the type filter. Deliberately does NOT report
+      // _bakedIconCache/_smallIconIds: plain icon markers register their image
+      // through a direct addImage() that never touches those maps, so a "not
+      // baked" reading there means nothing for them.
+      if (sourceID == _clusterSourceId && _markerTypeFilter != null) {
+        print('marker type filter: kept ${visible.length}/${symbols.length}'
+            ' types=${_markerTypeFilter!.join(",")}');
+      }
+
+      final features = visible.map((marker) {
+        final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
             ? "center"
             : "bottom";
         bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
@@ -1173,6 +1486,14 @@ class MaplibreMapProvider extends BaseMapProvider {
               'icon': _isAnimalMarker(marker)
                   ? _animalDisplayIconId(marker)
                   : marker.id,
+            // Image id for the zoomed-out (label-less) variant. Shared between
+            // every marker with the same photo and pill geometry, so ~190
+            // byte-identical uploads collapse to one per distinct photo.
+            // Animals are absent from the map and fall through to the
+            // '<icon>-small' branch of the layer expression — their ids are
+            // already content-keyed.
+            if (marker.assetPath != null && _smallIconIds[marker.id] != null)
+              'smallIcon': _smallIconIds[marker.id],
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             'bearing': marker.compassBasedRotation
@@ -1193,9 +1514,6 @@ class MaplibreMapProvider extends BaseMapProvider {
             // Numeric priority used by symbolSortKey: higher value → higher sort
             // precedence (wins collision). Negated inside the layer expression.
             _kPriorityKey: _markerPriority(marker),
-            'iconScaleFactor': _markerIconScale[marker.id] ?? 1.0,
-            'iconShake': _markerIconShakeDeg[marker.id] ?? 0.0,
-            'isAnimating': marker.id == _animatingMarkerId,
             // Per-feature base of the full marker's symbolSortKey. The dot layer
             // reuses this (+ a fractional offset) so each feature's dot is
             // placed right after its own full marker in the global collision
@@ -1210,87 +1528,19 @@ class MaplibreMapProvider extends BaseMapProvider {
             // are registered under their asset path; null falls back to the
             // shared default room dot.
             'dotIcon': marker.dotAssetPath ?? _kDotImageId,
-            if(entryDirection != null)'bearing':entryDirection,
-            // Bumped on every push, including retries that repeat otherwise
-            // identical data (see the self-heal comment below) — without
-            // this, a byte-identical resend risks being deduplicated by the
-            // native GeoJsonSource before it ever reaches layout.
-            '_rev': DateTime.now().microsecondsSinceEpoch,
+            if(entryDirection != null)'bearing':entryDirection
           }
         };
-      }
+      }).toList();
 
-      final geoJson = {
-        "type": "FeatureCollection",
-        "features": symbols.map(buildFeature).toList(),
-      };
-      await controller.setGeoJsonSource(sourceID, geoJson);
 
-      // Self-heal: a fresh setGeoJson call is what makes MapLibre 0.26.2
-      // redo symbol layout/placement for a source — it's what tapping a
-      // marker triggers today via selectLocation (it flips 'isSelected' on
-      // one feature), and it's why that "fixes" markers that failed to draw
-      // on their first push. A single re-push shortly after landed wasn't
-      // enough on real devices doing heavy startup work (venue GeoJSON
-      // parsing, furniture extrusion, pattern generation, marker-icon
-      // compositing all run synchronously on the UI isolate and have been
-      // observed dropping 200+ frames), which can delay when the native
-      // side actually catches up to process queued addImage()/setGeoJson()
-      // calls well past a few hundred milliseconds. Retry at several
-      // increasing delays so at least one both lands after that backlog
-      // clears and is guaranteed to force a real relayout.
-      //
-      // Rebuilt from scratch each tick (not a resend of the captured
-      // `geoJson` above) rather than just bumping '_rev' on stale features:
-      // animal markers push their paw-dot placeholder immediately and load
-      // the real photo icon asynchronously afterwards (registration is a
-      // network fetch + decode + addImage, which can itself outlast
-      // addImage's own STYLE_NOT_READY retry budget under the same startup
-      // load). A resend of the stale snapshot would just keep re-affirming
-      // the placeholder forever. Re-attempting any still-unloaded animal
-      // icon here, then rebuilding features from live marker/icon state,
-      // means a slow or once-failed photo load still gets picked up and
-      // rendered instead of being stuck on the placeholder permanently.
-      for (final timer in _settleTimers[sourceID] ?? const <Timer>[]) {
-        timer.cancel();
-      }
-      _settleTimers[sourceID] = [
-        for (final delay in const [
-          Duration(milliseconds: 500),
-          Duration(seconds: 2),
-          Duration(seconds: 5),
-        ])
-          Timer(delay, () async {
-            if (!_isClusteringEnabled) return;
-            print("settle re-push firing for $sourceID after ${delay.inMilliseconds}ms");
-            try {
-              // Snapshot before the loop: `symbols` is usually the live
-              // `_symbols` field, and this loop awaits per-marker icon
-              // loads across several event-loop turns — if another
-              // addMarkers()/removeMarker() call mutates `_symbols` while
-              // this is in flight, iterating the live list throws
-              // "Concurrent modification during iteration". A frozen copy
-              // reflects the state at fire time and stays safe to iterate.
-              final snapshot = List<GeoJsonMarker>.of(symbols);
-              for (final marker in snapshot) {
-                if (_isAnimalMarker(marker) &&
-                    !_loadedAnimalIcons.contains(_animalIconKey(marker))) {
-                  try {
-                    await _loadAnimalIcon(controller, marker);
-                  } catch (e) {
-                    print("settle re-push animal icon retry failed for ${marker.id}: $e");
-                  }
-                }
-              }
-              await controller.setGeoJsonSource(sourceID, {
-                "type": "FeatureCollection",
-                "features": snapshot.map(buildFeature).toList(),
-              });
-            } catch (e) {
-              print("settle re-push for $sourceID failed: $e");
-            }
-          }),
-      ];
+      await controller.setGeoJsonSource(
+        sourceID,
+        {
+          "type": "FeatureCollection",
+          "features": features,
+        },
+      );
     }
   }
 
@@ -1316,8 +1566,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) async {
-      if (event.heading == null) return;
+    _compassSub = FlutterCompass.events?.listen((event) {
+      final heading = event.heading;
+      if (heading == null) return;
       // Ignore the sensor rather than cancelling the subscription. There *is*
       // a restart path — removeMarker() cancels and nulls _compassSub when the
       // puck goes, and _startCompassListening re-subscribes when it comes back
@@ -1325,45 +1576,120 @@ class MaplibreMapProvider extends BaseMapProvider {
       // leave the puck frozen from the moment the override is cleared until the
       // next floor change happens to rebuild the marker.
       if (_headingOverride != null) return;
-      _currentHeading = event.heading;
+      _currentHeading = heading;
       // A style reload wipes the rotation source; compass events keep arriving
       // during the rebuild, and pushing then NPEs natively on a null source.
       if (!_markerSourcesReady) return;
-      final cameraPos = controller.cameraPosition;
-      if (cameraPos == null) return;
-
-      final features = _rotatingSymbols
-          .map((marker) => {
-        'type': 'Feature',
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [
-            marker.position.longitude,
-            marker.position.latitude
-          ],
-        },
-        'properties': {
-          'title': '',
-          'id': marker.id,
-          if (marker.iconName != null || true) 'icon': marker.id,
-          'isPriority': marker.priority ?? false,
-          'intractable': marker.properties?["polyId"] != null,
-          if (marker.compassBasedRotation) "bearing": event.heading!,
-        }
-      })
-          .toList();
-
-      try {
-        await controller.setGeoJsonSource(sourceID, {
-          "type": "FeatureCollection",
-          "features": features,
-        });
-      } catch (e) {
-        // Lost the race with a style reload / map teardown: the next compass
-        // event repaints once the source is back.
-        print("compass setGeoJsonSource skipped: $e");
-      }
+      // ANR guard: the compass fires 20–50Hz and each setGeoJsonSource makes
+      // MapLibre re-parse the source + relayout on the render thread while
+      // holding the native map lock. Pushing on every event backed the UI
+      // thread up past the ANR threshold. Coalesce instead — see
+      // [_requestRotationPush] / [_flushRotationPush].
+      _requestRotationPush(controller, sourceID, heading);
     });
+  }
+
+  // ANR throttle for the compass-driven rotation source. Tunables: at most one
+  // native push every 100ms (~10Hz ceiling), and ignore heading changes below
+  // 2° so a stationary device sends nothing at all.
+  static const int _kCompassMinPushMs = 100;
+  static const double _kCompassMinHeadingDeg = 2.0;
+
+  Timer? _compassThrottleTimer;
+  double? _pendingCompassHeading;
+  double? _lastPushedHeading;
+  DateTime _lastCompassPush = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _compassPushInFlight = false;
+
+  /// Smallest angular difference between two headings, in degrees (0..180),
+  /// accounting for the 360°→0° wrap.
+  double _headingDelta(double a, double b) {
+    final d = (a - b).abs() % 360;
+    return d > 180 ? 360 - d : d;
+  }
+
+  /// Records the newest heading and arms a single coalescing timer. Runs on
+  /// every compass event, so it stays cheap and allocation-free.
+  void _requestRotationPush(
+      MapLibreMapController controller, String sourceID, double heading) {
+    _pendingCompassHeading = heading;
+    // A flush is already scheduled or running; it will pick up the value above.
+    if (_compassThrottleTimer != null || _compassPushInFlight) return;
+    _armCompassTimer(controller, sourceID);
+  }
+
+  void _armCompassTimer(MapLibreMapController controller, String sourceID) {
+    final sinceLast =
+        DateTime.now().difference(_lastCompassPush).inMilliseconds;
+    final wait =
+        sinceLast >= _kCompassMinPushMs ? 0 : _kCompassMinPushMs - sinceLast;
+    _compassThrottleTimer = Timer(Duration(milliseconds: wait), () {
+      _compassThrottleTimer = null;
+      _flushRotationPush(controller, sourceID);
+    });
+  }
+
+  /// Pushes the latest pending heading to the rotation source, at most one in
+  /// flight at a time. Re-arms itself if newer events arrived mid-push so the
+  /// final orientation is never dropped.
+  Future<void> _flushRotationPush(
+      MapLibreMapController controller, String sourceID) async {
+    final heading = _pendingCompassHeading;
+    if (heading == null) return;
+
+    // Sub-threshold jitter: not worth a full source rewrite.
+    final last = _lastPushedHeading;
+    if (last != null && _headingDelta(heading, last) < _kCompassMinHeadingDeg) {
+      _pendingCompassHeading = null;
+      return;
+    }
+    // Same readiness guards the per-event path used to apply inline.
+    if (!_markerSourcesReady || controller.cameraPosition == null) {
+      _pendingCompassHeading = null;
+      return;
+    }
+
+    _pendingCompassHeading = null;
+    _compassPushInFlight = true;
+    _lastCompassPush = DateTime.now();
+    _lastPushedHeading = heading;
+
+    final features = _rotatingSymbols
+        .map((marker) => {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [
+                  marker.position.longitude,
+                  marker.position.latitude
+                ],
+              },
+              'properties': {
+                'title': '',
+                'id': marker.id,
+                if (marker.iconName != null || true) 'icon': marker.id,
+                'isPriority': marker.priority ?? false,
+                'intractable': marker.properties?["polyId"] != null,
+                if (marker.compassBasedRotation) "bearing": heading,
+              }
+            })
+        .toList();
+
+    try {
+      await controller.setGeoJsonSource(sourceID, {
+        "type": "FeatureCollection",
+        "features": features,
+      });
+    } catch (e) {
+      // Lost the race with a style reload / map teardown: the next compass
+      // event repaints once the source is back.
+      print("compass setGeoJsonSource skipped: $e");
+    } finally {
+      _compassPushInFlight = false;
+      if (_pendingCompassHeading != null) {
+        _armCompassTimer(controller, sourceID);
+      }
+    }
   }
 
   /// Temporarily force icon/text overlap ON for the given marker ids so they
@@ -1395,6 +1721,136 @@ class MaplibreMapProvider extends BaseMapProvider {
     await setGeoJsonSource(controller, _symbols, _clusterSourceId);
   }
 
+  /// Whether venue content is drawn desaturated.
+  ///
+  /// Applied where colours are WRITTEN INTO THE SOURCE rather than as a layer
+  /// paint property: MapLibre has no saturation control for fill/line layers
+  /// (only raster ones), and every polygon here takes its colour from a
+  /// per-feature `fillColor`, so the only place to intervene is the push.
+  bool _greyscale = false;
+
+  /// [color] as the current mode wants it drawn.
+  Color _shade(Color color) =>
+      _greyscale ? RenderingUtilities.toGreyscale(color) : color;
+
+  /// [hex] as the current mode wants it drawn.
+  ///
+  /// Polylines carry their colour as a hex string straight from host data
+  /// rather than as a parsed Color, so this parses, shades and re-encodes.
+  /// Anything unparseable is passed through untouched — a bad colour should
+  /// render as it always did, not vanish.
+  String _shadeHex(String hex) {
+    if (!_greyscale) return hex;
+    try {
+      final shaded = RenderingUtilities.toGreyscale(
+          RenderingUtilities.hexToColor(hex));
+      return '#${RenderingUtilities.colorToMapplsHex(shaded)}';
+    } catch (_) {
+      return hex;
+    }
+  }
+
+  /// Draw the map in greyscale, or back in full colour.
+  ///
+  /// Covers the basemap (via raster-saturation), polygons and polylines. Marker
+  /// icons are NOT covered: each is a PNG composited at load time and would
+  /// have to be re-baked, which costs seconds for a large venue.
+  @override
+  Future<void> setGreyscale(dynamic controller, bool enabled) async {
+    if (controller is! MapLibreMapController) return;
+    if (_greyscale == enabled) return;
+    _greyscale = enabled;
+
+    // The basemap is a raster layer, which DOES have a saturation property —
+    // the one place this can be done without rewriting data.
+    try {
+      await controller.setLayerProperties(
+        _baseMapRasterLayerId,
+        RasterLayerProperties(rasterSaturation: enabled ? -1.0 : 0.0),
+      );
+    } catch (e) {
+      print('setGreyscale: basemap saturation failed: $e');
+    }
+
+    // Re-push whatever carries colour, so the new shade is written in.
+    if (_polygons.isNotEmpty) await _updatePolygonSource(controller);
+    if (_lines.isNotEmpty) await _updatePolylineSource(controller);
+  }
+
+  /// Whether [marker] survives the active [_markerTypeFilter].
+  ///
+  /// Source/destination pins are exempt: they are navigation endpoints, and a
+  /// content filter must not be able to hide where the user is walking to.
+  /// Everything else is a strict allowlist — a marker carrying no type at all is
+  /// filtered out too, since it is by definition not one of the types asked for.
+  /// Cache of whole-word matchers, one per filter value.
+  ///
+  /// Rebuilt rarely (only when a host changes the filter) but consulted once
+  /// per marker per push, so the RegExp is worth keeping.
+  final Map<String, RegExp> _wholeWordCache = {};
+
+  RegExp _wholeWord(String wanted) => _wholeWordCache.putIfAbsent(
+      wanted,
+      () => RegExp('(?<![a-z0-9])${RegExp.escape(wanted)}(?![a-z0-9])'));
+
+  bool _passesMarkerTypeFilter(GeoJsonMarker marker) {
+    final filter = _markerTypeFilter;
+    if (filter == null) return true;
+    if (marker.priority == true) return true;
+    final raw = RenderingUtilities.rawLandmarkType(marker.properties);
+    if (raw == null) return false;
+    final normalised = RenderingUtilities.normaliseLandmarkType(raw);
+    // Contained as a WHOLE WORD, not a bare substring. Venues spell the same
+    // concept differently ('Male Washroom' vs 'Accessible Washroom'), so
+    // MarkerTypes exposes broad values like 'washroom' that a host can use
+    // without knowing this venue's wording — and an exact spelling from
+    // availableMarkerTypes still matches, since a string contains itself.
+    //
+    // The word boundaries are load-bearing. Plain `contains` makes
+    // 'male washroom' match "FEmale washroom" and 'room' match "washROOM", so
+    // filtering to male washrooms silently returned the female ones too.
+    return filter.any((wanted) => _wholeWord(wanted).hasMatch(normalised));
+  }
+
+  /// Every landmark type present in the loaded venue, with counts.
+  @override
+  List<MarkerTypeInfo> availableMarkerTypes() {
+    // Keyed by the normalised form so 'Male Washroom' and 'male washroom' are
+    // one entry, while the first spelling seen is what the host displays.
+    final byKey = <String, MarkerTypeInfo>{};
+    for (final marker in _symbols) {
+      final raw = RenderingUtilities.rawLandmarkType(marker.properties);
+      if (raw == null || raw.trim().isEmpty) continue;
+      final key = RenderingUtilities.normaliseLandmarkType(raw);
+      final existing = byKey[key];
+      byKey[key] = MarkerTypeInfo(
+        rawType: existing?.rawType ?? raw,
+        assetType: existing?.assetType ??
+            RenderingUtilities.getAssetForLandmark(marker.properties),
+        count: (existing?.count ?? 0) + 1,
+      );
+    }
+    final types = byKey.values.toList();
+    // Commonest first: a host rendering chips wants the useful ones up front.
+    types.sort((a, b) => b.count != a.count
+        ? b.count.compareTo(a.count)
+        : a.rawType.toLowerCase().compareTo(b.rawType.toLowerCase()));
+    return List.unmodifiable(types);
+  }
+
+  /// Draw only the markers whose raw landmark type is in [types]; null draws all.
+  @override
+  Future<void> setMarkerTypeFilter(
+      dynamic controller, Set<String>? types) async {
+    if (controller is! MapLibreMapController) return;
+    // An empty set means "show nothing", which is a legitimate request and
+    // deliberately not folded into null ("show everything").
+    _markerTypeFilter = types == null
+        ? null
+        : types.map(RenderingUtilities.normaliseLandmarkType).toSet();
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId);
+  }
+
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
     if (controller is MapLibreMapController) {
@@ -1409,12 +1865,15 @@ class MaplibreMapProvider extends BaseMapProvider {
             .isNotEmpty) {
           _compassSub?.cancel();
           _compassSub = null;
+          _compassThrottleTimer?.cancel();
+          _compassThrottleTimer = null;
+          _pendingCompassHeading = null;
         }
         _rotatingSymbols.removeWhere(
                 (marker) => marker.id.toLowerCase().contains(markerId));
 
-        await setGeoJsonSource(controller, _symbols, _clusterSourceId);
-        await setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
+        setGeoJsonSource(controller, _symbols, _clusterSourceId);
+        setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
       } catch (e) {
         print('Error removing marker: $e');
       }
@@ -1426,8 +1885,13 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MapLibreMapController) {
       try {
         _symbols.clear();
-        await setGeoJsonSource(controller, [], _clusterSourceId);
-        await setGeoJsonSource(controller, [], _rotationSourceId);
+        // Per-marker state only. The content-keyed small icons stay: their ids
+        // are still registered with the live style and their bytes are reusable
+        // by the next render, which is the whole point of keying by content.
+        _smallIconIds.clear();
+        _bakedIconCache.clear();
+        setGeoJsonSource(controller, [], _clusterSourceId);
+        setGeoJsonSource(controller, [], _rotationSourceId);
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -1554,10 +2018,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           'id': polygon.id,
           'type': type ?? 'default',
           'fillColor':
-          '#${RenderingUtilities.colorToMapplsHex(fillColor)}',
+          '#${RenderingUtilities.colorToMapplsHex(_shade(fillColor))}',
           'strokeColor':
-          '#${RenderingUtilities.colorToMapplsHex(strokeColor)}',
-          'fillColorSecondary':'#${RenderingUtilities.colorToMapplsHex(fillColorSecondary)}',
+          '#${RenderingUtilities.colorToMapplsHex(_shade(strokeColor))}',
+          'fillColorSecondary':
+          '#${RenderingUtilities.colorToMapplsHex(_shade(fillColorSecondary))}',
           'fillOpacity': fillColor.a,
           'isSelected': polygon.id == selectPolygonId,
           'boundary': polygon.properties?['type'] == "Boundary",
@@ -1583,6 +2048,43 @@ class MaplibreMapProvider extends BaseMapProvider {
         "features": features,
       },
     );
+
+    // The venue's fade thresholds are derived from these very polygons, so they
+    // have to be recomputed whenever the polygon set changes.
+    await _refreshPatchFadeIfStale(controller);
+  }
+
+  /// Recomputes the patch/section fade zooms when the polygons they are derived
+  /// from have changed enough to move them.
+  ///
+  /// [_refreshPatchAboveOpacity] used to run from exactly one place —
+  /// onStyleLoadedCallback — so the thresholds were computed ONCE, from
+  /// whatever `_polygons` happened to hold at style-load time. When the venue
+  /// data arrived after that (which is what happens as soon as anything on the
+  /// load path gets faster), `_calculateFitZoom` fell back to its empty-list
+  /// default of 13.0, every fade zoom was computed from that wrong value, and
+  /// nothing ever recomputed them — the venue then never became visible and the
+  /// map sat on the grey basemap forever, with no error.
+  ///
+  /// That is the "every speedup breaks rendering" race: removing the icon
+  /// fetches' incidental latency, or baking smaller icons, both reordered the
+  /// venue push past the style load and tripped it. Deriving the thresholds
+  /// from the data whenever the data lands removes the ordering dependency
+  /// instead of trying to preserve it.
+  Future<void> _refreshPatchFadeIfStale(
+      MapLibreMapController controller) async {
+    if (!_isPolygonLayersEnabled) return;
+    final boundaryPolygons = _polygons.where((p) =>
+        p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
+    final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
+    // Nothing to derive from yet; the next push will call back in.
+    if (basis.isEmpty) return;
+    final fitZoom =
+        _calculateFitZoom(basis, screenSize: _screenSize) - 2.0;
+    // Unchanged (or first run) → only pay for the layer rebuild when it moves.
+    if (_fadeOutZoom != null && (_fadeOutZoom! - fitZoom).abs() < 0.01) return;
+    print('patch fade stale: recomputing (was $_fadeOutZoom, now $fitZoom)');
+    await _refreshPatchAboveOpacity(controller, screenSize: _screenSize);
   }
 
   @override
@@ -1624,37 +2126,6 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Points used to approximate a cylinder/sphere footprint circle.
   static const int _circleSegments = 16;
-
-  /// Parts of the same furniture item (seat/back/legs, top/legs...) are
-  /// built as independent, unwelded extrusion polygons. Where two parts
-  /// are only meant to *touch*, floating-point rounding and the circle
-  /// approximation above leave a sub-millimetre gap at the seam; at an
-  /// oblique pitch, fill-extrusion's per-feature edge anti-aliasing lets
-  /// whatever is underneath (floor layer, basemap) show through exactly
-  /// there, which reads as "transparent furniture". Outsetting every part
-  /// by this much forces neighbouring parts to overlap instead of merely
-  /// touch, closing the seam. It's well under furniture scale (chairs are
-  /// tens of centimetres), so it isn't visible as size inflation.
-  static const double _partSeamOverlap = 0.01;
-
-  /// Parts meant to sit flush against each other (a cushion directly on a
-  /// seat base, a tabletop layer on its frame) frequently share the exact
-  /// same footprint in the source data. Padding every part by the same
-  /// fixed amount (above) keeps those side walls perfectly coplanar —
-  /// which is exactly the condition that makes a GPU depth buffer flicker
-  /// between two features as the camera moves: it can't consistently
-  /// decide which coincident surface is nearer, so the "loser" shows
-  /// whatever is behind it (another part, or the floor), and the loser
-  /// flips as the view/projection matrix changes with tilt/rotation. This
-  /// is a property of any standard depth buffer (WebGL, GLES, Metal), not
-  /// a misconfigured render flag — MapLibre's native renderer already runs
-  /// depth test/write correctly for fill-extrusion. The fix has to be on
-  /// our side: never hand the renderer two bit-identical surfaces. Varying
-  /// the pad per part index guarantees no two parts of the same item can
-  /// ever end up with identical padded geometry, without needing to know
-  /// which part is meant to sit "inside" which.
-  static const int _seamJitterSteps = 6;
-  static const double _seamJitterStep = 0.0015;
 
   /// "3dRef" may arrive as a Map or as a JSON-encoded string depending on
   /// how the API serialized the property — accept both.
@@ -1727,22 +2198,32 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  Future<void> _enableFurnitureLayer(MapLibreMapController controller) async {
+  /// Setup currently in progress, so concurrent callers await it instead of
+  /// each starting their own.
+  ///
+  /// `_isFurnitureLayerEnabled` alone cannot do this: it is set at the END of
+  /// [_enableFurnitureLayerOnce], several awaits after the guard reads it, so
+  /// two callers both pass the guard and both add the source and layers. There
+  /// ARE two — [addFurniture] and onStyleLoadedCallback — and the loser threw
+  /// `CannotAddLayerException: Layer furniture-fill-layer already exists`
+  /// UNHANDLED (neither call site catches), taking the app down on any venue
+  /// that actually has furniture. The zoo has none, which is why this only
+  /// surfaced on a hospital.
+  Future<void>? _furnitureLayerSetup;
+
+  Future<void> _enableFurnitureLayer(MapLibreMapController controller) {
+    if (_isFurnitureLayerEnabled) return Future<void>.value();
+    return _furnitureLayerSetup ??= _enableFurnitureLayerOnce(controller)
+        .whenComplete(() => _furnitureLayerSetup = null);
+  }
+
+  Future<void> _enableFurnitureLayerOnce(
+      MapLibreMapController controller) async {
     if (_isFurnitureLayerEnabled) return;
 
-    // onStyleLoadedCallback resets this flag on every style reload on the
-    // assumption that the reload wiped every source/layer — true for
-    // everything else in that callback, but the furniture source/layer can
-    // survive some reloads anyway (seen in practice as an uncaught
-    // "Layer furniture-fill-layer already exists" PlatformException that
-    // aborted the rest of the callback, including the geometry refresh
-    // below). Swallow "already exists" here so a stale-flag/reality
-    // mismatch can't crash the reload — worst case we skip a redundant
-    // add and still fall through to re-push fresh source data.
-    try {
-      await controller.addSource(
-        _furnitureSourceId,
-        GeojsonSourceProperties(
+    await controller.addSource(
+      _furnitureSourceId,
+      GeojsonSourceProperties(
         data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
         // Furniture parts are centimetre-scale, which puts them right on the
         // edge of what a tiled GeoJSON source can represent. Two separate
@@ -1763,43 +2244,52 @@ class MaplibreMapProvider extends BaseMapProvider {
         //    is ~2.3mm, fine enough for anything in these models, while still
         //    stopping the source from building real tiles for two more zoom
         //    levels on every pan the way 24 did.
-          maxzoom: 22,
-          tolerance: 0,
-          // Default. Furniture parts are sub-metre, so the doubled 256 buffer
-          // was only duplicating geometry into neighbouring tiles. Buffer only
-          // controls how much neighbouring geometry a tile carries, so lowering
-          // it cannot drop a part — a clipped fill is re-closed at the seam.
-          buffer: 256,
-        ),
-      );
-    } catch (_) {
-      // Source already exists on the native side — fine, carry on.
-    }
+        maxzoom: 22,
+        tolerance: 0,
+        // Default. Furniture parts are sub-metre, so the doubled 256 buffer
+        // was only duplicating geometry into neighbouring tiles. Buffer only
+        // controls how much neighbouring geometry a tile carries, so lowering
+        // it cannot drop a part — a clipped fill is re-closed at the seam.
+        buffer: 256,
+      ),
+    );
+
+    // Drop any survivor before adding. `_isFurnitureLayerEnabled` is reset in
+    // onStyleLoadedCallback on the assumption the style was replaced and took
+    // every layer with it — but that callback can fire again WITHOUT a style
+    // swap, leaving the flag saying "no layers" while the layers are still
+    // there. The add then threw CannotAddLayerException, unhandled, because the
+    // onStyleLoaded call site has no catch. removeLayer no-ops when the layer is
+    // absent, so this is free in the normal case.
+    //
+    // addSource above needs no equivalent: the plugin already logs
+    // "source with id 'furniture-source' already exists, skipping" and carries
+    // on rather than throwing.
+    try {
+      await controller.removeLayer(_furnitureFillLayerId);
+    } catch (_) {}
 
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
-    try {
-      await controller.addFillLayer(
-        _furnitureSourceId,
-        _furnitureFillLayerId,
-        FillLayerProperties(
-          fillColor: ['get', 'color'],
-          fillOutlineColor: ['get', 'color'],
-          visibility: _config.immersive ? "none" : "visible",
-        ),
-        minzoom: _furnitureMinZoom,
-        // Furniture activates at 17.5, markers at 18.0 — with no anchor here
-        // this layer was added after (so painted on top of) every marker
-        // layer, occluding icons/labels the moment furniture faded in.
-        // Anchor it beneath the bottom-most marker layer so markers always
-        // paint on top regardless of zoom.
-        belowLayerId: await _webSafeBelowLayerId(controller, _dotMarkerLayerId),
-      );
-    } catch (_) {
-      // Layer already exists on the native side — fine, carry on.
-    }
+    await controller.addFillLayer(
+      _furnitureSourceId,
+      _furnitureFillLayerId,
+      _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
+        fillColor: ['get', 'color'],
+        fillOutlineColor: ['get', 'color'],
+        // The flat footprint is the 2D counterpart of the extrusion, so the
+        // renderer hides it in 3D. A policy can hide it further, not force it on.
+        visibility: _visibility(_furnitureFillLayerId,
+            internalVisible: !_config.immersive),
+        // Named so a furniture opacity override has somewhere to land; op(null)
+        // serialises exactly as before when no override is set.
+        fillOpacity: op(null),
+      )),
+      minzoom: _furnitureMinZoom,
+    );
 
     _isFurnitureLayerEnabled = true;
+    await _applyLayerPolicy(controller, only: [_furnitureFillLayerId]);
 
     // The 3D extrusion layer only exists in immersive mode — in 2D there is
     // no extrusion layer at all, just the flat fill above.
@@ -1813,30 +2303,43 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _addFurnitureExtrusionLayer(
       MapLibreMapController controller) async {
     if (!_isFurnitureLayerEnabled || _isFurnitureExtrusionAdded) return;
+    // Same stale-flag hazard as the flat fill layer: _isFurnitureExtrusionAdded
+    // is reset in onStyleLoadedCallback, which can fire without the style
+    // actually being replaced. See the note there.
     try {
+      await controller.removeLayer(_furnitureLayerId);
+    } catch (_) {}
+    await controller.addFillExtrusionLayer(
+      _furnitureSourceId,
+      _furnitureLayerId,
+      _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
+        visibility: _visibility(_furnitureLayerId),
+        fillExtrusionColor: ['get', 'color'],
+        fillExtrusionBase: ['get', 'base'],
+        fillExtrusionHeight: ['get', 'height'],
+        fillExtrusionOpacity: op(null),
+      )),
+      minzoom: _furnitureMinZoom,
+    );
+    _isFurnitureExtrusionAdded = true;
+    // Same plugin gap as the polygon extrusions: setLayerProperties rejects
+    // fill-extrusion layers, so policy changes have to rebuild this one.
+    _layerReAdders[_furnitureLayerId] = () async {
+      await controller.removeLayer(_furnitureLayerId);
       await controller.addFillExtrusionLayer(
         _furnitureSourceId,
         _furnitureLayerId,
-        const FillExtrusionLayerProperties(
-          fillExtrusionColor: ['get', 'color'],
-          fillExtrusionBase: ['get', 'base'],
-          fillExtrusionHeight: ['get', 'height'],
-          // Every other extrusion layer in this file pins this explicitly;
-          // leaving it unset here was the one inconsistency letting the
-          // renderer fall back to an implicit default instead of a
-          // guaranteed-opaque layer.
-          fillExtrusionOpacity: 1.0,
-        ),
+        _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
+              visibility: _visibility(_furnitureLayerId),
+              fillExtrusionColor: ['get', 'color'],
+              fillExtrusionBase: ['get', 'base'],
+              fillExtrusionHeight: ['get', 'height'],
+              fillExtrusionOpacity: op(null),
+            )),
         minzoom: _furnitureMinZoom,
-        // See the matching comment on the flat fill layer above — without an
-        // anchor this 3D layer paints on top of every marker layer once it
-        // fades in at zoom 17.5, occluding markers as the user zooms in.
-        belowLayerId: await _webSafeBelowLayerId(controller, _dotMarkerLayerId),
       );
-    } catch (_) {
-      // Layer already exists on the native side — fine, carry on.
-    }
-    _isFurnitureExtrusionAdded = true;
+    };
+    await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
   }
 
   /// Removes the furniture fill-extrusion layer entirely (used when switching
@@ -1844,9 +2347,16 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _removeFurnitureExtrusionLayer(
       MapLibreMapController controller) async {
     if (!_isFurnitureExtrusionAdded) return;
+    // Removing the re-adder matters: _applyLayerPolicy would otherwise rebuild
+    // the extrusion we are deliberately taking away for 2D.
+    _layerReAdders.remove(_furnitureLayerId);
     try {
       await controller.removeLayer(_furnitureLayerId);
     } catch (_) {}
+    // Drop the builder too: the layer is gone until 3D is re-entered, and
+    // _applyLayerPolicy would otherwise keep trying to write to it.
+    _propBuilders.remove(_furnitureLayerId);
+    _everApplied.remove(_furnitureLayerId);
     _isFurnitureExtrusionAdded = false;
   }
 
@@ -1899,8 +2409,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     final parts = (ref['3d'] as List?) ?? const [];
     final result = <Map<String, dynamic>>[];
 
-    for (var partIndex = 0; partIndex < parts.length; partIndex++) {
-      final raw = parts[partIndex];
+    for (final raw in parts) {
       if (raw is! Map) continue;
       final p = Map<String, dynamic>.from(raw);
       final shape = p['shape'] as String? ?? 'box';
@@ -1911,10 +2420,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           : (double.tryParse('${p['h'] ?? 0}') ?? 0.0);
       final oy = double.tryParse('${p['oy'] ?? 0}') ?? 0.0;
 
-      final eps = _partSeamOverlap +
-          (partIndex % _seamJitterSteps) * _seamJitterStep;
-
-      final localCorners = _footprintFor(p, eps);
+      final localCorners = _footprintFor(p);
       if (localCorners.isEmpty) continue;
 
       final ring = localCorners.map((c) {
@@ -1939,8 +2445,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         },
         'properties': {
           'color': p['color'] ?? '#888888',
-          'base': oy - h / 2 - eps,
-          'height': oy + h / 2 + eps,
+          'base': oy - h / 2,
+          'height': oy + h / 2,
         },
       });
     }
@@ -1956,13 +2462,13 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// columns, so a "sphere" renders as a cylinder of the same radius
   /// spanning its full diameter — not a true dome. That's a hard
   /// limit of this technique, not a bug.
-  List<List<double>> _footprintFor(Map<String, dynamic> p, double eps) {
+  List<List<double>> _footprintFor(Map<String, dynamic> p) {
     final shape = p['shape'] as String? ?? 'box';
     final ox = double.tryParse('${p['ox'] ?? 0}') ?? 0.0;
     final oz = double.tryParse('${p['oz'] ?? 0}') ?? 0.0;
 
     if (shape == 'cylinder' || shape == 'sphere') {
-      final r = (double.tryParse('${p['r'] ?? 0}') ?? 0.0) + eps;
+      final r = double.tryParse('${p['r'] ?? 0}') ?? 0.0;
       return List.generate(_circleSegments, (i) {
         final angle = 2 * pi * i / _circleSegments;
         return [ox + r * cos(angle), oz + r * sin(angle)];
@@ -1972,11 +2478,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     // default: box — w/d taken exactly as given in the JSON, no
     // unit scaling or minimum-size flooring. The footprint is the
     // horizontal w x d rectangle only; h feeds base/height later.
-    // Half-extents grow by eps on every side so this part overlaps its
-    // neighbours instead of merely touching (or exactly coinciding
-    // with) them.
-    final halfW = (double.tryParse('${p['w'] ?? 0}') ?? 0.0) / 2 + eps;
-    final halfD = (double.tryParse('${p['d'] ?? 0}') ?? 0.0) / 2 + eps;
+    final w = double.tryParse('${p['w'] ?? 0}') ?? 0.0;
+    final d = double.tryParse('${p['d'] ?? 0}') ?? 0.0;
 
     // Optional per-part "ry": the part's own yaw around its center
     // (e.g. wall niches at ry 90/270, amalaka lobes at ry 30/60...),
@@ -1984,20 +2487,20 @@ class MaplibreMapProvider extends BaseMapProvider {
     final ryDeg = double.tryParse('${p['ry'] ?? 0}') ?? 0.0;
     if (ryDeg == 0) {
       return [
-        [ox - halfW, oz - halfD],
-        [ox + halfW, oz - halfD],
-        [ox + halfW, oz + halfD],
-        [ox - halfW, oz + halfD],
+        [ox - w / 2, oz - d / 2],
+        [ox + w / 2, oz - d / 2],
+        [ox + w / 2, oz + d / 2],
+        [ox - w / 2, oz + d / 2],
       ];
     }
     final ryRad = ryDeg * pi / 180.0;
     final cosR = cos(ryRad);
     final sinR = sin(ryRad);
     return [
-      [-halfW, -halfD],
-      [halfW, -halfD],
-      [halfW, halfD],
-      [-halfW, halfD],
+      [-w / 2, -d / 2],
+      [w / 2, -d / 2],
+      [w / 2, d / 2],
+      [-w / 2, d / 2],
     ].map((c) {
       final x = c[0];
       final z = c[1];
@@ -2067,8 +2570,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       return;
     }
 
-    _ensurePathShineAnimation(controller);
-
     print("poyline going to add");
 
     final features = _lines.map((line) {
@@ -2085,7 +2586,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           'id': line.id,
           'type': 'default',
           'isSelected': false,
-          'lineColor': line.properties?['fillColor'] ?? '#000000',
+          'lineColor': _shadeHex(line.properties?['fillColor'] ?? '#000000'),
           'lineOpacity': line.properties?['fillOpacity'] ?? 1.0,
           'lineWidth': line.properties?['width']?.toDouble() ?? 4.0,
           'path': line.properties?['path'] ??
@@ -2102,258 +2603,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         "features": features,
       },
     );
-
-    final cornerFeatures = <Map<String, dynamic>>[];
-    for (var line in _lines) {
-      final bool isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
-      final String? style = line.properties?['style'];
-      final bool isGreyOverlay = line.properties?['isGreyOverlay'] ?? false;
-
-      if (isPath && style == "solid" && !isGreyOverlay && line.points.length >= 3) {
-        // Detect significant corners (bends)
-        for (int i = 1; i < line.points.length - 1; i++) {
-          final b1 = _calculateBearing(line.points[i - 1], line.points[i]);
-          final b2 = _calculateBearing(line.points[i], line.points[i + 1]);
-
-          double diff = b2 - b1;
-          if (diff > 180) diff -= 360;
-          if (diff < -180) diff += 360;
-
-          // Threshold for a "bend"
-          if (diff.abs() > 20) {
-            // Exact-angle icon (rounded to 5° purely to cap distinct
-            // textures) instead of the old 6-way bucket — the baked bend now
-            // matches the real geometry of the turn instead of snapping to
-            // the nearest of [-135, -90, -45, 45, 90, 135].
-            final String iconId = await _ensureCornerArrowImage(controller, diff);
-            final String turnLabel = _turnLabel(diff);
-            final String bubbleIconId = await _ensureTurnBubbleImage(controller, turnLabel);
-
-            cornerFeatures.add({
-              'type': 'Feature',
-              'geometry': {
-                'type': 'Point',
-                'coordinates': [line.points[i].longitude, line.points[i].latitude],
-              },
-              'properties': {
-                'path': true,
-                'style': 'solid',
-                'isGreyOverlay': false,
-                'bearing': b1, // Rotate icon by incoming bearing so tail aligns
-                'icon': iconId,
-                'turnBubbleIcon': bubbleIconId,
-                'turnSharpness': diff.abs(),
-              }
-            });
-          }
-        }
-      }
-    }
-
-    _allCornerFeatures = cornerFeatures;
-    await _refreshCornerVisibility(controller);
-  }
-
-  String _turnLabel(double diffDeg) {
-    final d = diffDeg.abs();
-    if (d < 20) return "Continue straight";
-    if (d < 45) return diffDeg > 0 ? "Turn Slight right" : "Turn Slight left";
-    if (d < 150) return diffDeg > 0 ? "Turn right" : "Turn left";
-    return "U-turn";
-  }
-
-  IconData _turnIcon(double diffDeg) {
-    if (diffDeg.abs() < 20) return Icons.straight;
-    return diffDeg > 0 ? Icons.turn_right : Icons.turn_left;
-  }
-
-  double _calculateBearing(MapLocation start, MapLocation end) {
-    double lat1 = start.latitude * pi / 180;
-    double lon1 = start.longitude * pi / 180;
-    double lat2 = end.latitude * pi / 180;
-    double lon2 = end.longitude * pi / 180;
-
-    double dLon = lon2 - lon1;
-
-    double y = sin(dLon) * cos(lat2);
-    double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
-    double brng = atan2(y, x);
-
-    return (brng * 180 / pi + 360) % 360;
-  }
-
-  double _haversineMeters(MapLocation a, MapLocation b) {
-    const R = 6371000.0;
-    final dLat = (b.latitude - a.latitude) * pi / 180;
-    final dLng = (b.longitude - a.longitude) * pi / 180;
-    final lat1 = a.latitude * pi / 180;
-    final lat2 = b.latitude * pi / 180;
-    final h = sin(dLat / 2) * sin(dLat / 2) +
-        cos(lat1) * cos(lat2) * sin(dLng / 2) * sin(dLng / 2);
-    return 2 * R * atan2(sqrt(h), sqrt(1 - h));
-  }
-
-  MapLocation _pointAlongPath(List<MapLocation> points, double t) {
-    if (points.length < 2) return points.first;
-    double total = 0;
-    final segLengths = <double>[];
-    for (int i = 0; i < points.length - 1; i++) {
-      final d = _haversineMeters(points[i], points[i + 1]);
-      segLengths.add(d);
-      total += d;
-    }
-    if (total == 0) return points.first;
-    double target = t.clamp(0.0, 1.0) * total;
-    double accum = 0;
-    for (int i = 0; i < segLengths.length; i++) {
-      if (accum + segLengths[i] >= target) {
-        final segT = segLengths[i] == 0 ? 0.0 : (target - accum) / segLengths[i];
-        final a = points[i];
-        final b = points[i + 1];
-        return MapLocation(
-          latitude: a.latitude + (b.latitude - a.latitude) * segT,
-          longitude: a.longitude + (b.longitude - a.longitude) * segT,
-        );
-      }
-      accum += segLengths[i];
-    }
-    return points.last;
-  }
-
-  Future<void> _refreshCornerVisibility(MapLibreMapController controller) async {
-    if (_allCornerFeatures.isEmpty) {
-      await controller.setGeoJsonSource(_pathCornerSourceId, {
-        "type": "FeatureCollection",
-        "features": [],
-      });
-      return;
-    }
-
-    final cameraPos = controller.cameraPosition;
-    final zoom = cameraPos?.zoom ?? 16.0;
-    final lat = cameraPos?.target.latitude ?? 0.0;
-
-    // Below this zoom, hide corner arrows/bubbles entirely — even the
-    // sharpest turn shouldn't survive once the view is zoomed out this far.
-    const double hardCutoffZoom = 19;
-    if (zoom < hardCutoffZoom) {
-      await controller.setGeoJsonSource(_pathCornerSourceId, {
-        "type": "FeatureCollection",
-        "features": [],
-      });
-      return;
-    }
-
-    final metersPerPixel = 156543.03392 * cos(lat * pi / 180) / pow(2, zoom);
-    const double pixelThreshold = 80.0;
-    final double meterThreshold = pixelThreshold * metersPerPixel;
-
-    final sorted = [..._allCornerFeatures]
-      ..sort((a, b) => (b['properties']['turnSharpness'] as double)
-          .compareTo(a['properties']['turnSharpness'] as double));
-
-    final kept = <Map<String, dynamic>>[];
-    for (final feature in sorted) {
-      final coords = feature['geometry']['coordinates'] as List;
-      final point = MapLocation(latitude: coords[1], longitude: coords[0]);
-      bool tooClose = false;
-      for (final k in kept) {
-        final kCoords = k['geometry']['coordinates'] as List;
-        final kPoint = MapLocation(latitude: kCoords[1], longitude: kCoords[0]);
-        if (_haversineMeters(point, kPoint) < meterThreshold) {
-          tooClose = true;
-          break;
-        }
-      }
-      if (!tooClose) kept.add(feature);
-    }
-
-    await controller.setGeoJsonSource(_pathCornerSourceId, {
-      "type": "FeatureCollection",
-      "features": kept,
-    });
-  }
-
-  Future<Uint8List> _createShineIconBytes() async {
-    const double size = 44;
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final center = const Offset(size / 2, size / 2);
-    final paint = Paint()
-      ..shader = RadialGradient(
-        colors: [Colors.white, Colors.white.withOpacity(0.0)],
-        stops: const [0.0, 1.0],
-      ).createShader(Rect.fromCircle(center: center, radius: size / 2));
-    canvas.drawCircle(center, size / 2, paint);
-    final img = await recorder.endRecording().toImage(size.toInt(), size.toInt());
-    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
-  }
-
-  Future<void> _loadShineImage(MapLibreMapController controller) async {
-    try {
-      final bytes = await _createShineIconBytes();
-      await _addImageSafe(controller, _kShineImageId, bytes);
-    } catch (e) {
-      print("_loadShineImage $e");
-    }
-  }
-
-  static const int _pathShineCount = 1;
-
-  void _ensurePathShineAnimation(MapLibreMapController controller) {
-    if (_pathShineTimer != null) return;
-    _pathShineProgress = 0.0;
-    _pathShineTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
-      if (!_isPolylineLayersEnabled) return;
-
-      // Was 0.01 — tripled for a faster-moving shine.
-      _pathShineProgress += 0.04;
-      if (_pathShineProgress > 1.0) _pathShineProgress -= 1.0;
-
-      final activeLines = _lines.where((line) {
-        final isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
-        final style = line.properties?['style'];
-        final isGrey = line.properties?['isGreyOverlay'] ?? false;
-        return isPath && style == "solid" && !isGrey && line.points.length >= 2;
-      }).toList();
-
-      if (activeLines.isEmpty) {
-        timer.cancel();
-        _pathShineTimer = null;
-        return;
-      }
-
-      final features = <Map<String, dynamic>>[];
-      for (final line in activeLines) {
-        for (int i = 0; i < _pathShineCount; i++) {
-          final t = (_pathShineProgress + i / _pathShineCount) % 1.0;
-          final pos = _pointAlongPath(line.points, t);
-          features.add({
-            'type': 'Feature',
-            'geometry': {
-              'type': 'Point',
-              'coordinates': [pos.longitude, pos.latitude],
-            },
-            'properties': {},
-          });
-        }
-      }
-
-      try {
-        await controller.setGeoJsonSource(_pathShineSourceId, {
-          'type': 'FeatureCollection',
-          'features': features,
-        });
-      } catch (e) {
-        // Source may not exist yet mid style-reload; next tick retries.
-      }
-    });
-  }
-
-  void _stopPathShineAnimation() {
-    _pathShineTimer?.cancel();
-    _pathShineTimer = null;
   }
 
   @override
@@ -2369,7 +2618,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MapLibreMapController) {
       try {
         _lines.clear();
-        _stopPathShineAnimation();
         await _updatePolylineSource(controller);
       } catch (e) {
         print('Error clearing polylines: $e');
@@ -2394,97 +2642,26 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// reload, which wipes addImage()). Avoids re-decoding shared dot assets.
   final Set<String> _registeredDotImageIds = {};
 
-  /// Corner-arrow angles (rounded to the nearest 5°) already registered with
-  /// the current style. Cleared on style reload same as the dot images.
-  final Set<int> _registeredCornerArrowAngles = {};
-
-  String _cornerArrowImageId(int roundedAngle) =>
-      '${_kPathBigArrowImageId}_exact_$roundedAngle';
-
-  /// Registers (once, cached by 5°-rounded angle) a bent-arrow icon whose bend
-  /// matches the real turn angle, and returns its image id. Rounding to 5° is
-  /// purely to cap the number of distinct textures (~72 max) — it is NOT a
-  /// visual bucket like the old 6-way [-135, -90, -45, 45, 90, 135] scheme;
-  /// a 5° step is visually indistinguishable from the exact angle.
-  Future<String> _ensureCornerArrowImage(
-      MapLibreMapController controller, double diff) async {
-    final int rounded = (diff / 5).round() * 5;
-    final String id = _cornerArrowImageId(rounded);
-    if (!_registeredCornerArrowAngles.contains(rounded)) {
-      final bytes = await creator.createBentArrow(angle: rounded.toDouble());
-      await _addImageSafe(controller, id, bytes);
-      _registeredCornerArrowAngles.add(rounded);
-    }
-    return id;
-  }
-
-  final Map<String, String> _registeredTurnBubbleIds = {};
-
-  Future<String> _ensureTurnBubbleImage(
-      MapLibreMapController controller, String label) async {
-    if (_registeredTurnBubbleIds.containsKey(label)) {
-      return _registeredTurnBubbleIds[label]!;
-    }
-    final bytes = await _createTurnBubbleBytes(label);
-    final id = 'turn_bubble_${label.hashCode}';
-    await _addImageSafe(controller, id, bytes);
-    _registeredTurnBubbleIds[label] = id;
-    return id;
-  }
-
-  Future<Uint8List> _createTurnBubbleBytes(String label) async {
-    const double ratio = 2.0;
-    final textPainter = TextPainter(
-      text: TextSpan(
-        text: label,
-        style: TextStyle(
-          fontSize: 14 * ratio,
-          fontWeight: FontWeight.w600,
-          color: Colors.white,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-
-    const paddingH = 16.0, paddingV = 10.0, tailH = 10.0;
-    final w = textPainter.width + paddingH * 2 * ratio;
-    final bubbleH = textPainter.height + paddingV * 2 * ratio;
-    final h = bubbleH + tailH * ratio;
-
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-
-    final bubbleRect = Rect.fromLTWH(0, 0, w, bubbleH);
-    final rrect = RRect.fromRectAndRadius(bubbleRect, Radius.circular(10 * ratio));
-
-    canvas.drawRRect(
-      rrect.shift(Offset(0, 2 * ratio)),
-      Paint()
-        ..color = const Color(0x33000000)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3 * ratio),
-    );
-
-    final bgPaint = Paint()..color = const Color(0xFF1A73E8);
-    canvas.drawRRect(rrect, bgPaint);
-
-    final tailPath = Path()
-      ..moveTo(w / 2 - 6 * ratio, bubbleH - 1)
-      ..lineTo(w / 2 + 6 * ratio, bubbleH - 1)
-      ..lineTo(w / 2, h)
-      ..close();
-    canvas.drawPath(tailPath, bgPaint);
-
-    textPainter.paint(canvas, Offset(paddingH * ratio, paddingV * ratio));
-
-    final img = await recorder.endRecording().toImage(w.ceil(), h.ceil());
-    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-    return byteData!.buffer.asUint8List();
-  }
-
   /// Longest-edge cap (px) an animal photo is downscaled to before its icon
   /// is registered with the map style, regardless of the source photo's
   /// native resolution.
+  ///
+  /// DO NOT make this smaller on web to shrink the animal markers. Tried
+  /// 2026-08-27 (56px + an 11pt pill): it works visually, but a smaller bake
+  /// completes faster, which lands the venue push before onStyleLoadedCallback
+  /// has enabled the layers — and those pushes are silently dropped, leaving a
+  /// permanent grey basemap. Verified by A/B against a clean HEAD that renders.
+  /// Shrink at RENDER time via [_kAnimalWebIconScale] on the layer's icon-size
+  /// instead: same appearance, zero effect on bake timing.
   static const int _animalMaxIconSize = 80;
+
+  /// Render-time shrink for the custom-rendering composites (animal photo +
+  /// its pill) on web, where a browser viewport shows much more of the venue at
+  /// a given zoom than a native phone map and the baked-at-80dp icons crowd
+  /// each other. Applied to the layer's icon-size stops, so it costs nothing
+  /// and cannot perturb load ordering. Museum POI pins are excluded — they have
+  /// their own `hasSelectedIcon` curve.
+  static final double _kAnimalWebIconScale = kIsWeb ? 0.55 : 1.0;
 
   /// Composited animal-icon bytes, keyed by [_animalIconKey] (photo URL +
   /// baked title). An enclosure of animals that share a photo and species
@@ -2499,6 +2676,37 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// another decode/addImage round trip.
   final Set<String> _loadedAnimalIcons = {};
 
+  /// Shared "no label" icon ids already registered with the current style.
+  ///
+  /// The zoomed-out variant of a custom-rendering marker is the same photo
+  /// baked with `text: ""`, so its bytes depend only on the photo and the pill
+  /// geometry — never on the marker. Registering it under a per-marker
+  /// `<id>-small` id therefore uploaded ~190 byte-identical images, each one a
+  /// Blob → <img> decode → canvas readback → GPU upload. Keying by content
+  /// collapses that to one upload per distinct photo+size. Cleared on style
+  /// reload, which wipes addImage().
+  final Set<String> _registeredSmallIconIds = {};
+
+  /// Image id each marker's features should use for the zoomed-out (label-less)
+  /// variant, emitted as the `smallIcon` feature property. Markers absent from
+  /// here fall back to the old `<icon>-small` expression, which is what animal
+  /// markers still use (their ids are already content-keyed).
+  final Map<String, String> _smallIconIds = {};
+
+  /// Bytes behind each id in [_registeredSmallIconIds], kept across style
+  /// reloads so the shared label-less icons can be re-uploaded without being
+  /// re-baked. Every registered id always has an entry here, because an id only
+  /// enters the registry through an upload made from this map.
+  final Map<String, Uint8List> _smallIconBytes = {};
+
+  /// Baked icon bytes per marker, so re-registering after a style reload is
+  /// upload-only — no source re-fetch and no re-entry into the bake path.
+  /// Keyed on the inputs that change what gets drawn, not just the id.
+  final Map<String, _BakedMarkerIcon> _bakedIconCache = {};
+
+  String _bakedIconKey(GeoJsonMarker marker) =>
+      '${marker.id}|${marker.textVisibility}|${marker.title ?? ""}';
+
   bool _isAnimalMarker(GeoJsonMarker marker) =>
       marker.customRendering && marker.properties?['animalRef'] != null;
 
@@ -2510,9 +2718,33 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Registered image id shared by every animal marker with the same
   /// [_animalIconKey] — one GPU texture per unique photo+title instead of
-  /// one per marker.
+  /// one per marker. Only used at or above [_kLabelZoomThreshold].
   String _animalImageId(GeoJsonMarker marker) =>
       'animal-${_animalIconKey(marker).hashCode}';
+
+  /// Content key of the label-less animal variant: the photo, and nothing
+  /// else. Titles are unique per animal, so keying the label-less bake by
+  /// photo+title (as [_animalIconKey] does) made ~112 byte-identical images
+  /// where a handful would do.
+  String _animalPhotoKey(GeoJsonMarker marker) => marker.assetPath ?? '';
+
+  /// Shared image id for the label-less variant, one per distinct photo.
+  String _animalSmallImageId(GeoJsonMarker marker) =>
+      'animal-small-${_animalPhotoKey(marker).hashCode}';
+
+  /// Fetched-and-downscaled source photos, keyed by [_animalPhotoKey]. Shared
+  /// between both bake phases so phase B never re-fetches or re-resizes.
+  final Map<String, Uint8List> _animalSourceCache = {};
+
+  /// Zoom at or above which the custom-rendering layer swaps from the
+  /// label-less icon to the labelled composite. Must match the `step` stop in
+  /// [_customRenderingLayerProps] — the deferred phase-B bake is scheduled off
+  /// this, so if they drift the labels stop appearing.
+  static const double _kLabelZoomThreshold = 16;
+
+  /// True once the labelled animal composites have been requested, so camera
+  /// idles after the first one don't re-enter the batch.
+  bool _labelledAnimalsStarted = false;
 
   /// Image id an animal marker's feature should reference right now: the
   /// shared composite once it has finished loading, otherwise the paw dot
@@ -2521,6 +2753,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (_loadedAnimalIcons.contains(_animalIconKey(marker))) {
       return _animalImageId(marker);
     }
+    // Labelled composite not baked yet (it is deferred past
+    // _kLabelZoomThreshold). Show the real photo without its label rather than
+    // the paw — the paw is for "no image at all yet".
+    final String smallId = _animalSmallImageId(marker);
+    if (_registeredSmallIconIds.contains(smallId)) return smallId;
     return marker.dotAssetPath ?? _kDotImageId;
   }
 
@@ -2544,96 +2781,132 @@ class MaplibreMapProvider extends BaseMapProvider {
     );
     final resizedFrame = await resizedCodec.getNextFrame();
     final byteData =
-    await resizedFrame.image.toByteData(format: ui.ImageByteFormat.png);
+        await resizedFrame.image.toByteData(format: ui.ImageByteFormat.png);
     return byteData?.buffer.asUint8List() ?? bytes;
   }
 
-  /// Builds (or reuses) an animal marker's composited icon and registers it
-  /// under a content-derived id shared by every marker with the same photo
-  /// and baked title. Returns true if a new image was actually registered
-  /// with the style (i.e. the caller needs to re-push the GeoJSON source).
-  Future<bool> _loadAnimalIcon(
+  /// Source photo for an animal marker, fetched once per *photo* and already
+  /// downscaled to [_animalMaxIconSize].
+  ///
+  /// Previously keyed by photo+title, so N animals sharing a species photo each
+  /// re-fetched and re-decoded it. Keying by photo alone collapses that to one
+  /// fetch + one resize no matter how many titles reuse the image.
+  Future<Uint8List?> _animalSourceBytes(GeoJsonMarker marker) async {
+    final String key = _animalPhotoKey(marker);
+    final Uint8List? cached = _animalSourceCache[key];
+    if (cached != null) return cached;
+    Uint8List? rawBytes;
+    if (marker.assetPath!.startsWith('http')) {
+      rawBytes = await CacheController().fetchWithCache(marker.assetPath!);
+    } else {
+      final bd = await rootBundle.load(marker.assetPath!);
+      rawBytes = bd.buffer.asUint8List();
+    }
+    if (rawBytes == null) {
+      print('_animalSourceBytes: no bytes for ${marker.assetPath} '
+          '(icon stays a paw placeholder)');
+      return null;
+    }
+    // NOT pre-resized. _resizeImageBytes cost a full decode plus a PNG
+    // re-encode per photo, purely to hand smaller bytes to createUnifiedMarker
+    // — which instantiates its codec at the final ~80px target anyway, and now
+    // reads the source dimensions from the header instead of decoding. The
+    // downscale therefore happens exactly once, inside the bake, and the
+    // encode/decode pair this used to add is gone.
+    _animalSourceCache[key] = rawBytes;
+    return rawBytes;
+  }
+
+  /// Bake parameters shared by both animal variants, so the label-less and
+  /// labelled composites differ only in their text.
+  Future<MarkerIconWithAnchor> _bakeAnimalIcon(
+      GeoJsonMarker marker, Uint8List source, String text) {
+    final double fontSize = marker.properties?["fontSize"] ?? 14.5;
+    final Offset customAnchor =
+        marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+    final Size iconSize =
+        Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
+    return creator.createUnifiedMarker(
+      imageSize: iconSize,
+      fontSize: fontSize,
+      text: text,
+      imageSource: marker.assetPath,
+      imageBytes: source,
+      layout: MarkerLayout.vertical,
+      textFormat: TextFormat.smartWrap,
+      textColor: const Color(0xff000000),
+      customAnchor: customAnchor,
+      expandCanvasForRotation:
+          (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
+    );
+  }
+
+  /// PHASE A — the label-less animal icon, which is all the map actually draws
+  /// below [_kLabelZoomThreshold] (where every venue starts).
+  ///
+  /// Its pixels depend only on the photo, never the title, so it is keyed and
+  /// registered per photo. That is the whole point: an enclosure of 30 animals
+  /// with 30 distinct names shares ONE bake and ONE upload here, where the
+  /// labelled variant below would need 30 of each.
+  Future<bool> _loadAnimalSmallIcon(
       MapLibreMapController controller, GeoJsonMarker marker) async {
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
-
-    final String contentKey = _animalIconKey(marker);
-    final String imageId = _animalImageId(marker);
+    final String smallId = _animalSmallImageId(marker);
     marker.anchor ??= const Offset(0.5, 0.5);
-    if (_loadedAnimalIcons.contains(contentKey)) {
+    // Point this marker's feature at the shared image even if another marker
+    // already registered it — the property is per marker, the image is not.
+    _smallIconIds[marker.id] = smallId;
+    if (_registeredSmallIconIds.contains(smallId)) return false;
+    try {
+      Uint8List? bytes = _smallIconBytes[smallId];
+      if (bytes == null) {
+        final Uint8List? source = await _animalSourceBytes(marker);
+        if (source == null) return false;
+        final baked = await _bakeAnimalIcon(marker, source, "");
+        bytes = baked.icon;
+        marker.anchor = baked.anchor;
+        _smallIconBytes[smallId] = bytes;
+      }
+      await controller.addImage(smallId, bytes);
+      _registeredSmallIconIds.add(smallId);
+      return true;
+    } catch (e) {
+      print("_loadAnimalSmallIcon $e");
       return false;
     }
+  }
+
+  /// PHASE B — the labelled composite, one per photo+title.
+  ///
+  /// This is the expensive half (a TextPainter pass and a PNG encode per
+  /// distinct name) and it is only ever drawn at or above
+  /// [_kLabelZoomThreshold], so it is deferred off the load path and run when
+  /// the camera actually settles at that zoom. Deferring it is what takes the
+  /// animal pass off the critical path; nothing about the rendered result
+  /// changes, since the labelled image was invisible at load zoom anyway.
+  Future<bool> _loadAnimalLabelledIcon(
+      MapLibreMapController controller, GeoJsonMarker marker) async {
+    if (marker.assetPath == null) return false;
+    final String contentKey = _animalIconKey(marker);
+    final String imageId = _animalImageId(marker);
+    if (_loadedAnimalIcons.contains(contentKey)) return false;
     try {
       Uint8List? composite = _animalIconCache[contentKey];
-      Uint8List? smallComposite = _animalIconCache['$contentKey|small'];
-      if (composite == null || smallComposite == null) {
-        // Fetch the source photo once and cap its resolution before it's
-        // ever decoded for compositing — a 4000x3000 zoo photo shouldn't be
-        // pushed through the pipeline at full size just to be shrunk to an
-        // 80px icon a moment later.
-        Uint8List? rawBytes;
-        if (marker.assetPath!.startsWith('http')) {
-          rawBytes = await CacheController().fetchWithCache(marker.assetPath!);
-        } else {
-          final bd = await rootBundle.load(marker.assetPath!);
-          rawBytes = bd.buffer.asUint8List();
-        }
-        if (rawBytes == null) return false;
-        final Uint8List resizedSource =
-        await _resizeImageBytes(rawBytes, _animalMaxIconSize);
-
-        final double fontSize = marker.properties?["fontSize"] ?? 14.5;
-        final Offset customAnchor =
-            marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
-        final Size iconSize =
-        Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
-        // The text and text-less variants are independent bakes of the same
-        // resized source bytes — run them concurrently instead of back to
-        // back so the second bake's decode/canvas/encode work overlaps the
-        // first's await gaps rather than waiting for it to fully finish.
-        final iconResults = await Future.wait([
-          creator.createUnifiedMarker(
-            imageSize: iconSize,
-            fontSize: fontSize,
-            text: marker.textVisibility ? (marker.title ?? "") : "",
-            imageSource: marker.assetPath,
-            imageBytes: resizedSource,
-            layout: MarkerLayout.vertical,
-            textFormat: TextFormat.smartWrap,
-            textColor: const Color(0xff000000),
-            customAnchor: customAnchor,
-            expandCanvasForRotation:
-            (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
-          ),
-          creator.createUnifiedMarker(
-            imageSize: iconSize,
-            fontSize: fontSize,
-            text: "",
-            imageSource: marker.assetPath,
-            imageBytes: resizedSource,
-            layout: MarkerLayout.vertical,
-            textFormat: TextFormat.smartWrap,
-            textColor: const Color(0xff000000),
-            customAnchor: customAnchor,
-          ),
-        ]);
-        final withTextIcon = iconResults[0];
-        final withoutTextIcon = iconResults[1];
-        composite = withTextIcon.icon;
-        smallComposite = withoutTextIcon.icon;
-        marker.anchor = withTextIcon.anchor;
+      if (composite == null) {
+        final Uint8List? source = await _animalSourceBytes(marker);
+        if (source == null) return false;
+        final baked = await _bakeAnimalIcon(marker, source,
+            marker.textVisibility ? (marker.title ?? "") : "");
+        composite = baked.icon;
+        marker.anchor = baked.anchor;
         _animalIconCache[contentKey] = composite;
-        _animalIconCache['$contentKey|small'] = smallComposite;
       }
-      // Independent platform-channel registrations — dispatch together.
-      await Future.wait([
-        _addImageSafe(controller, imageId, composite),
-        _addImageSafe(controller, '$imageId-small', smallComposite),
-      ]);
+      await controller.addImage(imageId, composite);
       _loadedAnimalIcons.add(contentKey);
       return true;
     } catch (e) {
-      print("_loadAnimalIcon $e");
+      print("_loadAnimalLabelledIcon $e");
       return false;
     }
   }
@@ -2649,20 +2922,24 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// already loaded from a previous call.
   Future<void> _batchLoadAnimalIcons(
       MapLibreMapController controller, List<GeoJsonMarker> animalMarkers) async {
+    // Grouped by PHOTO, not photo+title: this pass bakes only the label-less
+    // variant, whose pixels don't depend on the name. An enclosure of 30
+    // differently-named animals sharing one photo is a single group here.
     final Map<String, List<GeoJsonMarker>> groups = {};
     for (final marker in animalMarkers) {
-      groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
+      groups.putIfAbsent(_animalPhotoKey(marker), () => []).add(marker);
     }
 
     bool anyChanged = false;
     await Future.wait(groups.values.map((group) async {
       try {
-        final changed = await _loadAnimalIcon(controller, group.first);
-        // The whole group shares one composite; propagate the anchor the
-        // leader resolved so followers render consistently even though they
-        // never called createUnifiedMarker themselves.
+        final changed = await _loadAnimalSmallIcon(controller, group.first);
+        // The whole group shares one image; propagate the anchor the leader
+        // resolved, and point every follower's feature at the same id (the
+        // leader's _loadAnimalSmallIcon only set its own).
         for (final marker in group.skip(1)) {
           marker.anchor = group.first.anchor;
+          _smallIconIds[marker.id] = _animalSmallImageId(marker);
         }
         if (changed) {
           anyChanged = true;
@@ -2680,6 +2957,44 @@ class MaplibreMapProvider extends BaseMapProvider {
       // than waiting out the throttle window for the last stragglers.
       _pushAnimalIconRefresh(controller);
     }
+  }
+
+  /// Bakes the labelled animal composites (phase B), one per photo+title.
+  ///
+  /// Deferred until the camera settles at or above [_kLabelZoomThreshold],
+  /// because that is the only zoom at which the layer draws them. Runs at most
+  /// once per style; a second camera idle is a no-op.
+  Future<void> _ensureLabelledAnimalIcons(
+      MapLibreMapController controller) async {
+    if (_labelledAnimalsStarted) return;
+    final animals = _symbols.where(_isAnimalMarker).toList();
+    if (animals.isEmpty) return;
+    _labelledAnimalsStarted = true;
+
+    final Map<String, List<GeoJsonMarker>> groups = {};
+    for (final marker in animals) {
+      groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
+    }
+    bool anyChanged = false;
+    await PerfTrace.timeAsync(
+        'deferred: labelled bake of ${groups.length} animal icons', () async {
+      await Future.wait(groups.values.map((group) async {
+        try {
+          final changed =
+              await _loadAnimalLabelledIcon(controller, group.first);
+          for (final marker in group.skip(1)) {
+            marker.anchor = group.first.anchor;
+          }
+          if (changed) {
+            anyChanged = true;
+            _scheduleAnimalIconRefresh(controller);
+          }
+        } catch (e) {
+          print("_ensureLabelledAnimalIcons $e");
+        }
+      }));
+    });
+    if (anyChanged) _pushAnimalIconRefresh(controller);
   }
 
   /// Debounce state for progressive animal-icon reveal. setGeoJsonSource
@@ -2711,12 +3026,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         Timer(_animalIconRefreshQuiet, () => _pushAnimalIconRefresh(controller));
   }
 
-  Future<void> _pushAnimalIconRefresh(MapLibreMapController controller) async {
+  void _pushAnimalIconRefresh(MapLibreMapController controller) {
     _animalIconRefreshTimer?.cancel();
     _animalIconRefreshTimer = null;
     _animalIconRefreshWindowStart = null;
     try {
-      await setGeoJsonSource(controller, _symbols, _clusterSourceId);
+      setGeoJsonSource(controller, _symbols, _clusterSourceId);
     } catch (e) {
       print("error refreshing animal markers $e");
     }
@@ -2727,23 +3042,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _loadDotImage(MapLibreMapController controller) async {
     try {
       final bd = await rootBundle.load(_kDotAssetPath);
-      await _addImageSafe(controller, _kDotImageId, bd.buffer.asUint8List());
+      await controller.addImage(_kDotImageId, bd.buffer.asUint8List());
       _registeredDotImageIds.add(_kDotImageId);
     } catch (e) {
       print("_loadDotImage $e");
-    }
-  }
-
-  /// Registers the path direction arrow images.
-  Future<void> _loadPathArrowImage(MapLibreMapController controller) async {
-    try {
-      final bytes = await creator.createDirectionArrow();
-      await _addImageSafe(controller, _kPathArrowImageId, bytes);
-
-      final bigBytes = await creator.createBigCornerArrow();
-      await _addImageSafe(controller, _kPathBigArrowImageId, bigBytes);
-    } catch (e) {
-      print("_loadPathArrowImage $e");
     }
   }
 
@@ -2762,7 +3064,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         bytes = bd.buffer.asUint8List();
       }
       if (bytes != null) {
-        await _addImageSafe(controller, path, bytes);
+        await controller.addImage(path, bytes);
         _registeredDotImageIds.add(path);
       }
     } catch (e) {
@@ -2770,50 +3072,57 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  /// Wraps [MapLibreMapController.addImage] with a retry against the native
-  /// "STYLE_NOT_READY" race (see [RenderingUtilities.retryOnStyleNotReady]).
-  Future<void> _addImageSafe(
+  /// Uploads a baked marker's images to the current style and records what it
+  /// registered, so a later style reload can repeat this without re-baking.
+  ///
+  /// The label-less variant is uploaded at most once per distinct
+  /// [_BakedMarkerIcon.smallIconId]; markers that share a photo and pill
+  /// geometry all point at that one image.
+  Future<void> _registerBakedIcon(
     MapLibreMapController controller,
-    String name,
-    Uint8List bytes, [
-    bool sdf = false,
-  ]) {
-    return RenderingUtilities.retryOnStyleNotReady(
-        () => controller.addImage(name, bytes, sdf));
-  }
-
-  /// Wraps [MapLibreMapController.addSymbolLayer] with the same retry.
-  Future<void> _addSymbolLayerSafe(
-    MapLibreMapController controller,
-    String sourceId,
-    String layerId,
-    SymbolLayerProperties properties, {
-    String? belowLayerId,
-    String? sourceLayer,
-    double? minzoom,
-    double? maxzoom,
-    dynamic filter,
-    bool enableInteraction = true,
-  }) {
-    return RenderingUtilities.retryOnStyleNotReady(() => controller.addSymbolLayer(
-          sourceId,
-          layerId,
-          properties,
-          belowLayerId: belowLayerId,
-          sourceLayer: sourceLayer,
-          minzoom: minzoom,
-          maxzoom: maxzoom,
-          filter: filter,
-          enableInteraction: enableInteraction,
-        ));
+    GeoJsonMarker marker,
+    _BakedMarkerIcon baked,
+  ) async {
+    if (baked.small != null) {
+      _smallIconBytes[baked.smallIconId] = baked.small!;
+    }
+    final Uint8List? smallBytes = baked.smallIconId == marker.id
+        ? null // aliases the main image; nothing separate to upload
+        : (_registeredSmallIconIds.contains(baked.smallIconId)
+            ? null
+            : _smallIconBytes[baked.smallIconId]);
+    await Future.wait([
+      controller.addImage(marker.id, baked.main),
+      if (smallBytes != null) controller.addImage(baked.smallIconId, smallBytes),
+      if (baked.selected != null)
+        controller.addImage("${marker.id}-selected", baked.selected!),
+    ]);
+    if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
+    _smallIconIds[marker.id] = baked.smallIconId;
+    _bakedIconCache[_bakedIconKey(marker)] = baked;
+    marker.anchor = baked.anchor;
   }
 
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
     if (_isAnimalMarker(marker)) {
-      return _loadAnimalIcon(controller, marker);
+      // Only the label-less variant. The labelled composite is deferred to
+      // _ensureLabelledAnimalIcons, which runs on camera idle at label zoom.
+      return _loadAnimalSmallIcon(controller, marker);
     }
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
+    // Already baked once this session — a style reload wiped the addImage()
+    // registrations but not the bytes, so re-register straight from the cache
+    // instead of re-fetching the photo and re-entering the bake path.
+    final _BakedMarkerIcon? cachedIcon = _bakedIconCache[_bakedIconKey(marker)];
+    if (cachedIcon != null) {
+      try {
+        await _registerBakedIcon(controller, marker, cachedIcon);
+        return true;
+      } catch (e) {
+        print("_loadMarkerIcon (cached) $e");
+      }
+    }
     try {
       if (marker.customRendering) {
         // Museum POI marker: photo card + tail + dot + title, baked into one PNG.
@@ -2849,12 +3158,18 @@ class MaplibreMapProvider extends BaseMapProvider {
           ]);
           final poiMarker = poiResults[0];
           final poiSelected = poiResults[1];
-          await Future.wait([
-            _addImageSafe(controller, marker.id, poiMarker.icon),
-            _addImageSafe(controller, "${marker.id}-small", poiMarker.icon),
-            _addImageSafe(controller, "${marker.id}-selected", poiSelected.icon),
-          ]);
-          marker.anchor = poiMarker.anchor;
+          // The zoomed-out variant is the *same bytes* as the full one here, so
+          // it is aliased to the marker id rather than uploaded a second time.
+          await _registerBakedIcon(
+            controller,
+            marker,
+            _BakedMarkerIcon(
+              main: poiMarker.icon,
+              smallIconId: marker.id,
+              selected: poiSelected.icon,
+              anchor: poiMarker.anchor,
+            ),
+          );
           return true;
         }
         if(marker.properties?['pathStop']??false){
@@ -2863,7 +3178,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             museum: RenderingTheme.current.isMuseum,
             stopName: marker.properties?['stopName'] ?? "",
           );
-          await _addImageSafe(controller, marker.id, iconBytes);
+          await controller.addImage(marker.id, iconBytes);
           return true;
         }else{
           double fontSize = marker.properties?["fontSize"]??14.5;
@@ -2873,13 +3188,13 @@ class MaplibreMapProvider extends BaseMapProvider {
           final bool isGallery =
               marker.assetPath?.contains('Gallery.png') ?? false;
           final FontWeight pillWeight =
-          isGallery ? FontWeight.w700 : FontWeight.w500;
+              isGallery ? FontWeight.w700 : FontWeight.w500;
           final double pillFontSize = isGallery ? 14.0 : fontSize;
           final Size markerImageSize = isGallery
               ? const Size(62, 62)
               : (marker.imageSize ?? const Size(85, 85));
           final Color pillColor =
-          isGallery ? Colors.white.withOpacity(0.82) : Colors.white;
+              isGallery ? Colors.white.withOpacity(0.82) : Colors.white;
           // Fetch the source photo once and share it between the with-text
           // and without-text bakes below (each used to independently fetch
           // the same URL/asset, doubling network+disk work per marker).
@@ -2890,8 +3205,20 @@ class MaplibreMapProvider extends BaseMapProvider {
             final bd = await rootBundle.load(marker.assetPath!);
             sourceBytes = bd.buffer.asUint8List();
           }
+          // Id the label-less bake is registered under. Its bytes depend only
+          // on the photo and the pill geometry, never on the marker, so every
+          // marker sharing those reuses one upload.
+          final String smallIconId = marker.textVisibility
+              ? 'small|${marker.assetPath}|${markerImageSize.width}x${markerImageSize.height}'
+                  '|$pillFontSize|$isGallery|${customAnchor.dx},${customAnchor.dy}'
+              // Label hidden → the "with text" bake has text "" too, so the two
+              // are byte-identical and the small variant just aliases the main.
+              : marker.id;
           // The two bakes are independent — run them concurrently instead of
-          // back to back.
+          // back to back. The second is skipped entirely when it would only
+          // reproduce the first (no label) or bytes already registered.
+          final bool needsSmallBake = marker.textVisibility &&
+              !_smallIconBytes.containsKey(smallIconId);
           final iconResults = await Future.wait([
             creator.createUnifiedMarker(
               imageSize: markerImageSize,
@@ -2910,32 +3237,35 @@ class MaplibreMapProvider extends BaseMapProvider {
               pillCornerRadius: isGallery ? 10.0 : null,
               expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
             ),
-            creator.createUnifiedMarker(
-              imageSize: markerImageSize,
-              fontSize: pillFontSize,
-              text: "",
-              imageSource: marker.assetPath,
-              imageBytes: sourceBytes,
-              layout: MarkerLayout.vertical,
-              textFormat: TextFormat.smartWrap,
-              textColor: const Color(0xff000000),
-              customAnchor: customAnchor,
-              fontWeight: pillWeight,
-              showPillBorder: !isGallery,
-              pillShadow: isGallery,
-              pillColor: pillColor,
-              pillCornerRadius: isGallery ? 10.0 : null,
-            ),
+            if (needsSmallBake)
+              creator.createUnifiedMarker(
+                imageSize: markerImageSize,
+                fontSize: pillFontSize,
+                text: "",
+                imageSource: marker.assetPath,
+                imageBytes: sourceBytes,
+                layout: MarkerLayout.vertical,
+                textFormat: TextFormat.smartWrap,
+                textColor: const Color(0xff000000),
+                customAnchor: customAnchor,
+                fontWeight: pillWeight,
+                showPillBorder: !isGallery,
+                pillShadow: isGallery,
+                pillColor: pillColor,
+                pillCornerRadius: isGallery ? 10.0 : null,
+              ),
           ]);
           final markerIconWithAnchorWithText = iconResults[0];
-          final markerIconWithAnchorWithoutText = iconResults[1];
-          final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
-          final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
-          await Future.wait([
-            _addImageSafe(controller, marker.id, iconBytes),
-            _addImageSafe(controller, "${marker.id}-small", iconBytes2),
-          ]);
-          marker.anchor = markerIconWithAnchorWithText.anchor;
+          await _registerBakedIcon(
+            controller,
+            marker,
+            _BakedMarkerIcon(
+              main: markerIconWithAnchorWithText.icon,
+              smallIconId: smallIconId,
+              small: needsSmallBake ? iconResults[1].icon : null,
+              anchor: markerIconWithAnchorWithText.anchor,
+            ),
+          );
           return true;
         }
       } else {
@@ -2948,7 +3278,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconBytes = bd.buffer.asUint8List();
         }
         if (iconBytes != null) {
-          await _addImageSafe(controller, marker.id, iconBytes);
+          await controller.addImage(marker.id, iconBytes);
           return true;
         }
       }
@@ -2973,23 +3303,42 @@ class MaplibreMapProvider extends BaseMapProvider {
       await controller.addCircleLayer(
         _circleSourceId,
         _normalCircleLayerId,
-        const CircleLayerProperties(
-          circleRadius: 10.0,
-          circleColor: '#448AFF',
-          circleOpacity: 0.3,
-          circleStrokeWidth: 2.0,
-          circleStrokeColor: '#4CAF50',
-          circleStrokeOpacity: 0.8,
+        _layerProps(
+          _normalCircleLayerId,
+          (op) => CircleLayerProperties(
+            visibility: _visibility(_normalCircleLayerId),
+            circleRadius: 10.0,
+            circleColor: '#448AFF',
+            circleOpacity: op(0.3),
+            circleStrokeWidth: 2.0,
+            circleStrokeColor: '#4CAF50',
+            // Overridden alongside the fill: dimming the puck but leaving the
+            // ring at 0.8 reads as a rendering fault, not a dimmed marker.
+            circleStrokeOpacity: op(0.8),
+          ),
         ),
         enableInteraction: false,
         belowLayerId: await _webSafeBelowLayerId(controller, _rotationMarkerLayerId),
       );
 
       _isCircleLayersEnabled = true;
+      await _applyLayerPolicy(controller, only: [_normalCircleLayerId]);
     } catch (e) {
       print('Error enabling circle layers: $e');
     }
   }
+
+  /// Multiplier applied to every marker layer's `icon-size`.
+  ///
+  /// Web halves them: many landmarks collapse to collision dots at once there
+  /// and the icons read far too heavy against the floor plan. **Native keeps
+  /// 1.0 — the sizes mobile has always shipped.** Every call site below writes
+  /// its original value times this, so the native number stays readable in the
+  /// source instead of being pre-multiplied away.
+  ///
+  /// Not applied to the custom-rendering layer (layer 3, the animal/POI
+  /// composites): its ramp was never rescaled and both platforms share it.
+  static final double _kIconScale = kIsWeb ? 0.5 : 1.0;
 
   /// Default zoom fade used when the layers are first created; replaced at
   /// runtime by [_refreshMarkerLayerMinZooms] once the real fade zoom is known.
@@ -3001,14 +3350,20 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Full property set for the text-only marker layer.
   ///
-  /// Shared by [enableMarkerLayers] and [_refreshMarkerLayerMinZooms] because
-  /// `setLayerProperties` **replaces** a layer's properties instead of merging
-  /// them: passing a partial set (just sort key + opacity, as the refresh used
-  /// to) silently drops `text-field`, leaving a symbol layer with nothing to
-  /// draw. Measured symptom was 45 dots and 0 text/icons at z18.9.
-  SymbolLayerProperties _normalTextLayerProps(List<dynamic> textOpacity) =>
+  /// Shared by [enableMarkerLayers] and the **web** branch of
+  /// [_refreshMarkerLayerMinZooms]. `setLayerProperties` REPLACES rather than
+  /// merges — it serialises with `toJson(skipNulls: false)`, so every unset
+  /// field is sent as an explicit null and resets that property to its default.
+  /// A partial set therefore drops `text-field`, `text-size` and the rest, and
+  /// also overwrites `symbol-sort-key` with a base-less expression — and that
+  /// per-layer base is what keeps each full marker sorted immediately before its
+  /// own collision dot. See the comment in [_refreshMarkerLayerMinZooms] for the
+  /// cascade and for why native deliberately keeps the flattened sort key.
+  SymbolLayerProperties _normalTextLayerProps(dynamic textOpacity,
+          {String visibility = "visible", dynamic sortKey}) =>
       SymbolLayerProperties(
-        symbolSortKey: ["+", 0, _kSortKeyExpression],
+        visibility: visibility,
+        symbolSortKey: sortKey ?? ["+", 0, _kSortKeyExpression],
         textField: ["get", "title"],
         textSize: 14,
         textColor: "#000000",
@@ -3023,14 +3378,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// variants differ only in their sort base, so they share this builder.
   SymbolLayerProperties _normalIconLayerProps({
     required int sortBase,
-    required List<dynamic> opacity,
+    required dynamic opacity,
+    String visibility = "visible",
+    dynamic sortKey,
   }) =>
       SymbolLayerProperties(
-        symbolSortKey: ["+", sortBase, _kSortKeyExpression],
+        visibility: visibility,
+        symbolSortKey: sortKey ?? ["+", sortBase, _kSortKeyExpression],
         iconImage: ["get", "icon"],
-        // Halved (was 0.8). Covers the ordinary landmark icons — lift, entry,
-        // washroom and the rest — for both the with/without-sectionId layers.
-        iconSize: 0.4,
+        // Covers the ordinary landmark icons — lift, entry, washroom and the
+        // rest — for both the with/without-sectionId layers.
+        iconSize: 0.8 * _kIconScale,
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
@@ -3052,77 +3410,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         textOpacity: opacity,
       );
 
-  /// Full property set for the custom-rendering marker layer (animal/POI
-  /// photo icons). Shared by the creation call and
-  /// [_refreshMarkerLayerMinZooms] for the same reason as the builders
-  /// above: `setLayerProperties` replaces rather than merges, so a partial
-  /// update carrying only `symbolSortKey`/`iconOpacity` drops `icon-image`
-  /// (and size/anchor/allow-overlap) entirely, leaving the layer with
-  /// nothing to draw — every custom-rendering marker then falls back to its
-  /// collision dot forever, even though its icon is correctly registered
-  /// and referenced in the source data.
-  SymbolLayerProperties _customRenderingLayerProps(List<dynamic> iconOpacity) =>
-      SymbolLayerProperties(
-        symbolSortKey: ["+", 4000, _kSortKeyExpression],
-        iconImage: [
-          "step",
-          ["zoom"],
-          ["concat", ["get", "icon"], "-small"],
-          16,
-          ["get", "icon"],
-        ],
-        iconSize: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
-          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
-          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
-          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
-        ],
-        iconAnchor: ["get", "iconAnchor"],
-        iconAllowOverlap: false,
-        iconOpacity: iconOpacity,
-      );
-
-  /// Full property set for the fixed/rotated (bearing) marker layer. See
-  /// [_customRenderingLayerProps] for why this must be a full set rather
-  /// than the sortKey/opacity-only partial [_refreshMarkerLayerMinZooms]
-  /// used to send.
-  SymbolLayerProperties _fixedMarkerLayerProps(List<dynamic> textOpacity) =>
-      SymbolLayerProperties(
-        symbolSortKey: ["+", 1000, _kSortKeyExpression],
-        textRotate: ["get", "bearing"],
-        textRotationAlignment: "map",
-        textField: ["get", "title"],
-        textSize: 12,
-        textColor: "#000000",
-        textHaloColor: "#f8f9fa",
-        textHaloWidth: 2,
-        textAnchor: "center",
-        textAllowOverlap: false,
-        iconImage: ["get", "icon"],
-        iconSize: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          18, 0.0,
-          22.0, 0.5,
-        ],
-        iconAnchor: ["get", "iconAnchor"],
-        iconOpacity: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          12.0, 0.0,
-          14.0, 1.0
-        ],
-        iconRotate: ["get", "bearing"],
-        iconRotationAlignment: "map",
-        iconAllowOverlap: false,
-        textOpacity: textOpacity,
-      );
-
   /// Full property set for the section polygon layer.
   ///
   /// Shared by the creation call and the later fade-zoom update for the same
@@ -3131,822 +3418,33 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// `fillOpacity` drops `fill-color`/`fill-outline-color` and the sections
   /// render in MapLibre's default fill, black, instead of the colour carried on
   /// each feature.
-  FillLayerProperties _sectionPolygonProps(List<dynamic> fillOpacity) =>
+  FillLayerProperties _sectionPolygonProps(dynamic fillOpacity,
+          {String visibility = "visible"}) =>
       FillLayerProperties(
+        visibility: visibility,
         fillColor: ["get", "fillColor"],
         fillOpacity: fillOpacity,
-        // No fillOutlineColor — the section patches render as flat colour with
-        // no border.
+        fillOutlineColor: ["get", "strokeColor"],
       );
 
-  Future<void> enableMarkerLayers(dynamic controller) async  {
-    if (controller is! MapLibreMapController) return;
-
-    try {
-      // addGeoJsonSource() cannot set maxzoom and silently defaults to 18 —
-      // geojson-vt then only tiles marker data up to z18, and every marker
-      // vanishes once the camera zooms past that (over-zoomed tiles for a
-      // point source lose their symbols instead of just looking coarser).
-      // Furniture already learned this lesson (see its own maxzoom: 22
-      // comment); apply the same fix here via the richer addSource() API.
-      // Wrapped per-call because, unlike addGeoJsonSource(), addSource()
-      // has no "already exists" guard on the native side and throws on a
-      // style-reload re-add — which would otherwise abort every layer setup
-      // after it in this function.
-      try {
-        await controller.addSource(
-          _clusterSourceId,
-          const GeojsonSourceProperties(
-            data: {'type': 'FeatureCollection', 'features': []},
-            maxzoom: 22,
-          ),
-        );
-      } catch (_) {
-        // Source already exists on the native side — fine, carry on.
-      }
-      try {
-        await controller.addSource(
-          _rotationSourceId,
-          const GeojsonSourceProperties(
-            data: {'type': 'FeatureCollection', 'features': []},
-            maxzoom: 22,
-          ),
-        );
-      } catch (_) {
-        // Source already exists on the native side — fine, carry on.
-      }
-
-      // Both sources exist again — async pushes (compass, animation) may resume.
-      _markerSourcesReady = true;
-
-      // Register the collision-fallback dot image (style reload wipes images).
-      await _loadDotImage(controller);
-
-      // Layer 0: Collision-fallback dots.
-      // One dot per collision-participating marker, drawn beneath the full
-      // markers. Its symbolSortKey places each dot immediately after its own
-      // full marker in MapLibre's single global collision pass:
-      //   full = collisionBase + (-priority);  dot = collisionBase + 0.6 + (-priority)
-      // Resulting cascade (all via native iconAllowOverlap:false placement):
-      //   • 2 markers collide → winner shows full; loser's full is hidden and
-      //     its small dot places in the gap (marker → dot).
-      //   • marker vs existing dot → the marker's full collides with the dot and
-      //     is hidden, so the marker also falls back to its dot.
-      //   • 2 dots collide → the lower-priority dot is hidden.
-      // The winner never shows a dot: its own dot collides with its own full.
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _dotMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", ["get", "collisionBase"], 0.6, _kSortKeyExpression],
-          iconImage: ["get", "dotIcon"],
-          // Half the source image. The dot is a bundled PNG registered via
-          // addImage, so its on-screen size is image pixels × iconSize — the
-          // dots read far too heavy at 1.0, especially on the web build where
-          // many landmarks collapse to dots at once.
-          iconSize: 0.5,
-          iconAnchor: "center",
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
-          // Mirror the per-type zoom visibility of the full markers: text (base
-          // 0) and icon-with-sectionId (base 3000) only appear from zoom 18;
-          // everything else fades in 12→14 like the normal icon markers.
-          // MapLibre only allows a `zoom` expression at the very top level, so
-          // we cannot nest `step`/`interpolate` over zoom inside a `case` (doing
-          // so makes NSExpression(mglJSONObject:) throw an uncaught NSException
-          // on iOS and aborts the app). Instead keep `interpolate` over zoom at
-          // the top and move the per-feature branch into the stop outputs:
-          //   • collisionBase 0/3000 → stays 0 until ~z18, then jumps to 1
-          //     (near-instant step, matching the previous `step` behaviour).
-          //   • everything else → fades in linearly 12→14, matching the
-          //     previous `interpolate`.
-          iconOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12.0,
-            ["case", _kDotStepGroupExpression, 0.0, 0.0],
-            14.0,
-            ["case", _kDotStepGroupExpression, 0.0, 1.0],
-            17.999,
-            ["case", _kDotStepGroupExpression, 0.0, 1.0],
-            18.0,
-            ["case", _kDotStepGroupExpression, 1.0, 1.0],
-          ],
-        ),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "overlapOverride"]]],
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
-      );
-
-      // Layer 1: Normal text markers (no icon, no bearing)
-      await _addSymbolLayerSafe(controller,
-          _clusterSourceId,
-          _normalTextMarkerLayerId,
-          _normalTextLayerProps(_kDefaultMarkerOpacity),
-          filter: [
-            "all",
-            ["!", ["to-boolean", ["get", "overlapOverride"]]],
-            ["!", ["to-boolean", ["get", "isPriority"]]],
-            ["!", ["to-boolean", ["get", "section"]]],
-            ["!", ["to-boolean", ["get", "subSection"]]],
-            ["!", ["to-boolean", ["get", "boundary"]]],
-            ["!", ["to-boolean", ["get", "bearing"]]],
-            ["!", ["to-boolean", ["get", "icon"]]],
-          ],
-          enableInteraction: true,
-          belowLayerId: null,
-          minzoom: buildingLabelMinZoom
-      );
-
-      // Layer 2: Normal icon markers (has icon, no bearing) — with sectionId
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        "$_normalIconMarkerLayerId-withSectionId",
-        _normalIconLayerProps(
-            sortBase: 3000, opacity: _kDefaultMarkerOpacity),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "overlapOverride"]]],
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["to-boolean", ["get", "bearing"]]],
-
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-          ["to-boolean", ["get", "sectionId"]],
-          ["!", ["to-boolean", ["get", "customRendering"]]],
-          ["to-boolean", ["get", "icon"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _normalTextMarkerLayerId),
-        minzoom: buildingLabelMinZoom,
-      );
-
-      // Layer 2b: Normal icon markers — without sectionId
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        "$_normalIconMarkerLayerId-withoutSectionId",
-        _normalIconLayerProps(
-            sortBase: 2000, opacity: _kDefaultMarkerOpacity),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "overlapOverride"]]],
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["to-boolean", ["get", "bearing"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-          ["!", ["to-boolean", ["get", "sectionId"]]],
-          ["!", ["to-boolean", ["get", "customRendering"]]],
-          ["to-boolean", ["get", "icon"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _normalTextMarkerLayerId),
-      );
-
-      // Layer 3: Custom rendering markers
-      //
-      // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
-      // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
-      // All other custom-rendering markers keep the original 14→0.2,
-      // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
-      // stays at the top level and the per-feature branch lives in the
-      // stop outputs (nesting zoom inside a `case` throws on iOS).
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _customRenderingMarkerLayerId,
-        _customRenderingLayerProps(_kDefaultMarkerOpacity),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "overlapOverride"]]],
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["to-boolean", ["get", "bearing"]]],
-          // When selected, the marker is drawn (and highlighted) by the selected
-          // layer instead; excluding it here avoids the base image colliding with
-          // or peeking out from behind the highlighted one.
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-          ["to-boolean", ["get", "customRendering"]],
-          ["to-boolean", ["get", "icon"]],
-        ],
-        enableInteraction: true,
-      );
-
-      // Layer 4: Normal fixed/rotated markers (has bearing)
-      // Top of the icon-size ramp is halved (was 1.0) — fixed markers, which
-      // include the main entry pin. The 0.0 floor is a fade-in, so only the
-      // top moves.
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _fixedMarkerLayerId,
-        _fixedMarkerLayerProps(_kDefaultMarkerOpacity),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "overlapOverride"]]],
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["to-boolean", ["get", "bearing"]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-        ],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
-      );
-
-      // Layer 5: Boundary / patch-above markers
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _patchAboveMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 10000, _kSortKeyExpression],
-          iconImage: ["get", "icon"],
-          iconAnchor: [
-            "case",
-            [
-              "all",
-              ["has", "title"],
-              ["!=", ["get", "title"], ""]
-            ],
-            "bottom",
-            "center"
-          ],
-          textField: ["get", "title"],
-          textSize: 14,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: [
-            "case",
-            ["has", "icon"],
-            "top",
-            "center"
-          ],
-          textOffset: [
-            "case",
-            ["has", "icon"],
-            ["literal", [0, 0.2]],
-            ["literal", [0, 0]]
-          ],
-          textAllowOverlap: false,
-          iconAllowOverlap: false,
-          iconOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12, 1.0,
-            14, 0.0
-          ],
-          textOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12, 1.0,
-            14, 0.0
-          ],
-        ),
-        filter: ["to-boolean", ["get", "boundary"]],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
-      );
-
-      // Layer 6: Section markers
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _sectionMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 7000, _kSortKeyExpression],
-          iconImage: ["get", "icon"],
-          iconSize: 0.4, // halved (was 0.8)
-          iconAnchor: ["get", "iconAnchor"],
-          textField: ["get", "title"],
-          textSize: 14,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: [
-            "case",
-            ["has", "icon"],
-            "top",
-            "center"
-          ],
-          textOffset: [
-            "case",
-            ["has", "icon"],
-            ["literal", [0, 0.2]],
-            ["literal", [0, 0]]
-          ],
-          textAllowOverlap: false,
-          iconAllowOverlap: false,
-          iconOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            17, 1.0,
-            18, 0.0
-          ],
-          textOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            17, 1.0,
-            18, 0.0
-          ],
-        ),
-        filter: ["to-boolean", ["get", "section"]],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
-      );
-
-      // Layer 7: SubSection markers
-      await _addSymbolLayerSafe(controller,
-          _clusterSourceId,
-          _subSectionMarkerLayerId,
-          SymbolLayerProperties(
-            symbolSortKey: ["+", 6000, _kSortKeyExpression],
-            iconImage: ["get", "icon"],
-            iconSize: 0.75, // halved (was 1.5) — subSection markers
-            textField: ["get", "title"],
-            textSize: 12,
-            textColor: "#000000",
-            textHaloColor: "#f8f9fa",
-            textHaloWidth: 2,
-            textAnchor: "center",
-            iconAllowOverlap: false,
-            textAllowOverlap: false,
-            iconOpacity: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              12.0, 0.0,
-              14.0, 1.0
-            ],
-            textOpacity: [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              12.0, 0.0,
-              14.0, 1.0
-            ],
-          ),
-          filter: ["to-boolean", ["get", "subSection"]],
-          enableInteraction: true,
-          belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
-          maxzoom: 18.0,
-          minzoom: 17.0
-      );
-
-      // Layer 8: Rotation markers (separate source)
-      await _addSymbolLayerSafe(controller,
-        _rotationSourceId,
-        _rotationMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 9000, _kSortKeyExpression],
-          iconImage: ["get", "icon"],
-          // Halved (was 1.5) to match the collision dots — the user arrow was
-          // dominating the floor plan it is meant to sit on.
-          iconSize: 0.75,
-          iconRotate: ["get", "bearing"],
-          iconRotationAlignment: "map",
-          iconAllowOverlap: true,
-        ),
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _sectionMarkerLayerId),
-      );
-
-      // Layer 9: isPriority markers
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _priorityMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 5000, _kSortKeyExpression],
-          iconImage: ["get", "icon"],
-          // Halved (was 1.5): same standalone-pin class as the user and
-          // selected markers, so it keeps the same visual weight as those.
-          iconSize: 0.75,
-          iconAllowOverlap: true,
-          textAllowOverlap: false,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "isPriority"]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
-      );
-
-      // Layer 9b: Temporary allow-overlap override markers.
-      // Mirrors the normal icon-marker styling but with icon/text overlap forced
-      // on, so toggled markers stay visible regardless of collision. Excludes
-      // priority/structural markers (they are handled by their own layers).
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _overlapOverrideMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 15000, _kSortKeyExpression],
-          iconImage: ["get", "icon"],
-          iconSize: 0.4, // halved (was 0.8) — overlap-override markers
-          iconAnchor: ["get", "iconAnchor"],
-          textField: ["get", "title"],
-          textSize: 14,
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: "top",
-          textOffset: [
-            "case",
-            ["==", ["get", "iconAnchor"], "bottom"],
-            ["literal", [0, 0.0]],
-            ["==", ["get", "iconAnchor"], "center"],
-            ["literal", [0, 1.2]],
-            ["literal", [0, 1.2]]
-          ],
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-          iconIgnorePlacement: true,
-          textIgnorePlacement: true,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "overlapOverride"]],
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
-      );
-
-      // Layer 10: Selected marker
-      await _addSymbolLayerSafe(controller,
-        _clusterSourceId,
-        _selectedMarkerLayerId,
-        SymbolLayerProperties(
-          symbolSortKey: ["+", 8000, _kSortKeyExpression],
-          iconImage: [
-            "case",
-            ["to-boolean", ["get", "hasSelectedIcon"]],
-            ["concat", ["get", "icon"], "-selected"],
-            ["get", "icon"],
-          ],
-          // iconSize: [
-          //   "interpolate",
-          //   ["linear"],
-          //   ["zoom"],
-          //   13,  0.2,
-          //   18,  1.5,
-          // ],
-          iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
-          iconRotate: ["get", "iconShake"],
-          iconRotationAlignment: "viewport",
-          // Custom-rendering markers (animal photos, museum POIs) bake their
-          // name straight into the icon image — see _customRenderingLayerProps,
-          // which has no textField. Drawing ["get","title"] here too gave the
-          // selected animal marker a second, raw label that the unselected
-          // marker never shows (e.g. the Sangai deer's parenthetical species
-          // name wrapping into stray "(" / ")" lines). Suppress the duplicate.
-          textField: [
-            "case",
-            ["to-boolean", ["get", "customRendering"]],
-            "",
-            ["get", "title"],
-          ],
-          textSize: ["*", 14, 1.6], // keep this number equal to peakLabelScale above
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: "top",
-          textOffset: ["literal", [0, 1.2]],
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-          iconIgnorePlacement: true,
-          textIgnorePlacement: true,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "isSelected"]],
-          ["!", ["to-boolean", ["get", "isAnimating"]]],
-          ["to-boolean", ["get", "icon"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
-      );
-
-      // Layer 11: Animated marker — a separate, tiny source that only ever
-      // holds the single marker currently being tap-animated. Updating this
-      // every tick is cheap; updating the whole clusterSource every tick is not.
-      await controller.addGeoJsonSource(_animatedMarkerSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
-      await _addSymbolLayerSafe(controller,
-        _animatedMarkerSourceId,
-        _animatedMarkerLayerId,
-        SymbolLayerProperties(
-          iconImage: ["get", "icon"],
-          iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
-          iconRotate: ["get", "iconShake"],
-          iconRotationAlignment: "viewport",
-          iconAnchor: "center",
-          textField: ["get", "title"],
-          textSize: ["*", 14, ["get", "labelScale"]],
-          textColor: "#000000",
-          textHaloColor: "#f8f9fa",
-          textHaloWidth: 1.5,
-          textAnchor: "top",
-          textOffset: ["literal", [0, 1.2]],
-          iconAllowOverlap: true,
-          textAllowOverlap: true,
-          iconIgnorePlacement: true,
-          textIgnorePlacement: true,
-        ),
-        enableInteraction: false,
-        belowLayerId: null,
-      );
-
-      _isClusteringEnabled = true;
-
-      if (_symbols.isNotEmpty) {
-        final symbols = [..._symbols];
-        await setGeoJsonSource(controller, symbols, _clusterSourceId);
-      }
-    } catch (e, stack) {
-      print('Error enabling marker layers: $e');
-      print('Stack trace: $stack');
-    }
-  }
-
-  Future<void> enablePolygonLayers(MapLibreMapController controller) async {
-    try {
-      await controller.addGeoJsonSource(_polygonSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
-
-      /// 1️⃣ SECTION (TOP-MOST among polygon layers)
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _sectionPolygonLayerId,
-        _sectionPolygonProps(_sectionZoomWindowOpacity()),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "section"]],
-          ["!", ["to-boolean", ["get", "subsection"]]],
-          ["!", ["has", "height"]],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
-        ],
-        enableInteraction: false,
-        belowLayerId: await _webSafeBelowLayerId(controller, _polylineLayerId),
-      );
-
-      /// 2️⃣ SUBSECTION
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _subSectionPolygonLayerId,
-        const FillLayerProperties(
-          fillColor: ["get", "fillColor"],
-          fillOpacity: ["get", "fillOpacity"],
-          fillOutlineColor: ["get", "strokeColor"],
-        ),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["to-boolean", ["get", "subsection"]],
-          ["!", ["has", "height"]],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
-        ],
-        enableInteraction: false,
-        minzoom: 17.0,
-        maxzoom: 18.0,
-        belowLayerId: await _webSafeBelowLayerId(controller, _sectionPolygonLayerId),
-      );
-
-      /// 3️⃣ SELECTED
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _selectedPlainPolygonLayerId,
-        const FillLayerProperties(
-          fillColor: "#4CAF50",
-          fillOpacity: 0.6,
-          fillOutlineColor: "#2E7D32",
-        ),
-        filter: [
-          "all",
-          ["!", ["has", "height"]],
-          ["to-boolean", ["get", "isSelected"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
-      );
-
-      // Stroke for the flat selected polygon. The height filter keeps it to the
-      // 2D rendering only; in 3D the selection is drawn by the extrusion layer.
-      await controller.addLineLayer(
-        _polygonSourceId,
-        _selectedPlainPolygonStrokeLayerId,
-        const LineLayerProperties(
-          lineColor: "#1B5E20",
-          lineWidth: 2.5,
-          lineOpacity: 1.0,
-          lineJoin: "round",
-          lineCap: "round",
-        ),
-        filter: [
-          "all",
-          ["!", ["has", "height"]],
-          ["to-boolean", ["get", "isSelected"]],
-        ],
-        enableInteraction: false,
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
-      );
-
-      await controller.addFillExtrusionLayer(
-        _polygonSourceId,
-        _selectedExtrudedPolygonLayerId,
-        const FillExtrusionLayerProperties(
-          fillExtrusionColor: "#4CAF50",
-          fillExtrusionHeight: ["get", "height"],
-          fillExtrusionBase: ["get", "base_height"],
-          fillExtrusionOpacity: 1.0,
-        ),
-        filter: [
-          "all",
-          ['has', 'height'],
-          ["to-boolean", ["get", "isSelected"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
-      );
-
-      /// 4️⃣ EXTRUDED
-      await controller.addFillExtrusionLayer(
-        _polygonSourceId,
-        _extrudedPolygonLayerId,
-        const FillExtrusionLayerProperties(
-          fillExtrusionColor: ["get", "fillColor"],
-          fillExtrusionHeight: ["get", "height"],
-          fillExtrusionBase: ["get", "base_height"],
-          fillExtrusionOpacity: 1.0,
-        ),
-        filter: [
-          "all",
-          ['has', 'height'],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
-        ],
-        belowLayerId: await _webSafeBelowLayerId(controller, _selectedPlainPolygonLayerId),
-      );
-
-      /// 5️⃣ NORMAL
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _normalPolygonLayerId,
-        const FillLayerProperties(
-          fillColor: ["get", "fillColor"],
-          fillOpacity: ["get", "fillOpacity"],
-          fillOutlineColor: ["get", "strokeColor"],
-        ),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subsection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
-          ["!", ["has", "height"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _extrudedPolygonLayerId),
-      );
-
-      /// 6️⃣ NORMAL with texture
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _patternPolygonLayerId,
-        const FillLayerProperties(
-          fillColor: ["get", "fillColor"],
-          fillOpacity: ["get", "fillOpacity"],
-          fillOutlineColor: ["get", "strokeColor"],
-          fillPattern: ["get", "pattern"],
-        ),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subsection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          ["to-boolean", ["get", "hasPattern"]],
-        ],
-        enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _extrudedPolygonLayerId),
-      );
-
-      /// 7️⃣ PATCH BELOW (zoom >= 14 → bottom-most)
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _patchBelowPolygonLayerId,
-        const FillLayerProperties(
-          fillColor: ["get", "fillColor"],
-          fillOpacity: ["get", "fillOpacity"],
-          fillOutlineColor: ["get", "strokeColor"],
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "boundary"]],
-          ["!", ["has", "height"]],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
-        ],
-        enableInteraction: false,
-        minzoom: 13.5,
-        belowLayerId: await _webSafeBelowLayerId(controller, _normalPolygonLayerId),
-      );
-
-      /// 8️⃣ PATCH ABOVE (zoom < 14 → top-most)
-      await controller.addFillLayer(
-        _polygonSourceId,
-        _patchAbovePolygonLayerId,
-        const FillLayerProperties(
-          fillColor: ["get", "fillColorSecondary"],
-          fillOpacity: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            13, 1.0,
-            14, 0.0
-          ],
-          fillOutlineColor: ["get", "strokeColor"],
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "boundary"]],
-          ["!", ["has", "height"]],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
-        ],
-        enableInteraction: false,
-        belowLayerId: await _webSafeBelowLayerId(controller, _polylineLayerId),
-      );
-
-      _isPolygonLayersEnabled = true;
-
-      if (_polygons.isNotEmpty) {
-        await _updatePolygonSource(controller);
-      }
-    } catch (e, stack) {
-      print('Error enabling polygon layers: $e');
-      print('Stack trace: $stack');
-    }
-  }
-
-  Future<void> _refreshPatchAboveOpacity(
-      MapLibreMapController controller, {
-        Size? screenSize,
-      }) async {
-    final boundaryPolygons = _polygons.where((p) =>
-    p.properties?['type']?.toString().toLowerCase() == 'boundary'
-    ).toList();
-
-    final fitZoom = _calculateFitZoom(
-      boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons,
-      screenSize: screenSize,
-    ) - 2.0;
-
-    final fadeOutZoom = fitZoom;
-    final fadeInZoom  = fitZoom - 0.5;
-
-    _fadeOutZoom = fadeOutZoom;
-
-    // 1. Boundary polygon fade layer
-    await controller.setLayerProperties(
-      _patchAbovePolygonLayerId,
-      FillLayerProperties(
-        fillColor: ["get", "fillColorSecondary"],
-        fillOpacity: [
-          "interpolate", ["linear"], ["zoom"],
-          fadeInZoom, 1.0,
-          fadeOutZoom, 0.0,
-        ],
-      ),
-    );
-
-    // 2. Boundary marker fade layer — remove and re-add to update maxzoom
-    await controller.removeLayer(_patchAboveMarkerLayerId);
-    await _addSymbolLayerSafe(controller,
-      _clusterSourceId,
-      _patchAboveMarkerLayerId,
+  /// Full property set for the boundary / venue-name marker layer.
+  ///
+  /// Shared by [enableMarkerLayers] and by [_refreshPatchAboveOpacity], which
+  /// removes and re-adds this layer rather than setting properties on it —
+  /// `maxzoom` is an addLayer argument and cannot be changed any other way.
+  ///
+  /// [allowOverlap] differs between those two callers and is passed explicitly
+  /// rather than defaulted: the creation call has always used `false` and the
+  /// refresh `true`. Since the refresh runs on every venue render, `true` is
+  /// what is actually on screen for all but the first moments. Preserved as-is
+  /// rather than unified, so extracting this builder changes no behaviour.
+  SymbolLayerProperties _patchAboveMarkerProps({
+    required dynamic opacity,
+    required bool allowOverlap,
+    String visibility = "visible",
+  }) =>
       SymbolLayerProperties(
+        visibility: visibility,
         symbolSortKey: ["+", 10000, _kSortKeyExpression],
         iconImage: ["get", "icon"],
         iconAnchor: [
@@ -3967,19 +3465,958 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["literal", [0, 0.2]],
           ["literal", [0, 0]]
         ],
-        textAllowOverlap: true,
-        iconAllowOverlap: true,
-        iconOpacity: [
+        textAllowOverlap: allowOverlap,
+        iconAllowOverlap: allowOverlap,
+        iconOpacity: opacity,
+        textOpacity: opacity,
+      );
+
+  /// Full property set for the section label layer. Shared by
+  /// [enableMarkerLayers] and [_refreshPatchAboveOpacity] for the same
+  /// remove-and-re-add reason as [_patchAboveMarkerProps].
+  SymbolLayerProperties _sectionMarkerProps({
+    required dynamic opacity,
+    String visibility = "visible",
+  }) =>
+      SymbolLayerProperties(
+        visibility: visibility,
+        symbolSortKey: ["+", 7000, _kSortKeyExpression],
+        iconImage: ["get", "icon"],
+        iconSize: 0.8 * _kIconScale,
+        iconAnchor: ["get", "iconAnchor"],
+        textField: ["get", "title"],
+        textSize: 14,
+        textColor: "#000000",
+        textHaloColor: "#f8f9fa",
+        textHaloWidth: 1.5,
+        textAnchor: ["case", ["has", "icon"], "top", "center"],
+        textOffset: [
+          "case",
+          ["has", "icon"],
+          ["literal", [0, 0.2]],
+          ["literal", [0, 0]]
+        ],
+        textAllowOverlap: false,
+        iconAllowOverlap: false,
+        iconOpacity: opacity,
+        textOpacity: opacity,
+      );
+
+  /// Full property set for the custom-rendering marker layer — the zoo animal
+  /// composites, museum POI pins, and anything else baked by
+  /// [UnifiedMarkerCreator] rather than referenced as a plain icon.
+  ///
+  /// Used at creation on every platform, and by the **web** branch of
+  /// [_refreshMarkerLayerMinZooms]. The load-bearing line is `symbolSortKey`'s
+  /// 4000 base, which the refresh's partial call used to overwrite: without it every full marker flattens to ~0, they collide with
+  /// each other as one block under `iconAllowOverlap: false`, and each loser
+  /// falls back to the layer-0 dot — for an animal, the paw. That is the "every
+  /// animal is a paw at every zoom" defect, and it is a collision-ordering bug,
+  /// not an icon-loading one: the composites were registered fine throughout.
+  SymbolLayerProperties _customRenderingLayerProps(dynamic iconOpacity,
+          {String visibility = "visible", dynamic sortKey}) =>
+      SymbolLayerProperties(
+        visibility: visibility,
+        symbolSortKey: sortKey ?? ["+", 4000, _kSortKeyExpression],
+        // The zoom step is a LABEL toggle, not a placeholder→photo swap:
+        // `icon` is the composite with the title baked in, the low-zoom id the
+        // same photo with text: "". Custom-rendering markers carry that id in
+        // `smallIcon` (content-keyed, so one image serves many markers);
+        // animals have no `smallIcon` and keep the '<icon>-small' convention
+        // that _loadAnimalIcon registers, since their ids are already
+        // content-keyed.
+        iconImage: [
+          "step",
+          ["zoom"],
+          [
+            "coalesce",
+            ["get", "smallIcon"],
+            ["concat", ["get", "icon"], "-small"],
+          ],
+          _kLabelZoomThreshold,
+          ["get", "icon"],
+        ],
+        // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
+        // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
+        // All other custom-rendering markers keep the original 14→0.2,
+        // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
+        // stays at the top level and the per-feature branch lives in the
+        // stop outputs (nesting zoom inside a `case` throws on iOS).
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          // The non-hasSelectedIcon stops carry _kAnimalWebIconScale, which is
+          // 1.0 off web — so native sizing is byte-identical and only the
+          // browser gets the smaller composites.
+          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2 * _kAnimalWebIconScale],
+          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442 * _kAnimalWebIconScale],
+          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0 * _kAnimalWebIconScale],
+          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0 * _kAnimalWebIconScale],
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconAllowOverlap: false,
+        iconOpacity: iconOpacity,
+      );
+
+  /// Full property set for the fixed/rotated marker layer (features carrying a
+  /// bearing — entry pins and the like). Shared for the same replace-not-merge
+  /// reason; the refresh path only ever wanted to retune `text-opacity`, but
+  /// passing that alone dropped `icon-image`, `icon-rotate` and `text-field`.
+  ///
+  /// [textOpacity] is null at creation time (the layer ships without an
+  /// explicit text-opacity) and carries the venue-fit fade once
+  /// [_refreshMarkerLayerMinZooms] knows it.
+  SymbolLayerProperties _fixedMarkerLayerProps({
+    required dynamic iconOpacity,
+    dynamic textOpacity,
+    String visibility = "visible",
+    dynamic sortKey,
+  }) =>
+      SymbolLayerProperties(
+        visibility: visibility,
+        symbolSortKey: sortKey ?? ["+", 1000, _kSortKeyExpression],
+        textRotate: ["get", "bearing"],
+        textRotationAlignment: "map",
+        textField: ["get", "title"],
+        textSize: 12,
+        textColor: "#000000",
+        textHaloColor: "#f8f9fa",
+        textHaloWidth: 2,
+        textAnchor: "center",
+        textAllowOverlap: false,
+        textOpacity: textOpacity,
+        iconImage: ["get", "icon"],
+        // Fixed markers, which include the main entry pin. The 0.0 floor is a
+        // fade-in, so only the top of the ramp scales.
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          18, 0.0,
+          22.0, 1.0 * _kIconScale,
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconOpacity: iconOpacity,
+        iconRotate: ["get", "bearing"],
+        iconRotationAlignment: "map",
+        iconAllowOverlap: false,
+      );
+
+  Future<void> enableMarkerLayers(dynamic controller) async  {
+    if (controller is! MapLibreMapController) return;
+
+    try {
+      await controller.addGeoJsonSource(_clusterSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      await controller.addGeoJsonSource(_rotationSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      // Both sources exist again — async pushes (compass, animation) may resume.
+      _markerSourcesReady = true;
+
+      // Register the collision-fallback dot image (style reload wipes images).
+      await _loadDotImage(controller);
+
+      // Layer 0: Collision-fallback dots.
+      // One dot per collision-participating marker, drawn beneath the full
+      // markers. Its symbolSortKey places each dot immediately after its own
+      // full marker in MapLibre's single global collision pass:
+      //   full = collisionBase + (-priority);  dot = collisionBase + 0.6 + (-priority)
+      // Resulting cascade (all via native iconAllowOverlap:false placement):
+      //   • 2 markers collide → winner shows full; loser's full is hidden and
+      //     its small dot places in the gap (marker → dot).
+      //   • marker vs existing dot → the marker's full collides with the dot and
+      //     is hidden, so the marker also falls back to its dot.
+      //   • 2 dots collide → the lower-priority dot is hidden.
+      // The winner never shows a dot: its own dot collides with its own full.
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _dotMarkerLayerId,
+        _layerProps(_dotMarkerLayerId, (op) => SymbolLayerProperties(
+          visibility: _visibility(_dotMarkerLayerId),
+          symbolSortKey: ["+", ["get", "collisionBase"], 0.6, _kSortKeyExpression],
+          iconImage: ["get", "dotIcon"],
+          // The dot is a bundled PNG registered via addImage, so its on-screen
+          // size is image pixels × iconSize. Full size on native; web halves it
+          // because many landmarks collapse to dots there at once.
+          iconSize: 1.0 * _kIconScale,
+          iconAnchor: "center",
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
+          // Mirror the per-type zoom visibility of the full markers: text (base
+          // 0) and icon-with-sectionId (base 3000) only appear from zoom 18;
+          // everything else fades in 12→14 like the normal icon markers.
+          // MapLibre only allows a `zoom` expression at the very top level, so
+          // we cannot nest `step`/`interpolate` over zoom inside a `case` (doing
+          // so makes NSExpression(mglJSONObject:) throw an uncaught NSException
+          // on iOS and aborts the app). Instead keep `interpolate` over zoom at
+          // the top and move the per-feature branch into the stop outputs:
+          //   • collisionBase 0/3000 → stays 0 until ~z18, then jumps to 1
+          //     (near-instant step, matching the previous `step` behaviour).
+          //   • everything else → fades in linearly 12→14, matching the
+          //     previous `interpolate`.
+          iconOpacity: op([
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            12.0,
+            ["case", _kDotStepGroupExpression, 0.0, 0.0],
+            14.0,
+            ["case", _kDotStepGroupExpression, 0.0, 1.0],
+            17.999,
+            ["case", _kDotStepGroupExpression, 0.0, 1.0],
+            18.0,
+            ["case", _kDotStepGroupExpression, 1.0, 1.0],
+          ]),
+        )),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+        ],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+
+      // Layer 1: Normal text markers (no icon, no bearing)
+      await controller.addSymbolLayer(
+          _clusterSourceId,
+          _normalTextMarkerLayerId,
+          _layerProps(
+              _normalTextMarkerLayerId,
+              (op) => _normalTextLayerProps(op(_kDefaultMarkerOpacity),
+                  visibility: _visibility(_normalTextMarkerLayerId))),
+          filter: [
+            "all",
+            ["!", ["to-boolean", ["get", "overlapOverride"]]],
+            ["!", ["to-boolean", ["get", "isPriority"]]],
+            ["!", ["to-boolean", ["get", "section"]]],
+            ["!", ["to-boolean", ["get", "subSection"]]],
+            ["!", ["to-boolean", ["get", "boundary"]]],
+            ["!", ["to-boolean", ["get", "bearing"]]],
+            ["!", ["to-boolean", ["get", "icon"]]],
+          ],
+          enableInteraction: true,
+          belowLayerId: null,
+          minzoom: 18.0
+      );
+
+      // Layer 2: Normal icon markers (has icon, no bearing) — with sectionId
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        "$_normalIconMarkerLayerId-withSectionId",
+        _layerProps(
+            "$_normalIconMarkerLayerId-withSectionId",
+            (op) => _normalIconLayerProps(
+                sortBase: 3000,
+                opacity: op(_kDefaultMarkerOpacity),
+                visibility:
+                    _visibility("$_normalIconMarkerLayerId-withSectionId"))),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["to-boolean", ["get", "sectionId"]],
+          ["!", ["to-boolean", ["get", "customRendering"]]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _normalTextMarkerLayerId),
+        minzoom: 18.0,
+      );
+
+      // Layer 2b: Normal icon markers — without sectionId
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        "$_normalIconMarkerLayerId-withoutSectionId",
+        _layerProps(
+            "$_normalIconMarkerLayerId-withoutSectionId",
+            (op) => _normalIconLayerProps(
+                sortBase: 2000,
+                opacity: op(_kDefaultMarkerOpacity),
+                visibility: _visibility(
+                    "$_normalIconMarkerLayerId-withoutSectionId"))),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          ["!", ["to-boolean", ["get", "sectionId"]]],
+          ["!", ["to-boolean", ["get", "customRendering"]]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _normalTextMarkerLayerId),
+      );
+
+      // Layer 3: Custom rendering markers
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _customRenderingMarkerLayerId,
+        _layerProps(
+            _customRenderingMarkerLayerId,
+            (op) => _customRenderingLayerProps(op(_kDefaultMarkerOpacity),
+                visibility: _visibility(_customRenderingMarkerLayerId))),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["to-boolean", ["get", "bearing"]]],
+          // When selected, the marker is drawn (and highlighted) by the selected
+          // layer instead; excluding it here avoids the base image colliding with
+          // or peeking out from behind the highlighted one.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
+          ["to-boolean", ["get", "customRendering"]],
+          ["to-boolean", ["get", "icon"]],
+        ],
+        enableInteraction: true,
+      );
+
+      // Layer 4: Normal fixed/rotated markers (has bearing)
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _fixedMarkerLayerId,
+        _layerProps(
+            _fixedMarkerLayerId,
+            (op) => _fixedMarkerLayerProps(
+                  iconOpacity: op(_kDefaultMarkerOpacity),
+                  // Entry pins are hidden by the renderer in 3D; a policy can
+                  // hide them further but cannot force them back on.
+                  visibility: _visibility(_fixedMarkerLayerId,
+                      internalVisible: !_config.immersive),
+                )),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "overlapOverride"]]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["to-boolean", ["get", "bearing"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
+      );
+
+      // Layer 5: Boundary / patch-above markers
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _patchAboveMarkerLayerId,
+        _layerProps(
+            _patchAboveMarkerLayerId,
+            (op) => _patchAboveMarkerProps(
+                  opacity: op(const [
+                    "interpolate", ["linear"], ["zoom"],
+                    12, 1.0,
+                    14, 0.0,
+                  ]),
+                  allowOverlap: false,
+                  visibility: _visibility(_patchAboveMarkerLayerId),
+                )),
+        filter: ["to-boolean", ["get", "boundary"]],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
+      );
+
+      // Layer 6: Section markers
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _sectionMarkerLayerId,
+        _layerProps(
+            _sectionMarkerLayerId,
+            (op) => _sectionMarkerProps(
+                  opacity: op(const [
+                    "interpolate", ["linear"], ["zoom"],
+                    17, 1.0,
+                    18, 0.0,
+                  ]),
+                  visibility: _visibility(_sectionMarkerLayerId),
+                )),
+        filter: ["to-boolean", ["get", "section"]],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
+      );
+
+      // Layer 7: SubSection markers
+      await controller.addSymbolLayer(
+          _clusterSourceId,
+          _subSectionMarkerLayerId,
+          _layerProps(_subSectionMarkerLayerId, (op) => SymbolLayerProperties(
+            visibility: _visibility(_subSectionMarkerLayerId),
+            symbolSortKey: ["+", 6000, _kSortKeyExpression],
+            iconImage: ["get", "icon"],
+            iconSize: 1.5 * _kIconScale, // subSection markers
+            textField: ["get", "title"],
+            textSize: 12,
+            textColor: "#000000",
+            textHaloColor: "#f8f9fa",
+            textHaloWidth: 2,
+            textAnchor: "center",
+            iconAllowOverlap: false,
+            textAllowOverlap: false,
+            iconOpacity: op(const [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12.0, 0.0,
+              14.0, 1.0
+            ]),
+            textOpacity: op(const [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              12.0, 0.0,
+              14.0, 1.0
+            ]),
+          )),
+          filter: ["to-boolean", ["get", "subSection"]],
+          enableInteraction: true,
+          belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
+          maxzoom: 18.0,
+          minzoom: 17.0
+      );
+
+      // Layer 8: Rotation markers (separate source)
+      await controller.addSymbolLayer(
+        _rotationSourceId,
+        _rotationMarkerLayerId,
+        _layerProps(_rotationMarkerLayerId, (op) => SymbolLayerProperties(
+          visibility: _visibility(_rotationMarkerLayerId),
+          symbolSortKey: ["+", 9000, _kSortKeyExpression],
+          // The layer shipped without an explicit icon-opacity; naming it here
+          // is what lets a userLocation override reach it. op(null) resolves to
+          // null when no override is set, which serialises the same as before.
+          iconOpacity: op(null),
+          iconImage: ["get", "icon"],
+          // Halved (was 1.5) to match the collision dots — the user arrow was
+          // dominating the floor plan it is meant to sit on.
+          //
+          // Web only: scale with zoom like every other marker layer, rather
+          // than holding one size while the floor plan grows and shrinks under
+          // it. Same 14 → 18.3 ramp the other custom-rendering markers use,
+          // scaled so the top of the curve is the 0.75 tuned above instead of
+          // 1.0 — the arrow keeps its established weight zoomed in and stops
+          // swamping the plan zoomed out. Native deliberately keeps the plain
+          // scalar: this was asked for on web, and a bare number cannot trip
+          // the iOS zoom-expression hazard documented on Layer 0.
+          iconSize: kIsWeb
+              ? [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  14.0, 0.15,
+                  18.0, 0.7082,
+                  18.3, 0.75,
+                  22.0, 0.75,
+                ]
+              : 1.5,
+          iconRotate: ["get", "bearing"],
+          iconRotationAlignment: "map",
+          iconAllowOverlap: true,
+        )),
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _sectionMarkerLayerId),
+      );
+
+      // Layer 9: isPriority markers
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _priorityMarkerLayerId,
+        _layerProps(_priorityMarkerLayerId, (op) => SymbolLayerProperties(
+          visibility: _visibility(_priorityMarkerLayerId),
+          symbolSortKey: ["+", 5000, _kSortKeyExpression],
+          iconImage: ["get", "icon"],
+          // Same standalone-pin class as the user and selected markers, so it
+          // keeps the same visual weight as those.
+          iconSize: 1.5 * _kIconScale,
+          iconAllowOverlap: true,
+          textAllowOverlap: false,
+          iconOpacity: op(null),
+          textOpacity: op(null),
+        )),
+        filter: ["to-boolean", ["get", "isPriority"]],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+
+      // Layer 9b: Temporary allow-overlap override markers.
+      // Mirrors the normal icon-marker styling but with icon/text overlap forced
+      // on, so toggled markers stay visible regardless of collision. Excludes
+      // priority/structural markers (they are handled by their own layers).
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _overlapOverrideMarkerLayerId,
+        _layerProps(_overlapOverrideMarkerLayerId, (op) => SymbolLayerProperties(
+          visibility: _visibility(_overlapOverrideMarkerLayerId),
+          symbolSortKey: ["+", 15000, _kSortKeyExpression],
+          iconImage: ["get", "icon"],
+          iconSize: 0.8 * _kIconScale, // overlap-override markers
+          iconAnchor: ["get", "iconAnchor"],
+          textField: ["get", "title"],
+          textSize: 14,
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: [
+            "case",
+            ["==", ["get", "iconAnchor"], "bottom"],
+            ["literal", [0, 0.0]],
+            ["==", ["get", "iconAnchor"], "center"],
+            ["literal", [0, 1.2]],
+            ["literal", [0, 1.2]]
+          ],
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
+          iconOpacity: op(null),
+          textOpacity: op(null),
+        )),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "overlapOverride"]],
+          ["!", ["to-boolean", ["get", "isPriority"]]],
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subSection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+        ],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+
+      // Layer 10: Selected marker
+      await controller.addSymbolLayer(
+        _clusterSourceId,
+        _selectedMarkerLayerId,
+        _layerProps(_selectedMarkerLayerId, (op) => SymbolLayerProperties(
+          visibility: _visibility(_selectedMarkerLayerId,
+              internalVisible: _anyMarkerGroupVisible),
+          symbolSortKey: ["+", 8000, _kSortKeyExpression],
+          iconImage: [
+            "case",
+            ["to-boolean", ["get", "hasSelectedIcon"]],
+            ["concat", ["get", "icon"], "-selected"],
+            ["get", "icon"],
+          ],
+          // Both stops scale together so the destination pin keeps the shape
+          // of its ramp at every zoom.
+          iconSize: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13,  0.2 * _kIconScale,
+            18,  1.5 * _kIconScale,
+          ],
+          iconAllowOverlap: false,
+          textAllowOverlap: false,
+          iconOpacity: op(null),
+        )),
+        filter: ["to-boolean", ["get", "isSelected"]],
+        enableInteraction: true,
+        belowLayerId: null,
+      );
+
+      _isClusteringEnabled = true;
+      await _applyLayerPolicy(controller);
+
+      if (_symbols.isNotEmpty) {
+        final symbols = [..._symbols];
+        setGeoJsonSource(controller, symbols, _clusterSourceId);
+      }
+    } catch (e, stack) {
+      print('Error enabling marker layers: $e');
+      print('Stack trace: $stack');
+    }
+  }
+
+  Future<void> enablePolygonLayers(MapLibreMapController controller) async {
+    try {
+      await controller.addGeoJsonSource(_polygonSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      /// 1️⃣ SECTION (TOP-MOST among polygon layers)
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _sectionPolygonLayerId,
+        _layerProps(
+            _sectionPolygonLayerId,
+            (op) => _sectionPolygonProps(
+                  // `op` sits on the ramp's PEAK stop, not around the whole
+                  // expression. Wrapping the expression let a host override
+                  // replace the ramp with a constant, so a dimmed venue drew
+                  // section fills at every zoom instead of only across their
+                  // fade window. Here the override sets how strong the peak is
+                  // and the 0.0 stops stay 0.0.
+                  [
+                    "interpolate", ["linear"], ["zoom"],
+                    16, 0.0,
+                    17, op(1.0),
+                    17.5, 0.0
+                  ],
+                  visibility: _visibility(_sectionPolygonLayerId),
+                )),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "section"]],
+          ["!", ["to-boolean", ["get", "subsection"]]],
+          ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+        ],
+        enableInteraction: false,
+        belowLayerId: await _webSafeBelowLayerId(controller, _polylineLayerId),
+      );
+
+      /// 2️⃣ SUBSECTION
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _subSectionPolygonLayerId,
+        _layerProps(_subSectionPolygonLayerId, (op) => FillLayerProperties(
+          visibility: _visibility(_subSectionPolygonLayerId),
+          fillColor: ["get", "fillColor"],
+          fillOpacity: op(const ["get", "fillOpacity"]),
+          fillOutlineColor: ["get", "strokeColor"],
+        )),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["to-boolean", ["get", "subsection"]],
+          ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+        ],
+        enableInteraction: false,
+        minzoom: 17.0,
+        maxzoom: 18.0,
+        belowLayerId: await _webSafeBelowLayerId(controller, _sectionPolygonLayerId),
+      );
+
+      /// 3️⃣ SELECTED
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _selectedPlainPolygonLayerId,
+        _layerProps(_selectedPlainPolygonLayerId, (op) => FillLayerProperties(
+          visibility: _visibility(_selectedPlainPolygonLayerId),
+          fillColor: "#4CAF50",
+          fillOpacity: op(0.6),
+          fillOutlineColor: "#2E7D32",
+        )),
+        filter: [
+          "all",
+          ["!", ["has", "height"]],
+          ["to-boolean", ["get", "isSelected"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
+      );
+
+      // Stroke for the flat selected polygon. The height filter keeps it to the
+      // 2D rendering only; in 3D the selection is drawn by the extrusion layer.
+      await controller.addLineLayer(
+        _polygonSourceId,
+        _selectedPlainPolygonStrokeLayerId,
+        _layerProps(_selectedPlainPolygonStrokeLayerId,
+            (op) => LineLayerProperties(
+          visibility: _visibility(_selectedPlainPolygonStrokeLayerId),
+          lineColor: "#1B5E20",
+          lineWidth: 2.5,
+          lineOpacity: op(1.0),
+          lineJoin: "round",
+          lineCap: "round",
+        )),
+        filter: [
+          "all",
+          ["!", ["has", "height"]],
+          ["to-boolean", ["get", "isSelected"]],
+        ],
+        enableInteraction: false,
+        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
+      );
+
+      await controller.addFillExtrusionLayer(
+        _polygonSourceId,
+        _selectedExtrudedPolygonLayerId,
+        _layerProps(_selectedExtrudedPolygonLayerId,
+            (op) => FillExtrusionLayerProperties(
+          visibility: _visibility(_selectedExtrudedPolygonLayerId),
+          fillExtrusionColor: "#4CAF50",
+          fillExtrusionHeight: ["get", "height"],
+          fillExtrusionBase: ["get", "base_height"],
+          // Zeroed in 2D by the renderer to suppress residual shading. That is
+          // an internal off, so it wins over a host override — otherwise
+          // dimming this group would resurrect extrusions in 2D.
+          fillExtrusionOpacity: _config.immersive ? op(1.0) : 0.0,
+        )),
+        filter: [
+          "all",
+          ['has', 'height'],
+          ["to-boolean", ["get", "isSelected"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
+      );
+      _layerReAdders[_selectedExtrudedPolygonLayerId] = () async {
+        await controller.removeLayer(_selectedExtrudedPolygonLayerId);
+        await controller.addFillExtrusionLayer(
+          _polygonSourceId,
+          _selectedExtrudedPolygonLayerId,
+          _layerProps(_selectedExtrudedPolygonLayerId,
+              (op) => FillExtrusionLayerProperties(
+                    visibility: _visibility(_selectedExtrudedPolygonLayerId),
+                    fillExtrusionColor: "#4CAF50",
+                    fillExtrusionHeight: ["get", "height"],
+                    fillExtrusionBase: ["get", "base_height"],
+                    fillExtrusionOpacity:
+                        _config.immersive ? op(1.0) : 0.0,
+                  )),
+          filter: [
+            "all",
+            ['has', 'height'],
+            ["to-boolean", ["get", "isSelected"]],
+          ],
+          enableInteraction: true,
+          belowLayerId: await _webSafeBelowLayerId(
+              controller, _subSectionPolygonLayerId),
+        );
+      };
+
+      /// 4️⃣ EXTRUDED
+      await controller.addFillExtrusionLayer(
+        _polygonSourceId,
+        _extrudedPolygonLayerId,
+        _layerProps(_extrudedPolygonLayerId,
+            (op) => FillExtrusionLayerProperties(
+          visibility: _visibility(_extrudedPolygonLayerId),
+          fillExtrusionColor: ["get", "fillColor"],
+          fillExtrusionHeight: ["get", "height"],
+          fillExtrusionBase: ["get", "base_height"],
+          fillExtrusionOpacity: _config.immersive ? op(1.0) : 0.0,
+        )),
+        filter: [
+          "all",
+          ['has', 'height'],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+        ],
+        belowLayerId: await _webSafeBelowLayerId(controller, _selectedPlainPolygonLayerId),
+      );
+      _layerReAdders[_extrudedPolygonLayerId] = () async {
+        await controller.removeLayer(_extrudedPolygonLayerId);
+        await controller.addFillExtrusionLayer(
+          _polygonSourceId,
+          _extrudedPolygonLayerId,
+          _layerProps(_extrudedPolygonLayerId,
+              (op) => FillExtrusionLayerProperties(
+                    visibility: _visibility(_extrudedPolygonLayerId),
+                    fillExtrusionColor: ["get", "fillColor"],
+                    fillExtrusionHeight: ["get", "height"],
+                    fillExtrusionBase: ["get", "base_height"],
+                    fillExtrusionOpacity:
+                        _config.immersive ? op(1.0) : 0.0,
+                  )),
+          filter: [
+            "all",
+            ['has', 'height'],
+            ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ],
+          belowLayerId: await _webSafeBelowLayerId(
+              controller, _selectedPlainPolygonLayerId),
+        );
+      };
+
+      /// 5️⃣ NORMAL
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _normalPolygonLayerId,
+        _layerProps(_normalPolygonLayerId, (op) => FillLayerProperties(
+          visibility: _visibility(_normalPolygonLayerId),
+          fillColor: ["get", "fillColor"],
+          fillOpacity: op(const ["get", "fillOpacity"]),
+          fillOutlineColor: ["get", "strokeColor"],
+        )),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subsection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+          ["!", ["has", "height"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _extrudedPolygonLayerId),
+      );
+
+      /// 6️⃣ NORMAL with texture
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _patternPolygonLayerId,
+        _layerProps(_patternPolygonLayerId, (op) => FillLayerProperties(
+          visibility: _visibility(_patternPolygonLayerId),
+          fillColor: ["get", "fillColor"],
+          fillOpacity: op(const ["get", "fillOpacity"]),
+          fillOutlineColor: ["get", "strokeColor"],
+          fillPattern: ["get", "pattern"],
+        )),
+        filter: [
+          "all",
+          ["!", ["to-boolean", ["get", "section"]]],
+          ["!", ["to-boolean", ["get", "subsection"]]],
+          ["!", ["to-boolean", ["get", "boundary"]]],
+          ["to-boolean", ["get", "hasPattern"]],
+        ],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _extrudedPolygonLayerId),
+      );
+
+      /// 7️⃣ PATCH BELOW (zoom >= 14 → bottom-most)
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _patchBelowPolygonLayerId,
+        _layerProps(_patchBelowPolygonLayerId, (op) => FillLayerProperties(
+          visibility: _visibility(_patchBelowPolygonLayerId),
+          fillColor: ["get", "fillColor"],
+          fillOpacity: op(const ["get", "fillOpacity"]),
+          fillOutlineColor: ["get", "strokeColor"],
+        )),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "boundary"]],
+          ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+        ],
+        enableInteraction: false,
+        minzoom: 13.5,
+        belowLayerId: await _webSafeBelowLayerId(controller, _normalPolygonLayerId),
+      );
+
+      /// 8️⃣ PATCH ABOVE (zoom < 14 → top-most)
+      await controller.addFillLayer(
+        _polygonSourceId,
+        _patchAbovePolygonLayerId,
+        _layerProps(_patchAbovePolygonLayerId, (op) => FillLayerProperties(
+          visibility: _visibility(_patchAbovePolygonLayerId),
+          fillColor: ["get", "fillColorSecondary"],
+          // Override on the peak stop only — see the section layer above.
+          fillOpacity: [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            13, op(1.0),
+            14, 0.0
+          ],
+          fillOutlineColor: ["get", "strokeColor"],
+        )),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "boundary"]],
+          ["!", ["has", "height"]],
+          ["!", ["to-boolean", ["get", "hasPattern"]]],
+        ],
+        enableInteraction: false,
+        belowLayerId: await _webSafeBelowLayerId(controller, _polylineLayerId),
+      );
+
+      _isPolygonLayersEnabled = true;
+      await _applyLayerPolicy(controller);
+
+      if (_polygons.isNotEmpty) {
+        await _updatePolygonSource(controller);
+      }
+    } catch (e, stack) {
+      print('Error enabling polygon layers: $e');
+      print('Stack trace: $stack');
+    }
+  }
+
+  Future<void> _refreshPatchAboveOpacity(
+      MapLibreMapController controller, {
+        Size? screenSize,
+      }) async {
+    // Steps 2-4 below remove/re-add the patch-above and section MARKER layers
+    // and then set properties on the rest of them, so none of it can run before
+    // [enableMarkerLayers] has created them.
+    //
+    // It could: enablePolygonLayers runs first in onStyleLoadedCallback and
+    // ends by pushing its source, which reaches here via _updatePolygonSource →
+    // _refreshPatchFadeIfStale. That path used to re-add
+    // patch-above-markers-layer while marker layers did not exist yet, and the
+    // damage was silent and total — removeLayer no-ops on a missing layer, so
+    // the re-add SUCCEEDED and left the layer sitting there. enableMarkerLayers
+    // then threw CannotAddLayerException("Layer patch-above-markers-layer
+    // already exists") partway through, aborting before `_isClusteringEnabled =
+    // true` and before it pushed `_symbols` to the source, so the map rendered
+    // with no markers at all and only a caught print to show for it.
+    //
+    // Nothing is lost by skipping: onStyleLoadedCallback calls this again after
+    // every enable*Layers has run, which is where the real fade thresholds get
+    // applied.
+    if (!_isClusteringEnabled) return;
+
+    final boundaryPolygons = _polygons.where((p) =>
+    p.properties?['type']?.toString().toLowerCase() == 'boundary'
+    ).toList();
+
+    final fitZoom = _calculateFitZoom(
+      boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons,
+      screenSize: screenSize,
+    ) - 2.0;
+
+    final fadeOutZoom = fitZoom;
+    final fadeInZoom  = fitZoom - 0.5;
+
+    _fadeOutZoom = fadeOutZoom;
+
+    // 1. Boundary polygon fade layer
+    // Full property set. This used to send only fillColor + fillOpacity, which
+    // — setLayerProperties replacing rather than merging — reset
+    // fill-outline-color to its default on every venue render.
+    await controller.setLayerProperties(
+      _patchAbovePolygonLayerId,
+      _layerProps(_patchAbovePolygonLayerId, (op) => FillLayerProperties(
+        visibility: _visibility(_patchAbovePolygonLayerId),
+        fillColor: ["get", "fillColorSecondary"],
+        fillOpacity: [
           "interpolate", ["linear"], ["zoom"],
-          fadeInZoom, 1.0,
+          fadeInZoom, op(1.0),
           fadeOutZoom, 0.0,
         ],
-        textOpacity: [
-          "interpolate", ["linear"], ["zoom"],
-          fadeInZoom, 1.0,
-          fadeOutZoom, 0.0,
-        ],
-      ),
+        fillOutlineColor: ["get", "strokeColor"],
+      )),
+    );
+
+    // 2. Boundary marker fade layer — remove and re-add to update maxzoom
+    await controller.removeLayer(_patchAboveMarkerLayerId);
+    await controller.addSymbolLayer(
+      _clusterSourceId,
+      _patchAboveMarkerLayerId,
+      _layerProps(
+          _patchAboveMarkerLayerId,
+          (op) => _patchAboveMarkerProps(
+                opacity: op([
+                  "interpolate", ["linear"], ["zoom"],
+                  fadeInZoom, 1.0,
+                  fadeOutZoom, 0.0,
+                ]),
+                allowOverlap: true,
+                visibility: _visibility(_patchAboveMarkerLayerId),
+              )),
       filter: ["to-boolean", ["get", "boundary"]],
       enableInteraction: true,
       belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
@@ -3990,71 +4427,62 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // Full property set — passing only fillOpacity here is what dropped
     // fill-color and left the sections rendering black.
-    // Coloured "section" campus patches sit on top of the buildings. They stay
-    // visible all the way down to `fadeOutZoom` (where the boundary "<venue
-    // name>" layer takes over) and only ramp out above `sectionLayerMaxZoom`
-    // where the buildings show unobstructed.
-    //
-    // Remove + re-add rather than setLayerProperties: the patch must sit BELOW
-    // the marker/label layers so building names still read on top of it, and
-    // only re-adding lets us pin its stacking position (setLayerProperties
-    // can't move a layer). `_dotMarkerLayerId` is the bottom-most marker layer,
-    // added by enableMarkerLayers which always runs before this.
-    final sectionWindowOpacity = _sectionZoomWindowOpacity(lowEdge: fadeOutZoom);
-    try {
-      await controller.removeLayer(_sectionPolygonLayerId);
-    } catch (_) {}
-    await controller.addFillLayer(
-      _polygonSourceId,
+    await controller.setLayerProperties(
       _sectionPolygonLayerId,
-      _sectionPolygonProps(sectionWindowOpacity),
-      filter: [
-        "all",
-        ["to-boolean", ["get", "section"]],
-        ["!", ["to-boolean", ["get", "subsection"]]],
-        ["!", ["has", "height"]],
-        ["!", ["to-boolean", ["get", "hasPattern"]]],
-      ],
-      enableInteraction: false,
-      belowLayerId: await _webSafeBelowLayerId(controller, _dotMarkerLayerId),
+      _layerProps(
+          _sectionPolygonLayerId,
+          (op) => _sectionPolygonProps(
+                [
+                  "interpolate", ["linear"], ["zoom"],
+                  fadeOutZoom + 1.5, op(1.0),
+                  fadeOutZoom + 2.0, 0.0,
+                ],
+                visibility: _visibility(_sectionPolygonLayerId),
+              )),
     );
     await controller.removeLayer(_sectionMarkerLayerId);
-    await _addSymbolLayerSafe(controller,
+    await controller.addSymbolLayer(
       _clusterSourceId,
       _sectionMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: ["+", 7000, _kSortKeyExpression],
-        iconImage: ["get", "icon"],
-        iconSize: 0.4, // halved (was 0.8) — keep in step with the add above
-        iconAnchor: ["get", "iconAnchor"],
-        textField: ["get", "title"],
-        textSize: 14,
-        textColor: "#000000",
-        textHaloColor: "#f8f9fa",
-        textHaloWidth: 1.5,
-        textAnchor: [
-          "case",
-          ["has", "icon"],
-          "top",
-          "center"
-        ],
-        textOffset: [
-          "case",
-          ["has", "icon"],
-          ["literal", [0, 0.2]],
-          ["literal", [0, 0]]
-        ],
-        textAllowOverlap: false,
-        iconAllowOverlap: false,
-        iconOpacity: sectionWindowOpacity,
-        textOpacity: sectionWindowOpacity,
-      ),
+      _layerProps(
+          _sectionMarkerLayerId,
+          (op) => _sectionMarkerProps(
+                opacity: op([
+                  "interpolate", ["linear"], ["zoom"],
+                  fadeOutZoom + 1.5, 1.0,
+                  fadeOutZoom + 2.0, 0.0,
+                ]),
+                visibility: _visibility(_sectionMarkerLayerId),
+              )),
       filter: ["to-boolean", ["get", "section"]],
       enableInteraction: true,
       belowLayerId: await _webSafeBelowLayerId(controller, _fixedMarkerLayerId),
     );
 
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
+
+    // The two label layers above were torn down and re-added, so re-arm the
+    // policy on them — a re-added layer is born from the builder, but a host
+    // that hid them before this ran needs the state pushed again.
+    await _applyLayerPolicy(controller,
+        only: [_patchAboveMarkerLayerId, _sectionMarkerLayerId]);
+
+    // The venue is now genuinely on screen: polygons pushed, patch and section
+    // fade curves applied, marker layers retuned. This is the point hosts need
+    // in order to aim the camera at something — the style-loaded and
+    // map-created callbacks both fire many seconds earlier, at which point a
+    // camera move lands on tiles that have not drawn.
+    // Release anything waiting on the venue being drawn (deferred marker work,
+    // and the host's deep-link camera focus) before invoking the host callback,
+    // so a throwing host handler cannot strand those waiters forever.
+    if (!_venueRenderedCompleter.isCompleted) {
+      _venueRenderedCompleter.complete();
+    }
+    try {
+      _onVenueRenderedCb?.call();
+    } catch (e) {
+      print('onVenueRendered handler threw: $e');
+    }
   }
 
   Future<void> _refreshMarkerLayerMinZooms(
@@ -4070,42 +4498,178 @@ class MaplibreMapProvider extends BaseMapProvider {
       fadeInEnd,   1.0,
     ];
 
-    // Full property sets, not partials: setLayerProperties replaces rather than
-    // merges, so the previous partial calls left these layers with no
-    // `text-field` / `icon-image` at all and they rendered nothing — which is
-    // why only the collision dots were ever visible. Reusing the same builders
-    // as the creation path also restores the collisionBase sort bases, which
-    // the old `symbolSortKey: _kSortKeyExpression` overwrite discarded.
+    // ── WEB ONLY ────────────────────────────────────────────────────────────
+    //
+    // These calls push each layer's FULL property set instead of just the two
+    // opacity/sort keys. The part that actually matters is `symbol-sort-key`:
+    // `setLayerProperties` MERGES on both platforms (Android routes
+    // `layer#setProperties` into `Layer.setProperties`, which applies only the
+    // keys present; the web binding loops setPaintProperty/setLayoutProperty
+    // per key), so nothing was ever dropped — but a partial call that names
+    // `symbolSortKey` still OVERWRITES it, and the bare `_kSortKeyExpression`
+    // discards the per-layer base from [_collisionBase] (text 0, fixed 1000,
+    // icon 2000/3000, customRendering 4000).
+    //
+    // That base is the whole marker→dot cascade: a feature's dot sorts at
+    // `collisionBase + 0.6`, i.e. immediately after its own full marker, so the
+    // full marker wins and suppresses its own dot. Flatten every full marker to
+    // ~0 and they instead all place first as one undifferentiated block, knock
+    // each other out under `iconAllowOverlap: false`, and each loser's dot then
+    // places into the gap. For an animal that dot is the paw — which is the
+    // "paw at every zoom" defect this fixes on web.
+    //
+    // NOT applied on native. Restoring the bases re-sorts customRendering to
+    // 4000, i.e. *after* text/fixed/icon markers, so the large labelled animal
+    // composites start losing collisions to them as you zoom in and drop back
+    // to paws. Mobile shipped for a long time with the flattened sort key and
+    // that is the accepted look there, so native keeps the original partial
+    // calls verbatim. Re-unify only with a deliberate mobile design pass.
+    if (kIsWeb) {
+      await controller.setLayerProperties(
+        _normalTextMarkerLayerId,
+        _layerProps(
+            _normalTextMarkerLayerId,
+            (op) => _normalTextLayerProps(op(opacityExpression),
+                visibility: _visibility(_normalTextMarkerLayerId))),
+      );
+
+      await controller.setLayerProperties(
+        "$_normalIconMarkerLayerId-withSectionId",
+        _layerProps(
+            "$_normalIconMarkerLayerId-withSectionId",
+            (op) => _normalIconLayerProps(
+                sortBase: 3000,
+                opacity: op(opacityExpression),
+                visibility:
+                    _visibility("$_normalIconMarkerLayerId-withSectionId"))),
+      );
+
+      await controller.setLayerProperties(
+        "$_normalIconMarkerLayerId-withoutSectionId",
+        _layerProps(
+            "$_normalIconMarkerLayerId-withoutSectionId",
+            (op) => _normalIconLayerProps(
+                sortBase: 2000,
+                opacity: op(opacityExpression),
+                visibility: _visibility(
+                    "$_normalIconMarkerLayerId-withoutSectionId"))),
+      );
+
+      await controller.setLayerProperties(
+        _customRenderingMarkerLayerId,
+        _layerProps(
+            _customRenderingMarkerLayerId,
+            (op) => _customRenderingLayerProps(op(opacityExpression),
+                visibility: _visibility(_customRenderingMarkerLayerId))),
+      );
+
+      // icon-opacity keeps the layer's own creation ramp: the partial call this
+      // stands in for only ever retuned text-opacity for the fixed markers.
+      // Both are wrapped, so a host override collapses them to the same value.
+      await controller.setLayerProperties(
+        _fixedMarkerLayerId,
+        _layerProps(
+            _fixedMarkerLayerId,
+            (op) => _fixedMarkerLayerProps(
+                  iconOpacity: op(_kDefaultMarkerOpacity),
+                  textOpacity: op(opacityExpression),
+                  visibility: _visibility(_fixedMarkerLayerId,
+                      internalVisible: !_config.immersive),
+                )),
+      );
+      return;
+    }
+
+    // Native: unchanged from before the web work — partial sets that retune the
+    // fade ramp and flatten symbol-sort-key. Deliberately kept as-is; the only
+    // change here is that each opacity value passes through the layer's opacity
+    // resolver, so a host override substitutes for it.
+    //
+    // Each layer also re-registers its full property set carrying THIS branch's
+    // flattened sort key rather than the creation-time per-layer base, so that
+    // if a policy is later applied the state it regenerates is the one native
+    // actually wants. (Registering is not pushing: a host that never uses the
+    // layer API triggers no extra write, and native behaviour is unchanged.)
+    final textOp = _opFor(_normalTextMarkerLayerId);
+    _registerLayerProps(
+        _normalTextMarkerLayerId,
+        (op) => _normalTextLayerProps(op(opacityExpression),
+            visibility: _visibility(_normalTextMarkerLayerId),
+            sortKey: _kSortKeyExpression));
     await controller.setLayerProperties(
       _normalTextMarkerLayerId,
-      _normalTextLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        textOpacity: textOp(opacityExpression),
+      ),
     );
 
+    final withSecId = "$_normalIconMarkerLayerId-withSectionId";
+    final withSecOp = _opFor(withSecId);
+    _registerLayerProps(
+        withSecId,
+        (op) => _normalIconLayerProps(
+            sortBase: 3000,
+            opacity: op(opacityExpression),
+            visibility: _visibility(withSecId),
+            sortKey: _kSortKeyExpression));
     await controller.setLayerProperties(
-      "$_normalIconMarkerLayerId-withSectionId",
-      _normalIconLayerProps(sortBase: 3000, opacity: opacityExpression),
+      withSecId,
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: withSecOp(opacityExpression),
+        textOpacity: withSecOp(opacityExpression),
+      ),
     );
 
+    final withoutSecId = "$_normalIconMarkerLayerId-withoutSectionId";
+    final withoutSecOp = _opFor(withoutSecId);
+    _registerLayerProps(
+        withoutSecId,
+        (op) => _normalIconLayerProps(
+            sortBase: 2000,
+            opacity: op(opacityExpression),
+            visibility: _visibility(withoutSecId),
+            sortKey: _kSortKeyExpression));
     await controller.setLayerProperties(
-      "$_normalIconMarkerLayerId-withoutSectionId",
-      _normalIconLayerProps(sortBase: 2000, opacity: opacityExpression),
+      withoutSecId,
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: withoutSecOp(opacityExpression),
+        textOpacity: withoutSecOp(opacityExpression),
+      ),
     );
 
-    // Full property sets via the shared builders (see their doc comments) —
-    // a partial update here previously dropped icon-image/icon-size/
-    // icon-anchor/icon-allow-overlap from these two layers entirely, which
-    // is why customRendering markers (animal/POI photos) never rendered:
-    // the layer had nothing left to draw and every one of them silently
-    // fell back to its collision dot, even though the icon was correctly
-    // registered and referenced in the source data.
+    final customOp = _opFor(_customRenderingMarkerLayerId);
+    _registerLayerProps(
+        _customRenderingMarkerLayerId,
+        (op) => _customRenderingLayerProps(op(opacityExpression),
+            visibility: _visibility(_customRenderingMarkerLayerId),
+            sortKey: _kSortKeyExpression));
     await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
-      _customRenderingLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: customOp(opacityExpression),
+      ),
     );
 
+    final fixedOp = _opFor(_fixedMarkerLayerId);
+    _registerLayerProps(
+        _fixedMarkerLayerId,
+        (op) => _fixedMarkerLayerProps(
+              iconOpacity: op(_kDefaultMarkerOpacity),
+              textOpacity: op(opacityExpression),
+              visibility: _visibility(_fixedMarkerLayerId,
+                  internalVisible: !_config.immersive),
+              sortKey: _kSortKeyExpression,
+            ));
     await controller.setLayerProperties(
       _fixedMarkerLayerId,
-      _fixedMarkerLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        textOpacity: fixedOp(opacityExpression),
+      ),
     );
   }
 
@@ -4158,66 +4722,51 @@ class MaplibreMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      await controller.addGeoJsonSource(_pathCornerSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
-
-      await controller.addGeoJsonSource(_pathShineSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
-      await _loadShineImage(controller);
-
-      // Layer ordering: Bottom to Top
-      // 1. Normal polylines
-      // 2. Path outline
-      // 3. Solid path line
-      // 4. Repetitive small arrows
-      // 5. Big corner arrows
-      // 6. Dashed path
-      // 7. Grey overlay
-
-      // 1. Normal polylines
+      // Normal polylines (NOT path) — bottom-most
       await controller.addLineLayer(
         _polylineSourceId,
         _polylineLayerId,
-        const LineLayerProperties(
+        _layerProps(_polylineLayerId, (op) => LineLayerProperties(
+          visibility: _visibility(_polylineLayerId),
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
-          lineOpacity: ["get", "lineOpacity"],
-        ),
+          lineOpacity: op(const ["get", "lineOpacity"]),
+        )),
         filter: ["!", ["to-boolean", ["get", "path"]]],
         enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
       );
 
-      // 2. Path outline
       await controller.addLineLayer(
         _polylineSourceId,
-        _pathOutlineLayerId,
-        const LineLayerProperties(
-          lineColor: "#FFFFFF",
-          lineWidth: 14,
-          lineOpacity: ["get", "lineOpacity"],
-        ),
+        _pathOutlineLayerId,          // new layer id, e.g. 'path-solid-outline'
+        _layerProps(_pathOutlineLayerId, (op) => LineLayerProperties(
+          visibility: _visibility(_pathOutlineLayerId),
+          lineColor: "#FFFFFF",        // white outline
+          lineWidth: 14,  // will be wider via lineGapWidth trick
+          lineOpacity: op(const ["get", "lineOpacity"]),
+          // lineGapWidth: ["get", "lineWidth"], // ← key: pushes the outline outward
+        )),
         filter: [
           "all",
           ["to-boolean", ["get", "path"]],
           ["==", ["get", "style"], "solid"],
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
         ],
-        enableInteraction: false,
+        enableInteraction: false,       // outline doesn't need to be tappable
+        belowLayerId: await _webSafeBelowLayerId(controller, _pathSolidLayerId), // render BELOW the solid line
       );
 
-      // 3. Solid path lines
+      // Solid path lines
       await controller.addLineLayer(
         _polylineSourceId,
         _pathSolidLayerId,
-        const LineLayerProperties(
+        _layerProps(_pathSolidLayerId, (op) => LineLayerProperties(
+          visibility: _visibility(_pathSolidLayerId),
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
-          lineOpacity: ["get", "lineOpacity"],
-        ),
+          lineOpacity: op(const ["get", "lineOpacity"]),
+        )),
         filter: [
           "all",
           ["to-boolean", ["get", "path"]],
@@ -4225,137 +4774,52 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
         ],
         enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
       );
 
-      // 4. Repetitive small arrows
-      await _addSymbolLayerSafe(controller,
-        _polylineSourceId,
-        _pathArrowLayerId,
-        const SymbolLayerProperties(
-          iconImage: _kPathArrowImageId,
-          symbolPlacement: 'line',
-          symbolSpacing: [
-            "interpolate", ["linear"], ["zoom"],
-            0, 2.0,   // Ultra-dense spacing for world-level view
-            10, 10.0,  // Very dense for city-level view
-            14, 40.0,
-            19, 100.0
-          ],
-          iconSize: [
-            "interpolate", ["linear"], ["zoom"],
-            0, 0.4,   // Scale down at extreme distance but keep visible
-            10, 0.6,
-            18, 0.8
-          ],
-          iconRotationAlignment: 'map',
-          iconAllowOverlap: true,
-          iconIgnorePlacement: true,
-          iconPadding: 0,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "path"]],
-          ["==", ["get", "style"], "solid"],
-          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
-        ],
-      );
-
-      // Big corner arrows
-      await _addSymbolLayerSafe(controller,
-        _pathCornerSourceId,
-        _pathBigArrowLayerId,
-        const SymbolLayerProperties(
-          symbolSortKey: -999999,
-          iconImage: ["coalesce", ["get", "icon"], _kPathBigArrowImageId],
-          iconSize: 1.2,
-          iconRotationAlignment: 'map',
-          iconRotate: ["get", "bearing"],
-          iconAnchor: 'center', // Pivot at the bend
-          iconAllowOverlap: true,
-          iconIgnorePlacement: false,
-          iconPadding: 0,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "path"]],
-          ["==", ["get", "style"], "solid"],
-          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
-        ],
-        minzoom: 19.0,
-      );
-
-      // Moving shine that travels along the active path.
-      await _addSymbolLayerSafe(controller,
-        _pathShineSourceId,
-        _pathShineLayerId,
-        const SymbolLayerProperties(
-          iconImage: _kShineImageId,
-          iconSize: 2.5,
-          iconAllowOverlap: true,
-          iconIgnorePlacement: true,
-        ),
-      );
-
-      // Turn bubble (floating callout with the turn label), anchored to the
-      // corner point. minzoom hides it when zoomed out too far.
-      await _addSymbolLayerSafe(controller,
-        _pathCornerSourceId,
-        _turnBubbleLayerId,
-        const SymbolLayerProperties(
-          symbolSortKey: ["*", ["get", "turnSharpness"], -1],
-          iconImage: ["get", "turnBubbleIcon"],
-          iconAnchor: "bottom",
-          iconOffset: [0, -24],
-          iconAllowOverlap: false,
-          iconIgnorePlacement: false,
-          iconPadding: 8,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "path"]],
-          ["==", ["get", "style"], "solid"],
-          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
-        ],
-        minzoom: 19.0,
-      );
-
-      // 6. Dashed path lines
+      // Dashed path lines
       await controller.addLineLayer(
         _polylineSourceId,
         _pathDashedLayerId,
-        LineLayerProperties(
+        _layerProps(_pathDashedLayerId, (op) => LineLayerProperties(
+          visibility: _visibility(_pathDashedLayerId),
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
-          lineOpacity: ["get", "lineOpacity"],
+          lineOpacity: op(const ["get", "lineOpacity"]),
+          // `Platform` is dart:io and throws on web, so short-circuit first.
           lineDasharray: (!kIsWeb && Platform.isAndroid)
               ? ["literal", [0.1, 2.0]]
               : null,
           lineCap: "round",
-        ),
+        )),
         filter: [
           "all",
           ["to-boolean", ["get", "path"]],
           ["==", ["get", "style"], "dashed"],
         ],
         enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
       );
 
-      // 7. Grey overlay
+      // Grey overlay — above all path layers, below user marker
       await controller.addLineLayer(
         _polylineSourceId,
         _greyOverlayLayerId,
-        const LineLayerProperties(
+        _layerProps(_greyOverlayLayerId, (op) => LineLayerProperties(
+          visibility: _visibility(_greyOverlayLayerId),
           lineColor: ["get", "lineColor"],
           lineWidth: ["get", "lineWidth"],
-          lineOpacity: ["get", "lineOpacity"],
+          lineOpacity: op(const ["get", "lineOpacity"]),
           lineCap: "round",
           lineJoin: "round",
-        ),
+        )),
         filter: ["to-boolean", ["get", "isGreyOverlay"]],
         enableInteraction: false,
+        belowLayerId: await _webSafeBelowLayerId(controller, _rotationMarkerLayerId),
       );
 
       _isPolylineLayersEnabled = true;
+      await _applyLayerPolicy(controller);
 
       if (_lines.isNotEmpty) {
         await _updatePolylineSource(controller);
@@ -4369,6 +4833,58 @@ class MaplibreMapProvider extends BaseMapProvider {
   // ---------------------------------------------------------------------------
   // Selection helpers
   // ---------------------------------------------------------------------------
+
+  /// The leaf group a tapped marker feature belongs to.
+  ///
+  /// Ordered to mirror the layer filters in [enableMarkerLayers]: a feature is
+  /// drawn by the first layer whose filter it satisfies, and this must agree.
+  /// Web's `queryRenderedFeatures` does not report which layer a feature came
+  /// from, so the classification has to come from the properties.
+  MapLayer _markerGroupFor(Map<dynamic, dynamic>? props) {
+    if (props == null) return MapLayer.landmarkMarkers;
+    if (props['isSelected'] == true) return MapLayer.selection;
+    if (props['boundary'] == true) return MapLayer.venueLabel;
+    if (props['section'] == true) return MapLayer.sectionLabels;
+    if (props['subSection'] == true) return MapLayer.subSectionLabels;
+    if (props['isPriority'] == true) return MapLayer.priorityMarkers;
+    final bearing = props['bearing'];
+    if (bearing is num && bearing != 0) return MapLayer.entryMarkers;
+    return MapLayer.landmarkMarkers;
+  }
+
+  /// The leaf group a tapped polygon belongs to.
+  ///
+  /// The height check mirrors [_updatePolygonSource], which only attaches
+  /// `height` while immersive — so a polygon is drawn by the extrusion layer
+  /// exactly when both are true, and this agrees with what is on screen.
+  MapLayer _polygonGroupFor(GeoJsonPolygon polygon) {
+    final type = polygon.properties?['type']?.toString().toLowerCase();
+    if (type == 'boundary') return MapLayer.venueBoundary;
+    if (type == 'section') return MapLayer.sections;
+    if (type == 'sub section') return MapLayer.subSections;
+    final height = polygon.properties?['height'];
+    final hasHeight = height != null &&
+        height.toString().isNotEmpty &&
+        height.toString().toLowerCase() != 'undefined';
+    return (_config.immersive && hasHeight)
+        ? MapLayer.extrusions
+        : MapLayer.rooms;
+  }
+
+  bool _tapAllowedForGroup(MapLayer group) =>
+      _policy.resolve(group).tappable != false;
+
+  /// Selection triggered by a tap.
+  ///
+  /// [selectLocation] itself is deliberately left ungated so that programmatic
+  /// selection — search results, deep links, tour stops, all of which go through
+  /// `UnifiedMapController.selectLocation` — keeps working with taps switched
+  /// off entirely.
+  Future<void> _selectFromTap(
+      MapLibreMapController controller, String id, MapLayer group) async {
+    if (!_tapAllowedForGroup(group)) return;
+    await selectLocation(controller, id);
+  }
 
   String? _extractPolygonIdFromTap(String key) {
     var keyMap = GeoJsonUtils.extractKeyValueMap(key);
@@ -4393,13 +4909,21 @@ class MaplibreMapProvider extends BaseMapProvider {
     return inside;
   }
 
-  GeoJsonPolygon? _hitTestPolygons(double lat, double lng) {
-    final hits = _polygons.where((p) =>
-    !p.id.toLowerCase().contains("boundary") &&
-        !p.properties?['type'].toLowerCase().contains("boundary") &&
-        !p.properties?['type'].toLowerCase().contains("section") &&
-        _pointInPolygon(lat, lng, p.points),
-    ).toList();
+  /// Ray-casts the in-memory polygons, which is independent of what is actually
+  /// rendered — so [allow] is how a policy keeps hidden or untappable polygons
+  /// from being "tapped".
+  GeoJsonPolygon? _hitTestPolygons(double lat, double lng,
+      {bool Function(GeoJsonPolygon)? allow}) {
+    final hits = _polygons.where((p) {
+      // `properties` or `type` being absent used to throw NoSuchMethodError
+      // here, which the caller's catch swallowed — silently killing the whole
+      // polygon tap path for that tap.
+      final type = p.properties?['type']?.toString().toLowerCase() ?? '';
+      if (p.id.toLowerCase().contains("boundary")) return false;
+      if (type.contains("boundary") || type.contains("section")) return false;
+      if (allow != null && !allow(p)) return false;
+      return _pointInPolygon(lat, lng, p.points);
+    }).toList();
 
     if (hits.isEmpty) return null;
 
@@ -4510,35 +5034,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         _updatePolygonSource(controller, selectPolygonId: polygon.id);
       }
       if (marker != null) {
-        // Clear any leftover frozen animation from the previous selection
-        // BEFORE handling this new one. Needed because the animated layer
-        // now freezes in place instead of resetting itself — if this new
-        // marker has no icon, animateMarkerSelection never runs to
-        // overwrite it, so without this it would just sit there forever.
-        if (_animatingMarkerId != null && _animatingMarkerId != marker.id) {
-          _iconAnimationTimer?.cancel();
-          _markerIconScale.remove(_animatingMarkerId);
-          _markerIconShakeDeg.remove(_animatingMarkerId);
-          _animatingMarkerId = null;
-          await controller.setGeoJsonSource(_animatedMarkerSourceId, {
-            'type': 'FeatureCollection',
-            'features': [],
-          });
-        }
-
         setGeoJsonSource(
           controller,
           _symbols,
           _clusterSourceId,
           selectedMarkerId: marker.id,
         );
-      }
-
-      if (marker != null &&
-          marker.assetPath != null &&
-          markerSelectionAnimationStyle != MarkerSelectionAnimationStyle.none) {
-        animateMarkerSelection(controller, marker.id,
-            style: markerSelectionAnimationStyle);
       }
 
       // 2. Notify listeners before the camera moves so panels open on tap
@@ -4653,19 +5154,6 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     try {
       await _updatePolygonSource(controller, selectPolygonId: null);
-
-      // Undo whatever the animation left behind before the normal layers
-      // take back over showing this marker at rest.
-      _iconAnimationTimer?.cancel();
-      if (_animatingMarkerId != null) {
-        _markerIconScale.remove(_animatingMarkerId);
-        _markerIconShakeDeg.remove(_animatingMarkerId);
-        _animatingMarkerId = null;
-      }
-      await controller.setGeoJsonSource(_animatedMarkerSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
 
       await setGeoJsonSource(
         controller,
@@ -4787,10 +5275,12 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> addMapFade(controller) async {
     await controller.setLayerProperties(
       _patchAbovePolygonLayerId,
-      FillLayerProperties(
-        fillOpacity: 0.5,
+      _layerProps(_patchAbovePolygonLayerId, (op) => FillLayerProperties(
+        visibility: _visibility(_patchAbovePolygonLayerId),
+        fillOpacity: op(0.5),
         fillColor: "#FFFFFF",
-      ),
+        fillOutlineColor: ["get", "strokeColor"],
+      )),
     );
   }
 
@@ -4806,14 +5296,14 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   void dispose() {
     _markerSourcesReady = false;
-    _stopPathShineAnimation();
     _isCircleLayersEnabled = false;
     _compassSub?.cancel();
     _compassSub = null;
+    _compassThrottleTimer?.cancel();
+    _compassThrottleTimer = null;
+    _pendingCompassHeading = null;
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
-    _iconAnimationTimer?.cancel();
-    _iconAnimationTimer = null;
   }
 
   static const String osmRasterStyle = '''

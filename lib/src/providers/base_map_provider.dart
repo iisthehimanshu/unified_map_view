@@ -6,6 +6,8 @@ import '../models/CameraBound.dart';
 import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
+import '../utils/LandmarkAssetType.dart';
+import '../models/marker_type_info.dart';
 
 /// Abstract base class for all map providers
 /// Implement this class to add a new map provider
@@ -34,6 +36,18 @@ abstract class BaseMapProvider {
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
 
+  /// Completes once the venue geometry is actually drawn — polygons pushed and
+  /// the patch fade applied.
+  ///
+  /// Deferred marker work awaits this so icon baking does not compete for the
+  /// single web thread while the polygons are still painting. Polygons take
+  /// ~850ms; markers take seconds, so letting them overlap makes the venue
+  /// appear late for no benefit.
+  ///
+  /// Defaults to already-complete, so providers that do not model a venue
+  /// render (and any future provider) behave exactly as before.
+  Future<void> get venueRendered => Future<void>.value();
+
   Future<void> addMarkers(dynamic controller, List<GeoJsonMarker> markers);
 
   Future<void> localizeUser(dynamic controller, GeoJsonMarker marker);
@@ -56,6 +70,36 @@ abstract class BaseMapProvider {
   /// Turn the temporary overlap override OFF for every marker it was set on.
   Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {}
 
+  /// Draw only the markers whose landmark type CONTAINS one of [types].
+  ///
+  /// Pass null to clear the filter and draw every marker again. Source and
+  /// destination pins (`marker.priority`) are always drawn, filter or not —
+  /// hiding a navigation endpoint would break wayfinding.
+  ///
+  /// Providers without support inherit a no-op.
+  Future<void> setMarkerTypeFilter(
+      dynamic controller, Set<String>? types) async {}
+
+  /// Every landmark type present in the loaded venue, with counts, so a host can
+  /// build its type UI from the data instead of a hardcoded list.
+  ///
+  /// Providers without support inherit an empty list.
+  List<MarkerTypeInfo> availableMarkerTypes() => const [];
+
+  /// Draw the map desaturated, or back in full colour.
+  ///
+  /// Providers without support inherit a no-op.
+  Future<void> setGreyscale(dynamic controller, bool enabled) async {}
+
+  /// Apply a per-group visibility / opacity / tappability policy.
+  ///
+  /// [policy] is absolute, not a delta — it fully describes the desired state,
+  /// and groups it does not mention return to their defaults.
+  ///
+  /// Providers without layer-level control inherit this no-op, so only the
+  /// MapLibre provider implements it.
+  Future<void> setLayerPolicy(
+      dynamic controller, MapLayerPolicy policy) async {}
   /// Rotate the compass-driven markers (the user puck) from [heading] instead
   /// of the device compass; null hands them back to the live sensor.
   ///

@@ -15,7 +15,7 @@ void main() async {
   MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
   MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
   MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
-  await UnifiedMapViewPackage.initialize(venueName: 'NationalZoologicalPark');
+  await UnifiedMapViewPackage.initialize(venueName: 'AIGHospital');
   runApp(const GeoJsonExampleApp());
 }
 
@@ -41,8 +41,22 @@ class GeoJsonMapScreen extends StatefulWidget {
 
 class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   late UnifiedMapController _unifiedMapController;
-  late MaplibreMapProvider _maplibreProvider;
   bool _isLoading = false;
+
+  // ── layer-policy test harness ──────────────────────────────────────────────
+  String _lastTap = 'no tap yet';
+  int _tapCount = 0;
+  String _activePreset = 'all';
+  double _subSectionOpacity = 1.0;
+  bool _subSectionOverridden = false;
+  double _polygonOpacity = 1.0;
+  bool _polygonOverridden = false;
+
+  /// Mirrors controller.mapFadeOnPath so the switch shows the effective value,
+  /// including the theme default before the host overrides it.
+  bool _fadeOnPath = false;
+
+  bool _greyscale = false;
 
   Timer? _moveUserTimer;
 
@@ -60,22 +74,78 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
   int _currentRouteIndex = 0;
 
+  /// Raw marker types currently allowed through; empty means "no filter".
+  final Set<String> _markerTypes = {};
+
+  /// What this venue actually contains. Populated from the map once markers
+  /// have loaded — deliberately NOT a hardcoded list, because the vocabulary is
+  /// per-venue (this one has Male/Female Washroom and no generic Washroom at
+  /// all, and no lifts whatsoever).
+  List<MarkerTypeInfo> _availableTypes = const [];
+
+  Future<void> _refreshAvailableTypes() async {
+    final types = _unifiedMapController.availableMarkerTypes;
+    setState(() => _availableTypes = types);
+    print('HARNESS available types -> '
+        '${types.map((t) => "${t.rawType}(${t.count})").join(", ")}');
+  }
+
+  Future<void> _toggleMarkerType(String rawType) async {
+    setState(() {
+      if (!_markerTypes.remove(rawType)) _markerTypes.add(rawType);
+    });
+    await _unifiedMapController
+        .showMarkerTypes(_markerTypes.isEmpty ? null : _markerTypes);
+    print('HARNESS marker types -> '
+        '${_markerTypes.isEmpty ? "ALL" : _markerTypes.join(",")}');
+  }
+
+  Widget _typeChip(MarkerTypeInfo info) {
+    final on = _markerTypes.contains(info.rawType);
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: FilterChip(
+        label: Text('${info.rawType} (${info.count})',
+            style: const TextStyle(fontSize: 11)),
+        selected: on,
+        onSelected: (_) => _toggleMarkerType(info.rawType),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
-    _maplibreProvider = MaplibreMapProvider();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'IITDelhi',
+        venueName: 'AIGHospital',
         initialLocation: UnifiedCameraPosition(
-            mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
-            zoom: 3.0,
-            bearing: 0.0,
-            tilt: 0.0
+          mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
+          zoom: 3.0,
+          bearing: 0.0,
+          tilt: 0.0
         ),
-        url: "https://dev.iwayplus.in",
-        languageCode: "hi",
-        providers: {MapProvider.mapLibre: _maplibreProvider,
+      onPolygon: ({required String polygonId,
+          required List<MapLocation> coordinates}) {
+        setState(() {
+          _tapCount++;
+          _lastTap = 'POLYGON #$_tapCount  $polygonId';
+        });
+        print('HARNESS onPolygonTap -> $polygonId');
+      },
+      onMarker: ({required String markerId,
+          required MapLocation coordinates}) {
+        setState(() {
+          _tapCount++;
+          _lastTap = 'MARKER #$_tapCount  $markerId';
+        });
+        print('HARNESS onMarkerTap -> $markerId');
+      },
+      url: "https://dev.iwayplus.in",
+      languageCode: "hi",
+        providers: {MapProvider.mapLibre: MaplibreMapProvider(),
           MapProvider.mappls: MapplsMapProvider()}
     );
     
@@ -84,6 +154,33 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     // Future.delayed(const Duration(seconds: 6), () {
     //   _addTestMarker();
     // });
+  }
+
+  Future<void> _applyPreset(String name, MapLayerPolicy policy) async {
+    await _unifiedMapController.setLayers(policy);
+    // Re-apply any active opacity override on top of the preset.
+    if (_polygonOverridden) {
+      await _unifiedMapController
+          .setLayer(MapLayer.polygons, opacity: _polygonOpacity);
+    }
+    if (_subSectionOverridden) {
+      await _unifiedMapController
+          .setLayer(MapLayer.subSections, opacity: _subSectionOpacity);
+    }
+    setState(() => _activePreset = name);
+    print('HARNESS preset -> $name  policy=${_unifiedMapController.layerPolicy}');
+  }
+
+  Widget _presetChip(String name, MapLayerPolicy policy) {
+    final active = _activePreset == name;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: ChoiceChip(
+        label: Text(name, style: const TextStyle(fontSize: 11)),
+        selected: active,
+        onSelected: (_) => _applyPreset(name, policy),
+      ),
+    );
   }
 
   Future<void> _addTestMarker() async {
@@ -194,7 +291,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     {"node": 3780534, "x": 115, "y": 92, "lat": 28.716429974372552, "lng": 77.11098567502565, "ttsEnabled": false, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": false, "isFloorConnection": false, "connectorType": null, "color": null},
     {"node": 3036008, "x": 113, "y": 104, "lat": 28.716406312087642 ,"lng": 77.11101218917014, "ttsEnabled": true, "bid": "65d88662db333f894570bad3", "floor": 0, "numCols": 3648, "imaginedCell": false, "imaginedIndex": null, "masterGraph": true, "position": null, "isSource": false, "isDestination": true, "isFloorConnection": false, "connectorType": null, "color": null, "destinationLat":28.716406312087642, "destinationLng": 77.11101218917014, "name":"Destination"}
   ];
-
 
   @override
   Widget build(BuildContext context) {
@@ -326,6 +422,155 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               ],
             ),
           ),
+          // ── layer-policy test harness ──────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: Colors.amber.shade50,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    const Text('grey: ',
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.bold)),
+                    Switch(
+                      value: _greyscale,
+                      onChanged: (v) {
+                        setState(() => _greyscale = v);
+                        _unifiedMapController.setGreyscale(v);
+                        print('HARNESS greyscale -> $v');
+                      },
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    const SizedBox(width: 12),
+                    TextButton(
+                      onPressed: () => _unifiedMapController.setMapFade(true),
+                      child: const Text('fade now',
+                          style: TextStyle(fontSize: 11)),
+                    ),
+                    TextButton(
+                      onPressed: () => _unifiedMapController.setMapFade(false),
+                      child: const Text('unfade',
+                          style: TextStyle(fontSize: 11)),
+                    ),
+                    const SizedBox(width: 12),
+                    const Text('types: ',
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.bold)),
+                    if (_availableTypes.isEmpty)
+                      TextButton(
+                        onPressed: _refreshAvailableTypes,
+                        child: const Text('load types',
+                            style: TextStyle(fontSize: 11)),
+                      ),
+                    ..._availableTypes.map(_typeChip),
+                    // Exercises the BROAD path: a compile-time constant that
+                    // no venue spells exactly, matched by substring. Here it
+                    // should catch Male/Female/Accessible Washroom together.
+                    TextButton(
+                      onPressed: () async {
+                        setState(() {
+                          _markerTypes
+                            ..clear()
+                            ..add(MarkerTypes.washroom);
+                        });
+                        await _unifiedMapController
+                            .showMarkerTypes({MarkerTypes.washroom});
+                        print('HARNESS marker types -> '
+                            'MarkerTypes.washroom (broad)');
+                      },
+                      child: const Text('const: washroom',
+                          style: TextStyle(fontSize: 11)),
+                    ),
+                    if (_availableTypes.isNotEmpty)
+                      TextButton(
+                        onPressed: () async {
+                          setState(_markerTypes.clear);
+                          await _unifiedMapController.clearMarkerTypeFilter();
+                          print('HARNESS marker types -> ALL');
+                        },
+                        child: const Text('all types',
+                            style: TextStyle(fontSize: 11)),
+                      ),
+                  ]),
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(children: [
+                    _presetChip('all', MapLayerPolicy.all),
+                    _presetChip('polygonsOnly', MapLayerPolicy.polygonsOnly),
+                    _presetChip(
+                        'polygonsOnlyNoTap', MapLayerPolicy.polygonsOnlyNoTap),
+                    // Control for the tap gate: pixel-identical to `all`, but
+                    // every group inert. Isolates tappability from visibility.
+                    _presetChip(
+                        'allNoTap',
+                        const MapLayerPolicy({
+                          MapLayer.markers: MapLayerState.untappable,
+                          MapLayer.polygons: MapLayerState.untappable,
+                          MapLayer.selection: MapLayerState.untappable,
+                          MapLayer.userLocation: MapLayerState.untappable,
+                          MapLayer.route: MapLayerState.untappable,
+                        })),
+                  ]),
+                ),
+                Row(children: [
+                  const Text('polygons opacity  ',
+                      style: TextStyle(fontSize: 11)),
+                  Expanded(
+                    child: Slider(
+                      value: _polygonOpacity,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 10,
+                      label: _polygonOpacity.toStringAsFixed(1),
+                      onChanged: (v) {
+                        setState(() {
+                          _polygonOpacity = v;
+                          _polygonOverridden = true;
+                        });
+                        _unifiedMapController.setLayer(MapLayer.polygons,
+                            opacity: v);
+                      },
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _polygonOpacity = 1.0;
+                        _polygonOverridden = false;
+                      });
+                      _unifiedMapController.setLayer(MapLayer.polygons,
+                          clearOpacity: true);
+                    },
+                    child: const Text('clear', style: TextStyle(fontSize: 11)),
+                  ),
+                ]),
+                Row(children: [
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _subSectionOpacity = 1.0;
+                        _subSectionOverridden = false;
+                      });
+                      _unifiedMapController.setLayer(MapLayer.subSections,
+                          clearOpacity: true);
+                    },
+                    child: const Text('clear', style: TextStyle(fontSize: 11)),
+                  ),
+                ]),
+                Text('tap: $_lastTap',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: _tapCount == 0
+                            ? Colors.grey
+                            : Colors.green.shade800)),
+              ],
+            ),
+          ),
 
           // Map
           Expanded(
@@ -333,14 +578,14 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               children: [
                 UnifiedMapWidget(controller: _unifiedMapController),
                 Positioned(bottom: 150,
-                  right: 16,
-                  child: Column(
-                    children: [
-                      FloorSpeedDial(controller: _unifiedMapController),
-                      SizedBox(height: 12,),
-                      ExtrusionToggleButton(controller: _unifiedMapController)
-                    ],
-                  ),),
+                right: 16,
+                child: Column(
+                  children: [
+                    FloorSpeedDial(controller: _unifiedMapController),
+                    SizedBox(height: 12,),
+                    ExtrusionToggleButton(controller: _unifiedMapController)
+                  ],
+                ),)
               ],
             ),
           ),

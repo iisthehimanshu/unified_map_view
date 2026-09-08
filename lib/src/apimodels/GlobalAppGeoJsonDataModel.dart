@@ -2,6 +2,8 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 class GlobalAppGeoJsonDataModel {
   String? message;
   List<GlobalAppGeoData>? data;
@@ -84,10 +86,20 @@ class GlobalAppGeoData {
   GlobalAppGeoData({this.properties, this.sId, this.id, this.buildingID, this.geometry, this.associatedPolygons, this.associatedPoints, this.type, this.createdBy, this.updatedBy, this.iV});
 
   GlobalAppGeoData.fromJson(Map<dynamic, dynamic> json) {
+    // DO NOT "optimise" this into a shallow `Map<String, dynamic>.from(...)`.
+    // Tried 2026-08-12 and it blanks the map on web with no logged error.
+    // Besides deep-copying, the JSON round trip *recursively re-types* the
+    // `Map<dynamic, dynamic>` that Hive hands back into `Map<String, dynamic>`;
+    // a shallow copy converts only the top level, so nested values stay
+    // `Map<dynamic, dynamic>` and a downstream `as Map<String, dynamic>` throws
+    // somewhere that swallows it. It is also not worth the risk: measured on the
+    // ApolloHospital payload, decoding the whole 2797KB response takes ~74ms, so
+    // the parse path is not where load time actually goes.
     if(json['properties'] != null){
       properties = Map<String, dynamic>.from(jsonDecode(jsonEncode(json['properties'])));
     }else{
-      print("json['properties'] is null");
+      // Fires once per property-less feature; on web that is a per-feature print.
+      if (!kIsWeb) print("json['properties'] is null");
     }
     sId = json['_id'];
     id = json['id'];

@@ -15,6 +15,26 @@ class MapConfig {
 
   final void Function(UnifiedCameraPosition position)? hostOnCameraMove;
 
+  /// Fired once the venue has actually been drawn — polygons pushed and the
+  /// patch's fade opacity applied — not merely when the style or the controller
+  /// is ready.
+  ///
+  /// Exists because "the map is ready" and "the venue is on screen" are far
+  /// apart here: on web the style loads and the camera settles seconds before
+  /// the venue appears (measured: camera quiet at ~14.8s, venue drawn at
+  /// ~23.2s). Anything that wants to move the camera to a specific place at
+  /// startup has to wait for THIS, or it aims at a map that has not drawn yet
+  /// and lands on empty tiles.
+  ///
+  /// Fires once per venue render pass; hosts should make their handler
+  /// idempotent.
+  final void Function()? onVenueRendered;
+
+  /// Per-group visibility / opacity / tappability applied as the map's layers
+  /// are first created, so the map never briefly shows content the host asked
+  /// to hide. Change it after load with `UnifiedMapController.setLayers`.
+  final MapLayerPolicy initialLayerPolicy;
+
   final void Function({required MapLocation coordinates, required String markerId})? onMarkerTap;
   final void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap;
   final void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap;
@@ -30,11 +50,12 @@ class MapConfig {
     this.rotateGesturesEnabled = true,
     this.scrollGesturesEnabled = true,
     this.tiltGesturesEnabled = true,
+    this.onVenueRendered,
     this.onMarkerTap,
     this.onPolygonTap,
     this.onPolylineTap,
-    this.immersive = true
-
+    this.immersive = true,
+    this.initialLayerPolicy = MapLayerPolicy.all,
   });
 
   MapConfig copyWith({
@@ -50,9 +71,11 @@ class MapConfig {
     bool? scrollGesturesEnabled,
     bool? tiltGesturesEnabled,
     bool? immersive,
+   void Function()? onVenueRendered,
    void Function({required MapLocation coordinates, required String markerId})? onMarkerTap,
    void Function({required List<MapLocation> coordinates, required String polygonId})? onPolygonTap,
-   void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap
+   void Function({required List<MapLocation> coordinates, required String polylineId})? onPolylineTap,
+   MapLayerPolicy? initialLayerPolicy,
   }) {
     return MapConfig(
       onMapCreated: onMapCreated ?? this.onMapCreated,
@@ -64,10 +87,12 @@ class MapConfig {
       rotateGesturesEnabled: rotateGesturesEnabled ?? this.rotateGesturesEnabled,
       scrollGesturesEnabled: scrollGesturesEnabled ?? this.scrollGesturesEnabled,
       tiltGesturesEnabled: tiltGesturesEnabled ?? this.tiltGesturesEnabled,
+      onVenueRendered: onVenueRendered ?? this.onVenueRendered,
       onMarkerTap: onMarkerTap ?? this.onMarkerTap,
       onPolygonTap: onPolygonTap ?? this.onPolygonTap,
       onPolylineTap: onPolylineTap ?? this.onPolylineTap, onStyleLoadedCallback:onStyleLoadedCallback??this.onStyleLoadedCallback,
-        immersive:immersive??this.immersive
+        immersive:immersive??this.immersive,
+      initialLayerPolicy: initialLayerPolicy ?? this.initialLayerPolicy,
     );
   }
 }
