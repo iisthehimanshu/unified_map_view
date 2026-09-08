@@ -1,8 +1,11 @@
 // lib/src/controllers/unified_map_controller.dart
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show EdgeInsets;
 import 'package:unified_map_view/src/enums/Theme.dart';
+import 'package:unified_map_view/src/utils/perf_trace.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
@@ -41,6 +44,11 @@ class UnifiedMapController extends ChangeNotifier {
 
     this.onReadyLandmarkSelectionID,
 
+    /// Fired when the venue is actually drawn (see [MapConfig.onVenueRendered]).
+    /// Hosts that need to move the camera at startup must wait for this rather
+    /// than onMapCreated/onStyleLoaded, which fire seconds earlier.
+    void Function()? onVenueRendered,
+
     String? url,
 
     String languageCode = 'en'
@@ -62,7 +70,8 @@ class UnifiedMapController extends ChangeNotifier {
       onCameraMove: onCameraMove,
       onMarkerTap: onMarker??onMarkerTap,
       onPolygonTap: onPolygon??onPolygonTap,
-      onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback
+      onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback,
+      onVenueRendered: onVenueRendered,
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
@@ -168,7 +177,9 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Animate camera to a specific location
   Future<void> animateCamera(MapLocation location, {double? zoom, double? bearing, double? tilt, Duration? duration}) async {
-    print("animateCamera ${StackTrace.current}");
+    // StackTrace.current is expensive to capture and format under dart2js, and
+    // this sits on a hot path. Native keeps the trace.
+    if (!kIsWeb) print("animateCamera ${StackTrace.current}");
     if (_currentMapController == null) return;
     await currentProviderImplementation.animateCamera(
       _currentMapController,
@@ -309,7 +320,8 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Add GeoJSON feature collection to map
   Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
-    print("addGeoJsonFeatures ${StackTrace.current}");
+    // See note on animateCamera above — dart2js stack capture on a hot path.
+    if (!kIsWeb) print("addGeoJsonFeatures ${StackTrace.current}");
     // Add polygons
     //
     // Grouped into boundary/other/section/subSection purely to control the
@@ -324,19 +336,22 @@ class UnifiedMapController extends ChangeNotifier {
     final sectionPolygons = polygons.where((p) => p.properties?["type"] == "Section").toList();
     final subSection = polygons.where((p) => p.properties?["type"] == "SubSection").toList();
     final boundaryPolygons = polygons.where((p) => p.properties?["type"] == "Boundary").toList();
-    final otherPolygons = polygons.where((p) =>
-        !sectionPolygons.contains(p) &&
-        !subSection.contains(p) &&
-        !boundaryPolygons.contains(p)).toList();
-    await addPolygons([
-      ...boundaryPolygons,
-      ...otherPolygons,
-      ...sectionPolygons,
-      ...subSection,
-    ]);
+    final otherPolygons = polygons.where((p) => !sectionPolygons.contains(p) && !boundaryPolygons.contains(p)).toList();
+    // Each addPolygons call re-serialises the ENTIRE accumulated polygon set,
+    // so these four rebuild the whole source four times. Collapsing them is
+    // Phase 3 of the perf plan; measuring them first.
+    await PerfTrace.timeAsync('addPolygons boundary (${boundaryPolygons.length})',
+        () => addPolygons(boundaryPolygons));
+    await PerfTrace.timeAsync('addPolygons other (${otherPolygons.length})',
+        () => addPolygons(otherPolygons));
+    await PerfTrace.timeAsync('addPolygons section (${sectionPolygons.length})',
+        () => addPolygons(sectionPolygons));
+    await PerfTrace.timeAsync('addPolygons subSection (${subSection.length})',
+        () => addPolygons(subSection));
 
     final polylines = GeoJsonLoader.extractPolylines(collection);
-    await addPolylines(polylines);
+    await PerfTrace.timeAsync('addPolylines (${polylines.length})',
+        () => addPolylines(polylines));
 
     // Same reasoning as polygons above: addMarkers pushes the whole
     // accumulated marker set on every call, so these groups (kept for
@@ -379,8 +394,80 @@ class UnifiedMapController extends ChangeNotifier {
       });
     }
     if (furnitureItems.isNotEmpty) {
-      await addFurniture(furnitureItems);
+      await PerfTrace.timeAsync('addFurniture (${furnitureItems.length})',
+          () => addFurniture(furnitureItems));
     }
+
+    // ---- Markers last, and detached ----
+    //
+    // Everything above (polygons, polylines, furniture) is what makes the venue
+    // appear. Marker icon baking is CPU-bound and by far the most expensive
+    // part of the load — measured on device at NationalZoologicalPark: skipping
+    // markers entirely took time-to-venue from 25.7s to 11.4s. Awaiting them
+    // here meant the user stared at a grey basemap for the whole bake even
+    // though the venue itself was ready.
+    //
+    // Detached (not awaited), so addGeoJsonFeatures completes — and the venue
+    // paints — as soon as the geometry is in. Markers then stream onto the map
+    // as their icons finish. notifyListeners() below fires on the geometry, not
+    // on the markers, which is the point.
+    //
+    // Ordering within the marker work is preserved: url-backed icons start
+    // first (they have network latency to hide), then local ones.
+    unawaited(() async {
+      try {
+        // Wait for the polygons to actually be on screen before starting any
+        // icon baking. Web is single-threaded: starting the bake immediately
+        // (even detached) means it competes with the polygon paint, which is
+        // why time-to-venue sat at 14.3s against an 11.4s markers-off floor.
+        // Polygons take ~850ms and markers take seconds — there is nothing to
+        // gain from overlapping them, and the venue appearing sooner is what
+        // the user actually perceives as "fast".
+        //
+        // Timed out rather than awaited unconditionally: if the venue-rendered
+        // signal never arrives (a venue with no polygons at all, say), markers
+        // must still render rather than be lost.
+        await PerfTrace.timeAsync(
+            'deferred markers: waiting for venue render',
+            () => currentProviderImplementation.venueRendered
+                .timeout(const Duration(seconds: 20), onTimeout: () {
+              print('deferred markers: venue-render signal never came, '
+                  'starting markers anyway');
+            }));
+
+        final urlMarkers = markers
+            .where((m) => m.assetPath != null && m.assetPath!.contains("http"))
+            .toList();
+        final localMarkers =
+            markers.where((m) => !urlMarkers.contains(m)).toList();
+        final sectionMarkers = localMarkers
+            .where((m) => m.properties?["type"] == "Section")
+            .toList();
+        final subSectionMarkers = localMarkers
+            .where((m) => m.properties?["type"] == "SubSection")
+            .toList();
+        final normalMarker = localMarkers
+            .where((m) =>
+                !sectionMarkers.contains(m) && !subSectionMarkers.contains(m))
+            .toList();
+
+        await PerfTrace.timeAsync('deferred addMarkers url (${urlMarkers.length})',
+            () => addMarkers(urlMarkers));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers normal (${normalMarker.length})',
+            () => addMarkers(normalMarker));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers section (${sectionMarkers.length})',
+            () => addMarkers(sectionMarkers));
+        await PerfTrace.timeAsync(
+            'deferred addMarkers subSection (${subSectionMarkers.length})',
+            () => addMarkers(subSectionMarkers));
+        notifyListeners();
+      } catch (e) {
+        // Detached, so an escape here would be an unhandled async error.
+        print('deferred marker rendering failed: $e');
+      }
+    }());
 
     notifyListeners();
   }
@@ -711,6 +798,49 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> moveUser(MapLocation location, int floor, {Duration duration = const Duration(milliseconds: 300), bool compensateForDistance = false}) async {
     await _annotationController.moveUser(location, floor, duration: duration, compensateForDistance: compensateForDistance);
     notifyListeners();
+  }
+
+  /// Current appearance override for the user puck, or null for the default.
+  UserMarkerStyle? get userMarkerStyle => _userMarkerStyle;
+  UserMarkerStyle? _userMarkerStyle;
+
+  /// Swaps the user puck's artwork at runtime; pass null to restore the
+  /// default blue arrow.
+  ///
+  /// Intended for hosts that need a visually distinct puck for a position that
+  /// is not a live fix — a simulated or replayed walk, say. The style is held
+  /// on the controller (not globally), so it dies with the map rather than
+  /// leaking into the next one, and it is re-read every time the puck is
+  /// rebuilt, so it survives floor changes.
+  ///
+  /// Awaits the redraw, so once this returns the new artwork is on screen.
+  Future<void> setUserMarkerStyle(UserMarkerStyle? style) async {
+    if (_userMarkerStyle == style) return;
+    _userMarkerStyle = style;
+    await _annotationController.refreshUserMarker();
+    notifyListeners();
+  }
+
+  /// Heading currently driving the user puck's rotation, or null when the
+  /// device compass is.
+  double? get userHeadingOverride => _userHeadingOverride;
+  double? _userHeadingOverride;
+
+  /// Points the user puck at [heading] (degrees from north) instead of the
+  /// device compass; pass null to hand rotation back to the sensor.
+  ///
+  /// Intended for a position that is not a live fix — a simulated or replayed
+  /// walk, where the puck should show the heading that was *recorded* rather
+  /// than the phone the simulation is running on. The map keeps its own
+  /// compass subscription, so without this the glyph spins with the device no
+  /// matter what the host writes into its own user state.
+  ///
+  /// Held on the controller (not globally), so it dies with the map.
+  Future<void> setUserHeadingOverride(double? heading) async {
+    _userHeadingOverride = heading;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setHeadingOverride(
+        _currentMapController, heading);
   }
 
   @override

@@ -90,7 +90,9 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
         ),
         backgroundColor: isSelected ? Colors.blue : Colors.white,
         onTap: () {
-          controller.changeAllBuildingsFloor(floor: floor);
+          final bid = controller.focusedBuilding;
+          if (bid == null) return;
+          controller.changeBuildingFloor(buildingID: bid, floor: floor);
         },
       );
     }).toList();

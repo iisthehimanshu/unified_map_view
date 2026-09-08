@@ -73,7 +73,9 @@ class BuildingByVenue {
 
     if (response.statusCode == 200) {
       final responseBody = json.decode(response.body);
-      print("UNIFIED MAP BUILDINGBYVENUE DATA FROM API $responseBody");
+      // Stringifies the whole decoded payload on the main thread; `print` is not
+      // stripped from Flutter web release builds. Native keeps the original log.
+      if (!kIsWeb) print("UNIFIED MAP BUILDINGBYVENUE DATA FROM API $responseBody");
       final model = BuildingByVenueAPIModel(responseBody: responseBody);
       box.put(id, model);
       await model.save();

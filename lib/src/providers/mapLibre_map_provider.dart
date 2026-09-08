@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:unified_map_view/src/utils/perf_trace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -25,6 +26,35 @@ import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 import 'package:http/http.dart' as http;
+
+/// Everything a custom-rendering marker needs registered with the map style,
+/// kept so a style reload — which wipes every addImage() call — can re-upload
+/// without re-fetching the source photo or re-entering the bake path.
+class _BakedMarkerIcon {
+  /// Full composite, with the label baked in. Registered under the marker id.
+  final Uint8List main;
+
+  /// Image id the zoomed-out (label-less) variant is registered under. Shared
+  /// between every marker whose photo and pill geometry match; equal to the
+  /// marker id when the label is hidden, since both bakes are then identical.
+  final String smallIconId;
+
+  /// Bytes for [smallIconId]. Null when it aliases [main].
+  final Uint8List? small;
+
+  /// Museum POI highlight variant, registered under '<id>-selected'.
+  final Uint8List? selected;
+
+  final Offset anchor;
+
+  const _BakedMarkerIcon({
+    required this.main,
+    required this.smallIconId,
+    required this.anchor,
+    this.small,
+    this.selected,
+  });
+}
 
 /// MapLibre GL implementation of BaseMapProvider
 /// Supports MapLibre — an open-source vector map rendering engine
@@ -211,7 +241,19 @@ class MaplibreMapProvider extends BaseMapProvider {
   // ---------------------------------------------------------------------------
 
   @override
+  /// Captured from [buildMap]'s config, because `config` is a parameter there
+  /// rather than a field and [_refreshPatchAboveOpacity] — which is where the
+  /// venue actually finishes drawing — cannot reach it.
+  void Function()? _onVenueRenderedCb;
+
+  final Completer<void> _venueRenderedCompleter = Completer<void>();
+
+  /// Completes when the venue geometry is drawn. See [BaseMapProvider.venueRendered].
+  @override
+  Future<void> get venueRendered => _venueRenderedCompleter.future;
+
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
+    _onVenueRenderedCb = config.onVenueRendered;
     // The plugin's actual default (despite its doc comment claiming
     // otherwise) is Virtual Display, not Hybrid Composition — see
     // maplibre_gl_platform_interface's MapLibreMethodChannel.useHybridComposition,
@@ -317,7 +359,14 @@ class MaplibreMapProvider extends BaseMapProvider {
       },
       onStyleLoadedCallback: () async {
         if (_controller != null) {
-          await config.onStyleLoadedCallback(_controller);
+          // Host-supplied; a throw here would skip the entire layer rebuild
+          // below and leave the map permanently blank. Same reasoning as
+          // the try around the icon rebake.
+          try {
+            await config.onStyleLoadedCallback(_controller);
+          } catch (e) {
+            print('style-loaded: host onStyleLoadedCallback threw: $e');
+          }
           // Style reload wipes ALL sources, layers, and addImage() calls —
           // reset flags so enableXxxLayers() re-creates everything cleanly.
           _isClusteringEnabled = false;
@@ -331,6 +380,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           _registeredCornerArrowAngles.clear();
           // Registered path arrow is wiped too.
           await _loadPathArrowImage(_controller!);
+          // Same for the shared label-less icons. The baked bytes in
+          // _bakedIconCache stay valid — only the addImage() registration
+          // is gone — so the rebake pass below is upload-only.
+          _registeredSmallIconIds.clear();
           // Registered animal icons are wiped too (the composited bytes in
           // _animalIconCache are still valid and get reused, only the
           // addImage() registration needs to happen again).
@@ -338,17 +391,104 @@ class MaplibreMapProvider extends BaseMapProvider {
           // Same reset for regular/customRendering marker icons — the loop
           // below re-registers every current marker's icon from scratch.
           _registeredMarkerIconIds.clear();
+          // Re-arm the deferred labelled bake: its addImage() calls are
+          // gone with the style, so the next camera idle at label zoom has
+          // to re-register them. The bytes survive in _animalIconCache, so
+          // that pass is upload-only.
+          _labelledAnimalsStarted = false;
           _isCircleLayersEnabled = false;
           _isFurnitureLayerEnabled = false;
           _isFurnitureExtrusionAdded = false;
 
           // Re-register all marker icons — style reload wipes addImage() calls
-          for (final marker in [..._symbols, ..._rotatingSymbols]) {
-            try {
-              await _loadMarkerIcon(_controller!, marker);
-            } catch (e) {
-              print('Warning: failed to reload icon for ${marker.id}: $e');
+          //
+          // Animal markers are split out and rebaked through
+          // _batchLoadAnimalIcons below. _loadMarkerIcon is the *generic*
+          // path: it re-registers an image under the marker's own id but
+          // never repopulates _loadedAnimalIcons, which is the set
+          // _animalDisplayIconId consults to decide between the real
+          // composite and the paw placeholder. Since the reset above
+          // clears that set and _batchLoadAnimalIcons only otherwise runs
+          // from addMarkers (which does not re-run after a style reload),
+          // sending animals through the generic path left every one of
+          // them pinned to its paw placeholder for good, at every zoom.
+          final allIconMarkers = [..._symbols, ..._rotatingSymbols];
+          final animalIconMarkers =
+              allIconMarkers.where(_isAnimalMarker).toList();
+          final iconMarkers =
+              allIconMarkers.where((m) => !_isAnimalMarker(m)).toList();
+          // The enable*Layers calls below MUST run. Every layer flag was
+          // reset to false at the top of this callback, so if anything in
+          // the icon rebake throws and we bail out here, those flags stay
+          // false for the lifetime of the map — and setGeoJsonSource,
+          // _updatePolygonSource and _updatePolylineSource all silently
+          // early-return on a false flag. The result is a permanent grey
+          // basemap with no venue and no error anywhere: the exact symptom
+          // seen on web on 2026-08-27. A missing icon is cosmetic; a
+          // missing layer is fatal. So the bake is best-effort and the
+          // enables are unconditional.
+          try {
+          await PerfTrace.timeAsync(
+              'style-loaded: rebake of ${iconMarkers.length} icons', () async {
+            if (kIsWeb) {
+              // Fanned out instead of a sequential `for ... await`. This
+              // pass runs *after* the basemap paints, so serially baking
+              // ~190 icons was the bulk of "base map instant, then elements
+              // trickle in for ~12s". The wall-clock total barely moves
+              // (single-threaded, CPU-bound), but the work interleaves and
+              // the URL-icon fetches overlap, which reads as noticeably
+              // faster. Sequencing is preserved: every icon is registered
+              // before enable*Layers below.
+              await Future.wait(iconMarkers.map((marker) async {
+                try {
+                  await _loadMarkerIcon(_controller!, marker);
+                } catch (e) {
+                  print('Warning: failed to reload icon for ${marker.id}: $e');
+                }
+              }));
+            } else {
+              for (final marker in iconMarkers) {
+                try {
+                  await _loadMarkerIcon(_controller!, marker);
+                } catch (e) {
+                  print('Warning: failed to reload icon for ${marker.id}: $e');
+                }
+              }
             }
+          });
+
+          // NOT awaited — this is the single biggest cost on the whole web
+          // load path. Measured on device (NationalZoologicalPark, 112
+          // animals, release): **14,053ms**, against a 25,725ms
+          // time-to-venue. Skipping markers entirely rendered the venue in
+          // 11,446ms, so this one call was 14.3s of the 14.3s that markers
+          // cost. It ran here, awaited, *before* enable*Layers — so the map
+          // sat blank for 14s re-registering icons for a venue it could
+          // already have drawn.
+          //
+          // The comment this replaces argued it had to be awaited so
+          // _loadedAnimalIcons was filled before enableMarkerLayers pushes
+          // the source, "otherwise that push serialises every animal
+          // feature with the paw id". That is true and it is fine: the paw
+          // IS the designed load-state fallback (_animalDisplayIconId), and
+          // _scheduleAnimalIconRefresh re-pushes the source as each icon
+          // lands. Paws for a couple of seconds beats a blank map for
+          // fourteen.
+          if (animalIconMarkers.isNotEmpty) {
+            unawaited(PerfTrace.timeAsync(
+                    'style-loaded: rebake of ${animalIconMarkers.length} animal icons',
+                    () => _batchLoadAnimalIcons(
+                        _controller!, animalIconMarkers))
+                .catchError((e) {
+              // Unawaited, so a throw here would be an unhandled async
+              // error rather than something the try below can catch.
+              print('style-loaded: animal rebake failed: $e');
+            }));
+          }
+          } catch (e, stack) {
+            print('style-loaded: icon rebake failed, continuing to enable '
+                'layers anyway: $e');
+            print(stack);
           }
 
           await enablePolygonLayers(_controller!);
@@ -405,6 +545,13 @@ class MaplibreMapProvider extends BaseMapProvider {
             print("tilt $tilt");
             print("zoom $zoom");
             print("bearing $bearing");
+            // The labelled animal composites are only drawn from
+            // _kLabelZoomThreshold up, so they are baked the first time the
+            // camera actually settles there instead of during load. Not
+            // awaited: this callback should not block the camera.
+            if (zoom >= _kLabelZoomThreshold) {
+              unawaited(_ensureLabelledAnimalIcons(_controller!));
+            }
             var unifiedCameraPosition = UnifiedCameraPosition(
                 mapLocation: MapLocation(
                   latitude: target.latitude,
@@ -950,7 +1097,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           .isNotEmpty) {
         return;
       }
-      print("localizeUser ${StackTrace.current}");
+      // dart2js stack capture/format is expensive; native keeps the trace.
+      if (!kIsWeb) print("localizeUser ${StackTrace.current}");
       _rotatingSymbols.add(marker);
       await _loadMarkerIcon(controller, marker);
       try {
@@ -975,9 +1123,30 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Diagnostic switch: build with `--dart-define=SKIP_MARKERS=true` to render
+  /// the venue with NO markers at all — no icon bake, no symbol push, and
+  /// nothing for the style-loaded rebake to redo (it iterates `_symbols`, which
+  /// stays empty because this returns before the adds).
+  ///
+  /// Exists to answer one question: is the load time dominated by the marker
+  /// bake specifically, or is the whole pipeline slow? Compare time-to-
+  /// `fadeOutZoom` with and without it. Not a feature — never ship it true.
+  static const bool kSkipMarkersForProfiling =
+      bool.fromEnvironment('SKIP_MARKERS');
+
   @override
   Future<void> addMarkers(controller, List<GeoJsonMarker> markers) async {
-    print("markers $markers");
+    if (kSkipMarkersForProfiling) {
+      print('PROFILE: skipping ${markers.length} markers (SKIP_MARKERS=true)');
+      return;
+    }
+    return _addMarkers(controller, markers);
+  }
+
+  Future<void> _addMarkers(controller, List<GeoJsonMarker> markers) async {
+    // Calls toString() on every marker in the venue, and addMarkers runs 3-4
+    // times per render, so this stringifies the whole marker set repeatedly.
+    if (!kIsWeb) print("markers $markers");
     if (controller is MapLibreMapController) {
       final animalMarkers = <GeoJsonMarker>[];
       final otherMarkers = <GeoJsonMarker>[];
@@ -995,6 +1164,26 @@ class MaplibreMapProvider extends BaseMapProvider {
       // time — _loadMarkerIcon already fetches/decodes/registers everything
       // this loop used to redundantly fetch a second time, so there's no
       // separate per-marker fetch here anymore, just the fan-out await.
+      //
+      // DO NOT skip, defer or reorder this bake. Three attempts on 2026-08-12
+      // each left the map a blank grey canvas with no base map at all:
+      //   • push the source first and stream icons in afterwards;
+      //   • skip baking while `!_isClusteringEnabled` and let
+      //     onStyleLoadedCallback do it — the reasoning looked sound (the push
+      //     is dropped anyway, and the style load that follows wipes every
+      //     addImage this loop makes) but the style-loaded handler does not
+      //     recover it in practice;
+      //   • bake only markers inside the viewport, rest on camera idle — this
+      //     one WORKED (4.6s → 3ms) and was reverted by request.
+      // There is an ordering dependency here that is not yet understood. Fix the
+      // style-ready race first (setGeoJsonSource/_updatePolygonSource/
+      // _updatePolylineSource silently early-return when their layer flag is
+      // false) before touching this again.
+      //
+      // Cost, for the record: ~4.5s for 189 markers on a Redmi. Each marker's
+      // label is painted into its own PNG (UnifiedMarkerCreator keys its cache
+      // on the text), so the images are genuinely unique — neither dedup nor
+      // concurrency can help, since web is single-threaded.
       await Future.wait(otherMarkers.map((marker) async {
         try {
           await _loadMarkerIcon(controller, marker);
@@ -1193,6 +1382,14 @@ class MaplibreMapProvider extends BaseMapProvider {
               'icon': _isAnimalMarker(marker)
                   ? _animalDisplayIconId(marker)
                   : marker.id,
+            // Image id for the zoomed-out (label-less) variant. Shared between
+            // every marker with the same photo and pill geometry, so ~190
+            // byte-identical uploads collapse to one per distinct photo.
+            // Animals are absent from the map and fall through to the
+            // '<icon>-small' branch of the layer expression — their ids are
+            // already content-keyed.
+            if (marker.assetPath != null && _smallIconIds[marker.id] != null)
+              'smallIcon': _smallIconIds[marker.id],
             'isPriority': marker.priority ?? false,
             'intractable': marker.properties?["polyId"] != null,
             'bearing': marker.compassBasedRotation
@@ -1294,9 +1491,13 @@ class MaplibreMapProvider extends BaseMapProvider {
               final snapshot = List<GeoJsonMarker>.of(symbols);
               for (final marker in snapshot) {
                 if (_isAnimalMarker(marker) &&
-                    !_loadedAnimalIcons.contains(_animalIconKey(marker))) {
+                    !_registeredSmallIconIds.contains(
+                        _animalSmallImageId(marker))) {
                   try {
-                    await _loadAnimalIcon(controller, marker);
+                    // Load-path variant only (the label-less bake). The
+                    // labelled composite is deferred to camera idle at label
+                    // zoom via _ensureLabelledAnimalIcons.
+                    await _loadAnimalSmallIcon(controller, marker);
                   } catch (e) {
                     print("settle re-push animal icon retry failed for ${marker.id}: $e");
                   }
@@ -1317,50 +1518,149 @@ class MaplibreMapProvider extends BaseMapProvider {
   StreamSubscription<CompassEvent>? _compassSub;
   double? _currentHeading;
 
+  /// Externally supplied heading that stands in for the device compass while
+  /// set. See [setHeadingOverride].
+  double? _headingOverride;
+
+  @override
+  Future<void> setHeadingOverride(dynamic controller, double? heading) async {
+    _headingOverride = heading;
+    // Written through to _currentHeading so the *position* repaint
+    // (_updateUserLocation, which runs on every move) carries the same value
+    // the compass path would have written. Without this a move would push a
+    // feature bearing the last live heading and undo the override.
+    if (heading != null) _currentHeading = heading;
+    if (controller is! MapLibreMapController) return;
+    await _updateUserLocation(controller);
+  }
+
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) async {
-      if (event.heading == null) return;
-      _currentHeading = event.heading;
+    _compassSub = FlutterCompass.events?.listen((event) {
+      final heading = event.heading;
+      if (heading == null) return;
+      // Ignore the sensor rather than cancelling the subscription. There *is*
+      // a restart path — removeMarker() cancels and nulls _compassSub when the
+      // puck goes, and _startCompassListening re-subscribes when it comes back
+      // — but it only runs on a marker remove/add cycle. Cancelling here would
+      // leave the puck frozen from the moment the override is cleared until the
+      // next floor change happens to rebuild the marker.
+      if (_headingOverride != null) return;
+      _currentHeading = heading;
       // A style reload wipes the rotation source; compass events keep arriving
       // during the rebuild, and pushing then NPEs natively on a null source.
       if (!_markerSourcesReady) return;
-      final cameraPos = controller.cameraPosition;
-      if (cameraPos == null) return;
-
-      final features = _rotatingSymbols
-          .map((marker) => {
-        'type': 'Feature',
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [
-            marker.position.longitude,
-            marker.position.latitude
-          ],
-        },
-        'properties': {
-          'title': '',
-          'id': marker.id,
-          if (marker.iconName != null || true) 'icon': marker.id,
-          'isPriority': marker.priority ?? false,
-          'intractable': marker.properties?["polyId"] != null,
-          if (marker.compassBasedRotation) "bearing": event.heading!,
-        }
-      })
-          .toList();
-
-      try {
-        await controller.setGeoJsonSource(sourceID, {
-          "type": "FeatureCollection",
-          "features": features,
-        });
-      } catch (e) {
-        // Lost the race with a style reload / map teardown: the next compass
-        // event repaints once the source is back.
-        print("compass setGeoJsonSource skipped: $e");
-      }
+      // ANR guard: the compass fires 20–50Hz and each setGeoJsonSource makes
+      // MapLibre re-parse the source + relayout on the render thread while
+      // holding the native map lock. Pushing on every event backed the UI
+      // thread up past the ANR threshold. Coalesce instead — see
+      // [_requestRotationPush] / [_flushRotationPush].
+      _requestRotationPush(controller, sourceID, heading);
     });
+  }
+
+  // ANR throttle for the compass-driven rotation source. Tunables: at most one
+  // native push every 100ms (~10Hz ceiling), and ignore heading changes below
+  // 2° so a stationary device sends nothing at all.
+  static const int _kCompassMinPushMs = 100;
+  static const double _kCompassMinHeadingDeg = 2.0;
+
+  Timer? _compassThrottleTimer;
+  double? _pendingCompassHeading;
+  double? _lastPushedHeading;
+  DateTime _lastCompassPush = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _compassPushInFlight = false;
+
+  /// Smallest angular difference between two headings, in degrees (0..180),
+  /// accounting for the 360°→0° wrap.
+  double _headingDelta(double a, double b) {
+    final d = (a - b).abs() % 360;
+    return d > 180 ? 360 - d : d;
+  }
+
+  /// Records the newest heading and arms a single coalescing timer. Runs on
+  /// every compass event, so it stays cheap and allocation-free.
+  void _requestRotationPush(
+      MapLibreMapController controller, String sourceID, double heading) {
+    _pendingCompassHeading = heading;
+    // A flush is already scheduled or running; it will pick up the value above.
+    if (_compassThrottleTimer != null || _compassPushInFlight) return;
+    _armCompassTimer(controller, sourceID);
+  }
+
+  void _armCompassTimer(MapLibreMapController controller, String sourceID) {
+    final sinceLast =
+        DateTime.now().difference(_lastCompassPush).inMilliseconds;
+    final wait =
+        sinceLast >= _kCompassMinPushMs ? 0 : _kCompassMinPushMs - sinceLast;
+    _compassThrottleTimer = Timer(Duration(milliseconds: wait), () {
+      _compassThrottleTimer = null;
+      _flushRotationPush(controller, sourceID);
+    });
+  }
+
+  /// Pushes the latest pending heading to the rotation source, at most one in
+  /// flight at a time. Re-arms itself if newer events arrived mid-push so the
+  /// final orientation is never dropped.
+  Future<void> _flushRotationPush(
+      MapLibreMapController controller, String sourceID) async {
+    final heading = _pendingCompassHeading;
+    if (heading == null) return;
+
+    // Sub-threshold jitter: not worth a full source rewrite.
+    final last = _lastPushedHeading;
+    if (last != null && _headingDelta(heading, last) < _kCompassMinHeadingDeg) {
+      _pendingCompassHeading = null;
+      return;
+    }
+    // Same readiness guards the per-event path used to apply inline.
+    if (!_markerSourcesReady || controller.cameraPosition == null) {
+      _pendingCompassHeading = null;
+      return;
+    }
+
+    _pendingCompassHeading = null;
+    _compassPushInFlight = true;
+    _lastCompassPush = DateTime.now();
+    _lastPushedHeading = heading;
+
+    final features = _rotatingSymbols
+        .map((marker) => {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [
+                  marker.position.longitude,
+                  marker.position.latitude
+                ],
+              },
+              'properties': {
+                'title': '',
+                'id': marker.id,
+                if (marker.iconName != null || true) 'icon': marker.id,
+                'isPriority': marker.priority ?? false,
+                'intractable': marker.properties?["polyId"] != null,
+                if (marker.compassBasedRotation) "bearing": heading,
+              }
+            })
+        .toList();
+
+    try {
+      await controller.setGeoJsonSource(sourceID, {
+        "type": "FeatureCollection",
+        "features": features,
+      });
+    } catch (e) {
+      // Lost the race with a style reload / map teardown: the next compass
+      // event repaints once the source is back.
+      print("compass setGeoJsonSource skipped: $e");
+    } finally {
+      _compassPushInFlight = false;
+      if (_pendingCompassHeading != null) {
+        _armCompassTimer(controller, sourceID);
+      }
+    }
   }
 
   /// Temporarily force icon/text overlap ON for the given marker ids so they
@@ -1406,6 +1706,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             .isNotEmpty) {
           _compassSub?.cancel();
           _compassSub = null;
+          _compassThrottleTimer?.cancel();
+          _compassThrottleTimer = null;
+          _pendingCompassHeading = null;
         }
         _rotatingSymbols.removeWhere(
                 (marker) => marker.id.toLowerCase().contains(markerId));
@@ -1423,6 +1726,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is MapLibreMapController) {
       try {
         _symbols.clear();
+        // Per-marker state only. The content-keyed small icons stay: their ids
+        // are still registered with the live style and their bytes are reusable
+        // by the next render, which is the whole point of keying by content.
+        _smallIconIds.clear();
+        _bakedIconCache.clear();
         await setGeoJsonSource(controller, [], _clusterSourceId);
         await setGeoJsonSource(controller, [], _rotationSourceId);
       } catch (e) {
@@ -1580,6 +1888,43 @@ class MaplibreMapProvider extends BaseMapProvider {
         "features": features,
       },
     );
+
+    // The venue's fade thresholds are derived from these very polygons, so they
+    // have to be recomputed whenever the polygon set changes.
+    await _refreshPatchFadeIfStale(controller);
+  }
+
+  /// Recomputes the patch/section fade zooms when the polygons they are derived
+  /// from have changed enough to move them.
+  ///
+  /// [_refreshPatchAboveOpacity] used to run from exactly one place —
+  /// onStyleLoadedCallback — so the thresholds were computed ONCE, from
+  /// whatever `_polygons` happened to hold at style-load time. When the venue
+  /// data arrived after that (which is what happens as soon as anything on the
+  /// load path gets faster), `_calculateFitZoom` fell back to its empty-list
+  /// default of 13.0, every fade zoom was computed from that wrong value, and
+  /// nothing ever recomputed them — the venue then never became visible and the
+  /// map sat on the grey basemap forever, with no error.
+  ///
+  /// That is the "every speedup breaks rendering" race: removing the icon
+  /// fetches' incidental latency, or baking smaller icons, both reordered the
+  /// venue push past the style load and tripped it. Deriving the thresholds
+  /// from the data whenever the data lands removes the ordering dependency
+  /// instead of trying to preserve it.
+  Future<void> _refreshPatchFadeIfStale(
+      MapLibreMapController controller) async {
+    if (!_isPolygonLayersEnabled) return;
+    final boundaryPolygons = _polygons.where((p) =>
+        p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
+    final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
+    // Nothing to derive from yet; the next push will call back in.
+    if (basis.isEmpty) return;
+    final fitZoom =
+        _calculateFitZoom(basis, screenSize: _screenSize) - 2.0;
+    // Unchanged (or first run) → only pay for the layer rebuild when it moves.
+    if (_fadeOutZoom != null && (_fadeOutZoom! - fitZoom).abs() < 0.01) return;
+    print('patch fade stale: recomputing (was $_fadeOutZoom, now $fitZoom)');
+    await _refreshPatchAboveOpacity(controller, screenSize: _screenSize);
   }
 
   @override
@@ -2481,7 +2826,23 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Longest-edge cap (px) an animal photo is downscaled to before its icon
   /// is registered with the map style, regardless of the source photo's
   /// native resolution.
+  ///
+  /// DO NOT make this smaller on web to shrink the animal markers. Tried
+  /// 2026-08-27 (56px + an 11pt pill): it works visually, but a smaller bake
+  /// completes faster, which lands the venue push before onStyleLoadedCallback
+  /// has enabled the layers — and those pushes are silently dropped, leaving a
+  /// permanent grey basemap. Verified by A/B against a clean HEAD that renders.
+  /// Shrink at RENDER time via [_kAnimalWebIconScale] on the layer's icon-size
+  /// instead: same appearance, zero effect on bake timing.
   static const int _animalMaxIconSize = 80;
+
+  /// Render-time shrink for the custom-rendering composites (animal photo +
+  /// its pill) on web, where a browser viewport shows much more of the venue at
+  /// a given zoom than a native phone map and the baked-at-80dp icons crowd
+  /// each other. Applied to the layer's icon-size stops, so it costs nothing
+  /// and cannot perturb load ordering. Museum POI pins are excluded — they have
+  /// their own `hasSelectedIcon` curve.
+  static final double _kAnimalWebIconScale = kIsWeb ? 0.55 : 1.0;
 
   /// Composited animal-icon bytes, keyed by [_animalIconKey] (photo URL +
   /// baked title). An enclosure of animals that share a photo and species
@@ -2516,6 +2877,37 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// than recomputed.
   final Map<String, Offset> _markerIconAnchorCache = {};
 
+  /// Shared "no label" icon ids already registered with the current style.
+  ///
+  /// The zoomed-out variant of a custom-rendering marker is the same photo
+  /// baked with `text: ""`, so its bytes depend only on the photo and the pill
+  /// geometry — never on the marker. Registering it under a per-marker
+  /// `<id>-small` id therefore uploaded ~190 byte-identical images, each one a
+  /// Blob → <img> decode → canvas readback → GPU upload. Keying by content
+  /// collapses that to one upload per distinct photo+size. Cleared on style
+  /// reload, which wipes addImage().
+  final Set<String> _registeredSmallIconIds = {};
+
+  /// Image id each marker's features should use for the zoomed-out (label-less)
+  /// variant, emitted as the `smallIcon` feature property. Markers absent from
+  /// here fall back to the old `<icon>-small` expression, which is what animal
+  /// markers still use (their ids are already content-keyed).
+  final Map<String, String> _smallIconIds = {};
+
+  /// Bytes behind each id in [_registeredSmallIconIds], kept across style
+  /// reloads so the shared label-less icons can be re-uploaded without being
+  /// re-baked. Every registered id always has an entry here, because an id only
+  /// enters the registry through an upload made from this map.
+  final Map<String, Uint8List> _smallIconBytes = {};
+
+  /// Baked icon bytes per marker, so re-registering after a style reload is
+  /// upload-only — no source re-fetch and no re-entry into the bake path.
+  /// Keyed on the inputs that change what gets drawn, not just the id.
+  final Map<String, _BakedMarkerIcon> _bakedIconCache = {};
+
+  String _bakedIconKey(GeoJsonMarker marker) =>
+      '${marker.id}|${marker.textVisibility}|${marker.title ?? ""}';
+
   bool _isAnimalMarker(GeoJsonMarker marker) =>
       marker.customRendering && marker.properties?['animalRef'] != null;
 
@@ -2527,9 +2919,33 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Registered image id shared by every animal marker with the same
   /// [_animalIconKey] — one GPU texture per unique photo+title instead of
-  /// one per marker.
+  /// one per marker. Only used at or above [_kLabelZoomThreshold].
   String _animalImageId(GeoJsonMarker marker) =>
       'animal-${_animalIconKey(marker).hashCode}';
+
+  /// Content key of the label-less animal variant: the photo, and nothing
+  /// else. Titles are unique per animal, so keying the label-less bake by
+  /// photo+title (as [_animalIconKey] does) made ~112 byte-identical images
+  /// where a handful would do.
+  String _animalPhotoKey(GeoJsonMarker marker) => marker.assetPath ?? '';
+
+  /// Shared image id for the label-less variant, one per distinct photo.
+  String _animalSmallImageId(GeoJsonMarker marker) =>
+      'animal-small-${_animalPhotoKey(marker).hashCode}';
+
+  /// Fetched-and-downscaled source photos, keyed by [_animalPhotoKey]. Shared
+  /// between both bake phases so phase B never re-fetches or re-resizes.
+  final Map<String, Uint8List> _animalSourceCache = {};
+
+  /// Zoom at or above which the custom-rendering layer swaps from the
+  /// label-less icon to the labelled composite. Must match the `step` stop in
+  /// [_customRenderingLayerProps] — the deferred phase-B bake is scheduled off
+  /// this, so if they drift the labels stop appearing.
+  static const double _kLabelZoomThreshold = 16;
+
+  /// True once the labelled animal composites have been requested, so camera
+  /// idles after the first one don't re-enter the batch.
+  bool _labelledAnimalsStarted = false;
 
   /// Image id an animal marker's feature should reference right now: the
   /// shared composite once it has finished loading, otherwise the paw dot
@@ -2538,6 +2954,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (_loadedAnimalIcons.contains(_animalIconKey(marker))) {
       return _animalImageId(marker);
     }
+    // Labelled composite not baked yet (it is deferred past
+    // _kLabelZoomThreshold). Show the real photo without its label rather than
+    // the paw — the paw is for "no image at all yet".
+    final String smallId = _animalSmallImageId(marker);
+    if (_registeredSmallIconIds.contains(smallId)) return smallId;
     return marker.dotAssetPath ?? _kDotImageId;
   }
 
@@ -2565,92 +2986,128 @@ class MaplibreMapProvider extends BaseMapProvider {
     return byteData?.buffer.asUint8List() ?? bytes;
   }
 
-  /// Builds (or reuses) an animal marker's composited icon and registers it
-  /// under a content-derived id shared by every marker with the same photo
-  /// and baked title. Returns true if a new image was actually registered
-  /// with the style (i.e. the caller needs to re-push the GeoJSON source).
-  Future<bool> _loadAnimalIcon(
+  /// Source photo for an animal marker, fetched once per *photo* and already
+  /// downscaled to [_animalMaxIconSize].
+  ///
+  /// Previously keyed by photo+title, so N animals sharing a species photo each
+  /// re-fetched and re-decoded it. Keying by photo alone collapses that to one
+  /// fetch + one resize no matter how many titles reuse the image.
+  Future<Uint8List?> _animalSourceBytes(GeoJsonMarker marker) async {
+    final String key = _animalPhotoKey(marker);
+    final Uint8List? cached = _animalSourceCache[key];
+    if (cached != null) return cached;
+    Uint8List? rawBytes;
+    if (marker.assetPath!.startsWith('http')) {
+      rawBytes = await CacheController().fetchWithCache(marker.assetPath!);
+    } else {
+      final bd = await rootBundle.load(marker.assetPath!);
+      rawBytes = bd.buffer.asUint8List();
+    }
+    if (rawBytes == null) {
+      print('_animalSourceBytes: no bytes for ${marker.assetPath} '
+          '(icon stays a paw placeholder)');
+      return null;
+    }
+    // NOT pre-resized. _resizeImageBytes cost a full decode plus a PNG
+    // re-encode per photo, purely to hand smaller bytes to createUnifiedMarker
+    // — which instantiates its codec at the final ~80px target anyway, and now
+    // reads the source dimensions from the header instead of decoding. The
+    // downscale therefore happens exactly once, inside the bake, and the
+    // encode/decode pair this used to add is gone.
+    _animalSourceCache[key] = rawBytes;
+    return rawBytes;
+  }
+
+  /// Bake parameters shared by both animal variants, so the label-less and
+  /// labelled composites differ only in their text.
+  Future<MarkerIconWithAnchor> _bakeAnimalIcon(
+      GeoJsonMarker marker, Uint8List source, String text) {
+    final double fontSize = marker.properties?["fontSize"] ?? 14.5;
+    final Offset customAnchor =
+        marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+    final Size iconSize =
+        Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
+    return creator.createUnifiedMarker(
+      imageSize: iconSize,
+      fontSize: fontSize,
+      text: text,
+      imageSource: marker.assetPath,
+      imageBytes: source,
+      layout: MarkerLayout.vertical,
+      textFormat: TextFormat.smartWrap,
+      textColor: const Color(0xff000000),
+      customAnchor: customAnchor,
+      expandCanvasForRotation:
+          (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
+    );
+  }
+
+  /// PHASE A — the label-less animal icon, which is all the map actually draws
+  /// below [_kLabelZoomThreshold] (where every venue starts).
+  ///
+  /// Its pixels depend only on the photo, never the title, so it is keyed and
+  /// registered per photo. That is the whole point: an enclosure of 30 animals
+  /// with 30 distinct names shares ONE bake and ONE upload here, where the
+  /// labelled variant below would need 30 of each.
+  Future<bool> _loadAnimalSmallIcon(
       MapLibreMapController controller, GeoJsonMarker marker) async {
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
-
-    final String contentKey = _animalIconKey(marker);
-    final String imageId = _animalImageId(marker);
+    final String smallId = _animalSmallImageId(marker);
     marker.anchor ??= const Offset(0.5, 0.5);
-    if (_loadedAnimalIcons.contains(contentKey)) {
+    // Point this marker's feature at the shared image even if another marker
+    // already registered it — the property is per marker, the image is not.
+    _smallIconIds[marker.id] = smallId;
+    if (_registeredSmallIconIds.contains(smallId)) return false;
+    try {
+      Uint8List? bytes = _smallIconBytes[smallId];
+      if (bytes == null) {
+        final Uint8List? source = await _animalSourceBytes(marker);
+        if (source == null) return false;
+        final baked = await _bakeAnimalIcon(marker, source, "");
+        bytes = baked.icon;
+        marker.anchor = baked.anchor;
+        _smallIconBytes[smallId] = bytes;
+      }
+      await controller.addImage(smallId, bytes);
+      _registeredSmallIconIds.add(smallId);
+      return true;
+    } catch (e) {
+      print("_loadAnimalSmallIcon $e");
       return false;
     }
+  }
+
+  /// PHASE B — the labelled composite, one per photo+title.
+  ///
+  /// This is the expensive half (a TextPainter pass and a PNG encode per
+  /// distinct name) and it is only ever drawn at or above
+  /// [_kLabelZoomThreshold], so it is deferred off the load path and run when
+  /// the camera actually settles at that zoom. Deferring it is what takes the
+  /// animal pass off the critical path; nothing about the rendered result
+  /// changes, since the labelled image was invisible at load zoom anyway.
+  Future<bool> _loadAnimalLabelledIcon(
+      MapLibreMapController controller, GeoJsonMarker marker) async {
+    if (marker.assetPath == null) return false;
+    final String contentKey = _animalIconKey(marker);
+    final String imageId = _animalImageId(marker);
+    if (_loadedAnimalIcons.contains(contentKey)) return false;
     try {
       Uint8List? composite = _animalIconCache[contentKey];
-      Uint8List? smallComposite = _animalIconCache['$contentKey|small'];
-      if (composite == null || smallComposite == null) {
-        // Fetch the source photo once and cap its resolution before it's
-        // ever decoded for compositing — a 4000x3000 zoo photo shouldn't be
-        // pushed through the pipeline at full size just to be shrunk to an
-        // 80px icon a moment later.
-        Uint8List? rawBytes;
-        if (marker.assetPath!.startsWith('http')) {
-          rawBytes = await CacheController().fetchWithCache(marker.assetPath!);
-        } else {
-          final bd = await rootBundle.load(marker.assetPath!);
-          rawBytes = bd.buffer.asUint8List();
-        }
-        if (rawBytes == null) return false;
-        final Uint8List resizedSource =
-        await _resizeImageBytes(rawBytes, _animalMaxIconSize);
-
-        final double fontSize = marker.properties?["fontSize"] ?? 14.5;
-        final Offset customAnchor =
-            marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
-        final Size iconSize =
-        Size(_animalMaxIconSize.toDouble(), _animalMaxIconSize.toDouble());
-        // The text and text-less variants are independent bakes of the same
-        // resized source bytes — run them concurrently instead of back to
-        // back so the second bake's decode/canvas/encode work overlaps the
-        // first's await gaps rather than waiting for it to fully finish.
-        final iconResults = await Future.wait([
-          creator.createUnifiedMarker(
-            imageSize: iconSize,
-            fontSize: fontSize,
-            text: marker.textVisibility ? (marker.title ?? "") : "",
-            imageSource: marker.assetPath,
-            imageBytes: resizedSource,
-            layout: MarkerLayout.vertical,
-            textFormat: TextFormat.smartWrap,
-            textColor: const Color(0xff000000),
-            customAnchor: customAnchor,
-            expandCanvasForRotation:
-            (customAnchor.dx == 0.5 && customAnchor.dy == 0.5) ? false : true,
-          ),
-          creator.createUnifiedMarker(
-            imageSize: iconSize,
-            fontSize: fontSize,
-            text: "",
-            imageSource: marker.assetPath,
-            imageBytes: resizedSource,
-            layout: MarkerLayout.vertical,
-            textFormat: TextFormat.smartWrap,
-            textColor: const Color(0xff000000),
-            customAnchor: customAnchor,
-          ),
-        ]);
-        final withTextIcon = iconResults[0];
-        final withoutTextIcon = iconResults[1];
-        composite = withTextIcon.icon;
-        smallComposite = withoutTextIcon.icon;
-        marker.anchor = withTextIcon.anchor;
+      if (composite == null) {
+        final Uint8List? source = await _animalSourceBytes(marker);
+        if (source == null) return false;
+        final baked = await _bakeAnimalIcon(marker, source,
+            marker.textVisibility ? (marker.title ?? "") : "");
+        composite = baked.icon;
+        marker.anchor = baked.anchor;
         _animalIconCache[contentKey] = composite;
-        _animalIconCache['$contentKey|small'] = smallComposite;
       }
-      // Independent platform-channel registrations — dispatch together.
-      await Future.wait([
-        _addImageSafe(controller, imageId, composite),
-        _addImageSafe(controller, '$imageId-small', smallComposite),
-      ]);
+      await _addImageSafe(controller, imageId, composite);
       _loadedAnimalIcons.add(contentKey);
       return true;
     } catch (e) {
-      print("_loadAnimalIcon $e");
+      print("_loadAnimalLabelledIcon $e");
       return false;
     }
   }
@@ -2666,20 +3123,24 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// already loaded from a previous call.
   Future<void> _batchLoadAnimalIcons(
       MapLibreMapController controller, List<GeoJsonMarker> animalMarkers) async {
+    // Grouped by PHOTO, not photo+title: this pass bakes only the label-less
+    // variant, whose pixels don't depend on the name. An enclosure of 30
+    // differently-named animals sharing one photo is a single group here.
     final Map<String, List<GeoJsonMarker>> groups = {};
     for (final marker in animalMarkers) {
-      groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
+      groups.putIfAbsent(_animalPhotoKey(marker), () => []).add(marker);
     }
 
     bool anyChanged = false;
     await Future.wait(groups.values.map((group) async {
       try {
-        final changed = await _loadAnimalIcon(controller, group.first);
-        // The whole group shares one composite; propagate the anchor the
-        // leader resolved so followers render consistently even though they
-        // never called createUnifiedMarker themselves.
+        final changed = await _loadAnimalSmallIcon(controller, group.first);
+        // The whole group shares one image; propagate the anchor the leader
+        // resolved, and point every follower's feature at the same id (the
+        // leader's _loadAnimalSmallIcon only set its own).
         for (final marker in group.skip(1)) {
           marker.anchor = group.first.anchor;
+          _smallIconIds[marker.id] = _animalSmallImageId(marker);
         }
         if (changed) {
           anyChanged = true;
@@ -2697,6 +3158,44 @@ class MaplibreMapProvider extends BaseMapProvider {
       // than waiting out the throttle window for the last stragglers.
       _pushAnimalIconRefresh(controller);
     }
+  }
+
+  /// Bakes the labelled animal composites (phase B), one per photo+title.
+  ///
+  /// Deferred until the camera settles at or above [_kLabelZoomThreshold],
+  /// because that is the only zoom at which the layer draws them. Runs at most
+  /// once per style; a second camera idle is a no-op.
+  Future<void> _ensureLabelledAnimalIcons(
+      MapLibreMapController controller) async {
+    if (_labelledAnimalsStarted) return;
+    final animals = _symbols.where(_isAnimalMarker).toList();
+    if (animals.isEmpty) return;
+    _labelledAnimalsStarted = true;
+
+    final Map<String, List<GeoJsonMarker>> groups = {};
+    for (final marker in animals) {
+      groups.putIfAbsent(_animalIconKey(marker), () => []).add(marker);
+    }
+    bool anyChanged = false;
+    await PerfTrace.timeAsync(
+        'deferred: labelled bake of ${groups.length} animal icons', () async {
+      await Future.wait(groups.values.map((group) async {
+        try {
+          final changed =
+              await _loadAnimalLabelledIcon(controller, group.first);
+          for (final marker in group.skip(1)) {
+            marker.anchor = group.first.anchor;
+          }
+          if (changed) {
+            anyChanged = true;
+            _scheduleAnimalIconRefresh(controller);
+          }
+        } catch (e) {
+          print("_ensureLabelledAnimalIcons $e");
+        }
+      }));
+    });
+    if (anyChanged) _pushAnimalIconRefresh(controller);
   }
 
   /// Debounce state for progressive animal-icon reveal. setGeoJsonSource
@@ -2825,12 +3324,60 @@ class MaplibreMapProvider extends BaseMapProvider {
         ));
   }
 
+  /// Uploads a baked marker's images to the current style and records what it
+  /// registered, so a later style reload can repeat this without re-baking.
+  ///
+  /// The label-less variant is uploaded at most once per distinct
+  /// [_BakedMarkerIcon.smallIconId]; markers that share a photo and pill
+  /// geometry all point at that one image.
+  Future<void> _registerBakedIcon(
+    MapLibreMapController controller,
+    GeoJsonMarker marker,
+    _BakedMarkerIcon baked,
+  ) async {
+    if (baked.small != null) {
+      _smallIconBytes[baked.smallIconId] = baked.small!;
+    }
+    final Uint8List? smallBytes = baked.smallIconId == marker.id
+        ? null // aliases the main image; nothing separate to upload
+        : (_registeredSmallIconIds.contains(baked.smallIconId)
+            ? null
+            : _smallIconBytes[baked.smallIconId]);
+    await Future.wait([
+      _addImageSafe(controller, marker.id, baked.main),
+      if (smallBytes != null) _addImageSafe(controller, baked.smallIconId, smallBytes),
+      if (baked.selected != null)
+        _addImageSafe(controller, "${marker.id}-selected", baked.selected!),
+    ]);
+    if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
+    _smallIconIds[marker.id] = baked.smallIconId;
+    _bakedIconCache[_bakedIconKey(marker)] = baked;
+    marker.anchor = baked.anchor;
+  }
+
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
     if (_isAnimalMarker(marker)) {
-      return _loadAnimalIcon(controller, marker);
+      // Only the label-less variant. The labelled composite is deferred to
+      // _ensureLabelledAnimalIcons, which runs on camera idle at label zoom.
+      return _loadAnimalSmallIcon(controller, marker);
     }
     await _loadMarkerDotIcon(controller, marker);
     if (marker.assetPath == null) return false;
+    // Already baked once this session — a style reload wiped the addImage()
+    // registrations but not the bytes, so re-register straight from the cache
+    // instead of re-fetching the photo and re-entering the bake path.
+    final _BakedMarkerIcon? cachedIcon = _bakedIconCache[_bakedIconKey(marker)];
+    if (cachedIcon != null) {
+      try {
+        await _registerBakedIcon(controller, marker, cachedIcon);
+        return true;
+      } catch (e) {
+        print("_loadMarkerIcon (cached) $e");
+      }
+    }
+    // Marker types that don't populate _bakedIconCache (pathStop, plain
+    // icon+text markers) track their registration here instead. Cleared on
+    // style reload alongside _loadedAnimalIcons.
     if (_registeredMarkerIconIds.contains(marker.id)) {
       final cachedAnchor = _markerIconAnchorCache[marker.id];
       if (cachedAnchor != null) marker.anchor = cachedAnchor;
@@ -2871,14 +3418,18 @@ class MaplibreMapProvider extends BaseMapProvider {
           ]);
           final poiMarker = poiResults[0];
           final poiSelected = poiResults[1];
-          await Future.wait([
-            _addImageSafe(controller, marker.id, poiMarker.icon),
-            _addImageSafe(controller, "${marker.id}-small", poiMarker.icon),
-            _addImageSafe(controller, "${marker.id}-selected", poiSelected.icon),
-          ]);
-          marker.anchor = poiMarker.anchor;
-          _markerIconAnchorCache[marker.id] = poiMarker.anchor;
-          _registeredMarkerIconIds.add(marker.id);
+          // The zoomed-out variant is the *same bytes* as the full one here, so
+          // it is aliased to the marker id rather than uploaded a second time.
+          await _registerBakedIcon(
+            controller,
+            marker,
+            _BakedMarkerIcon(
+              main: poiMarker.icon,
+              smallIconId: marker.id,
+              selected: poiSelected.icon,
+              anchor: poiMarker.anchor,
+            ),
+          );
           return true;
         }
         if(marker.properties?['pathStop']??false){
@@ -2915,8 +3466,20 @@ class MaplibreMapProvider extends BaseMapProvider {
             final bd = await rootBundle.load(marker.assetPath!);
             sourceBytes = bd.buffer.asUint8List();
           }
+          // Id the label-less bake is registered under. Its bytes depend only
+          // on the photo and the pill geometry, never on the marker, so every
+          // marker sharing those reuses one upload.
+          final String smallIconId = marker.textVisibility
+              ? 'small|${marker.assetPath}|${markerImageSize.width}x${markerImageSize.height}'
+                  '|$pillFontSize|$isGallery|${customAnchor.dx},${customAnchor.dy}'
+              // Label hidden → the "with text" bake has text "" too, so the two
+              // are byte-identical and the small variant just aliases the main.
+              : marker.id;
           // The two bakes are independent — run them concurrently instead of
-          // back to back.
+          // back to back. The second is skipped entirely when it would only
+          // reproduce the first (no label) or bytes already registered.
+          final bool needsSmallBake = marker.textVisibility &&
+              !_smallIconBytes.containsKey(smallIconId);
           final iconResults = await Future.wait([
             creator.createUnifiedMarker(
               imageSize: markerImageSize,
@@ -2935,34 +3498,35 @@ class MaplibreMapProvider extends BaseMapProvider {
               pillCornerRadius: isGallery ? 10.0 : null,
               expandCanvasForRotation: (customAnchor.dx == 0.5 && customAnchor.dy == 0.5)?false:true,
             ),
-            creator.createUnifiedMarker(
-              imageSize: markerImageSize,
-              fontSize: pillFontSize,
-              text: "",
-              imageSource: marker.assetPath,
-              imageBytes: sourceBytes,
-              layout: MarkerLayout.vertical,
-              textFormat: TextFormat.smartWrap,
-              textColor: const Color(0xff000000),
-              customAnchor: customAnchor,
-              fontWeight: pillWeight,
-              showPillBorder: !isGallery,
-              pillShadow: isGallery,
-              pillColor: pillColor,
-              pillCornerRadius: isGallery ? 10.0 : null,
-            ),
+            if (needsSmallBake)
+              creator.createUnifiedMarker(
+                imageSize: markerImageSize,
+                fontSize: pillFontSize,
+                text: "",
+                imageSource: marker.assetPath,
+                imageBytes: sourceBytes,
+                layout: MarkerLayout.vertical,
+                textFormat: TextFormat.smartWrap,
+                textColor: const Color(0xff000000),
+                customAnchor: customAnchor,
+                fontWeight: pillWeight,
+                showPillBorder: !isGallery,
+                pillShadow: isGallery,
+                pillColor: pillColor,
+                pillCornerRadius: isGallery ? 10.0 : null,
+              ),
           ]);
           final markerIconWithAnchorWithText = iconResults[0];
-          final markerIconWithAnchorWithoutText = iconResults[1];
-          final Uint8List iconBytes = markerIconWithAnchorWithText.icon;
-          final Uint8List iconBytes2 = markerIconWithAnchorWithoutText.icon;
-          await Future.wait([
-            _addImageSafe(controller, marker.id, iconBytes),
-            _addImageSafe(controller, "${marker.id}-small", iconBytes2),
-          ]);
-          marker.anchor = markerIconWithAnchorWithText.anchor;
-          _markerIconAnchorCache[marker.id] = markerIconWithAnchorWithText.anchor;
-          _registeredMarkerIconIds.add(marker.id);
+          await _registerBakedIcon(
+            controller,
+            marker,
+            _BakedMarkerIcon(
+              main: markerIconWithAnchorWithText.icon,
+              smallIconId: smallIconId,
+              small: needsSmallBake ? iconResults[1].icon : null,
+              anchor: markerIconWithAnchorWithText.anchor,
+            ),
+          );
           return true;
         }
       } else {
@@ -3019,6 +3583,18 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Multiplier applied to every marker layer's `icon-size`.
+  ///
+  /// Web halves them: many landmarks collapse to collision dots at once there
+  /// and the icons read far too heavy against the floor plan. **Native keeps
+  /// 1.0 — the sizes mobile has always shipped.** Every call site below writes
+  /// its original value times this, so the native number stays readable in the
+  /// source instead of being pre-multiplied away.
+  ///
+  /// Not applied to the custom-rendering layer (layer 3, the animal/POI
+  /// composites): its ramp was never rescaled and both platforms share it.
+  static final double _kIconScale = kIsWeb ? 0.5 : 1.0;
+
   /// Default zoom fade used when the layers are first created; replaced at
   /// runtime by [_refreshMarkerLayerMinZooms] once the real fade zoom is known.
   static const List<dynamic> _kDefaultMarkerOpacity = [
@@ -3029,11 +3605,13 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Full property set for the text-only marker layer.
   ///
-  /// Shared by [enableMarkerLayers] and [_refreshMarkerLayerMinZooms] because
-  /// `setLayerProperties` **replaces** a layer's properties instead of merging
-  /// them: passing a partial set (just sort key + opacity, as the refresh used
-  /// to) silently drops `text-field`, leaving a symbol layer with nothing to
-  /// draw. Measured symptom was 45 dots and 0 text/icons at z18.9.
+  /// Shared by [enableMarkerLayers] and the **web** branch of
+  /// [_refreshMarkerLayerMinZooms]. Note `setLayerProperties` MERGES on both
+  /// platforms, so a partial set drops nothing — what it does do is overwrite
+  /// `symbol-sort-key` with a base-less expression, and the per-layer base is
+  /// what keeps each full marker sorted immediately before its own collision
+  /// dot. See the comment in [_refreshMarkerLayerMinZooms] for the cascade and
+  /// for why native deliberately keeps the flattened sort key.
   SymbolLayerProperties _normalTextLayerProps(List<dynamic> textOpacity) =>
       SymbolLayerProperties(
         symbolSortKey: ["+", 0, _kSortKeyExpression],
@@ -3056,9 +3634,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       SymbolLayerProperties(
         symbolSortKey: ["+", sortBase, _kSortKeyExpression],
         iconImage: ["get", "icon"],
-        // Was 0.8, halved to 0.4 to stop icons dominating the floor plan —
-        // that overshot and read as "too small". 0.55 splits the difference.
-        iconSize: 0.8,
+        // Covers the ordinary landmark icons — lift, entry, washroom and the
+        // rest — for both the with/without-sectionId layers.
+        iconSize: 0.8 * _kIconScale,
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
@@ -3080,79 +3658,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         textOpacity: opacity,
       );
 
-  /// Full property set for the custom-rendering marker layer (animal/POI
-  /// photo icons). Shared by the creation call and
-  /// [_refreshMarkerLayerMinZooms] for the same reason as the builders
-  /// above: `setLayerProperties` replaces rather than merges, so a partial
-  /// update carrying only `symbolSortKey`/`iconOpacity` drops `icon-image`
-  /// (and size/anchor/allow-overlap) entirely, leaving the layer with
-  /// nothing to draw — every custom-rendering marker then falls back to its
-  /// collision dot forever, even though its icon is correctly registered
-  /// and referenced in the source data.
-  SymbolLayerProperties _customRenderingLayerProps(List<dynamic> iconOpacity) =>
-      SymbolLayerProperties(
-        symbolSortKey: ["+", 4000, _kSortKeyExpression],
-        iconImage: [
-          "step",
-          ["zoom"],
-          ["concat", ["get", "icon"], "-small"],
-          16,
-          ["get", "icon"],
-        ],
-        iconSize: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2],
-          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442],
-          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0],
-          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0],
-        ],
-        iconAnchor: ["get", "iconAnchor"],
-        iconAllowOverlap: false,
-        iconOpacity: iconOpacity,
-      );
-
-  /// Full property set for the fixed/rotated (bearing) marker layer. See
-  /// [_customRenderingLayerProps] for why this must be a full set rather
-  /// than the sortKey/opacity-only partial [_refreshMarkerLayerMinZooms]
-  /// used to send.
-  SymbolLayerProperties _fixedMarkerLayerProps(List<dynamic> textOpacity) =>
-      SymbolLayerProperties(
-        symbolSortKey: ["+", 1000, _kSortKeyExpression],
-        textRotate: ["get", "bearing"],
-        textRotationAlignment: "map",
-        textField: ["get", "title"],
-        textSize: 12,
-        textColor: "#000000",
-        textHaloColor: "#f8f9fa",
-        textHaloWidth: 2,
-        textAnchor: "center",
-        textAllowOverlap: false,
-        iconImage: ["get", "icon"],
-        // Was 1.0, halved to 0.5 alongside the other layers — bumped back up
-        // to 0.65 to match the rest of the retune below.
-        iconSize: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          18, 0.0,
-          22.0, 1.0,
-        ],
-        iconAnchor: ["get", "iconAnchor"],
-        iconOpacity: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          12.0, 0.0,
-          14.0, 1.0
-        ],
-        iconRotate: ["get", "bearing"],
-        iconRotationAlignment: "map",
-        iconAllowOverlap: false,
-        textOpacity: textOpacity,
-      );
-
   /// Full property set for the section polygon layer.
   ///
   /// Shared by the creation call and the later fade-zoom update for the same
@@ -3167,6 +3672,104 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillOpacity: fillOpacity,
         // No fillOutlineColor — the section patches render as flat colour with
         // no border.
+      );
+
+  /// Full property set for the custom-rendering marker layer — the zoo animal
+  /// composites, museum POI pins, and anything else baked by
+  /// [UnifiedMarkerCreator] rather than referenced as a plain icon.
+  ///
+  /// Used at creation on every platform, and by the **web** branch of
+  /// [_refreshMarkerLayerMinZooms]. `icon-image` here is not what was broken —
+  /// setLayerProperties merges, so it was never dropped. The load-bearing line
+  /// is `symbolSortKey`'s 4000 base, which the refresh's partial call used to
+  /// overwrite: without it every full marker flattens to ~0, they collide with
+  /// each other as one block under `iconAllowOverlap: false`, and each loser
+  /// falls back to the layer-0 dot — for an animal, the paw. That is the "every
+  /// animal is a paw at every zoom" defect, and it is a collision-ordering bug,
+  /// not an icon-loading one: the composites were registered fine throughout.
+  SymbolLayerProperties _customRenderingLayerProps(List<dynamic> iconOpacity) =>
+      SymbolLayerProperties(
+        symbolSortKey: ["+", 4000, _kSortKeyExpression],
+        // The zoom step is a LABEL toggle, not a placeholder→photo swap:
+        // `icon` is the composite with the title baked in, the low-zoom id the
+        // same photo with text: "". Custom-rendering markers carry that id in
+        // `smallIcon` (content-keyed, so one image serves many markers);
+        // animals have no `smallIcon` and keep the '<icon>-small' convention
+        // that _loadAnimalIcon registers, since their ids are already
+        // content-keyed.
+        iconImage: [
+          "step",
+          ["zoom"],
+          [
+            "coalesce",
+            ["get", "smallIcon"],
+            ["concat", ["get", "icon"], "-small"],
+          ],
+          _kLabelZoomThreshold,
+          ["get", "icon"],
+        ],
+        // Museum POI markers (hasSelectedIcon) use a dedicated zoom curve:
+        // 0.3 at z18 growing linearly to 1.0 at z22 (clamped below/above).
+        // All other custom-rendering markers keep the original 14→0.2,
+        // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
+        // stays at the top level and the per-feature branch lives in the
+        // stop outputs (nesting zoom inside a `case` throws on iOS).
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          // The non-hasSelectedIcon stops carry _kAnimalWebIconScale, which is
+          // 1.0 off web — so native sizing is byte-identical and only the
+          // browser gets the smaller composites.
+          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2 * _kAnimalWebIconScale],
+          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442 * _kAnimalWebIconScale],
+          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0 * _kAnimalWebIconScale],
+          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0 * _kAnimalWebIconScale],
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconAllowOverlap: false,
+        iconOpacity: iconOpacity,
+      );
+
+  /// Full property set for the fixed/rotated marker layer (features carrying a
+  /// bearing — entry pins and the like). Shared for the same replace-not-merge
+  /// reason; the refresh path only ever wanted to retune `text-opacity`, but
+  /// passing that alone dropped `icon-image`, `icon-rotate` and `text-field`.
+  ///
+  /// [textOpacity] is null at creation time (the layer ships without an
+  /// explicit text-opacity) and carries the venue-fit fade once
+  /// [_refreshMarkerLayerMinZooms] knows it.
+  SymbolLayerProperties _fixedMarkerLayerProps({
+    required List<dynamic> iconOpacity,
+    List<dynamic>? textOpacity,
+  }) =>
+      SymbolLayerProperties(
+        symbolSortKey: ["+", 1000, _kSortKeyExpression],
+        textRotate: ["get", "bearing"],
+        textRotationAlignment: "map",
+        textField: ["get", "title"],
+        textSize: 12,
+        textColor: "#000000",
+        textHaloColor: "#f8f9fa",
+        textHaloWidth: 2,
+        textAnchor: "center",
+        textAllowOverlap: false,
+        textOpacity: textOpacity,
+        iconImage: ["get", "icon"],
+        // Fixed markers, which include the main entry pin. The 0.0 floor is a
+        // fade-in, so only the top of the ramp scales.
+        iconSize: [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          18, 0.0,
+          22.0, 1.0 * _kIconScale,
+        ],
+        iconAnchor: ["get", "iconAnchor"],
+        iconOpacity: iconOpacity,
+        iconRotate: ["get", "bearing"],
+        iconRotationAlignment: "map",
+        iconAllowOverlap: false,
       );
 
   Future<void> enableMarkerLayers(dynamic controller) async  {
@@ -3230,11 +3833,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", ["get", "collisionBase"], 0.6, _kSortKeyExpression],
           iconImage: ["get", "dotIcon"],
-          // Half the source image. The dot is a bundled PNG registered via
-          // addImage, so its on-screen size is image pixels × iconSize — the
-          // dots read far too heavy at 1.0, especially on the web build where
-          // many landmarks collapse to dots at once.
-          iconSize: 0.5,
+          // The dot is a bundled PNG registered via addImage, so its on-screen
+          // size is image pixels × iconSize. Full size on native; web halves it
+          // because many landmarks collapse to dots there at once.
+          iconSize: 1.0 * _kIconScale,
           iconAnchor: "center",
           iconAllowOverlap: false,
           textAllowOverlap: false,
@@ -3382,7 +3984,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       await _addSymbolLayerSafe(controller,
         _clusterSourceId,
         _fixedMarkerLayerId,
-        _fixedMarkerLayerProps(_kDefaultMarkerOpacity),
+        _fixedMarkerLayerProps(iconOpacity: _kDefaultMarkerOpacity),
         filter: [
           "all",
           ["!", ["to-boolean", ["get", "overlapOverride"]]],
@@ -3460,7 +4062,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 7000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          iconSize: 0.8, // restored to original — see Layer 2
+          iconSize: 0.8 * _kIconScale,
           iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
@@ -3508,7 +4110,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           SymbolLayerProperties(
             symbolSortKey: ["+", 6000, _kSortKeyExpression],
             iconImage: ["get", "icon"],
-            iconSize: 1.5, // restored to original — subSection markers
+            iconSize: 1.5 * _kIconScale, // subSection markers
             textField: ["get", "title"],
             textSize: 12,
             textColor: "#000000",
@@ -3546,9 +4148,25 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 9000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          // Restored to the original 1.5 — halving it (twice-corrected down
-          // to 0.75, then 1.0) still read as too small.
-          iconSize: 1.5,
+          // Web only: scale with zoom like every other marker layer, rather
+          // than holding one size while the floor plan grows and shrinks under
+          // it. Same 14 → 18.3 ramp the other custom-rendering markers use,
+          // scaled so the top of the curve is the 0.75 tuned above instead of
+          // 1.0 — the arrow keeps its established weight zoomed in and stops
+          // swamping the plan zoomed out. Native deliberately keeps the plain
+          // scalar: this was asked for on web, and a bare number cannot trip
+          // the iOS zoom-expression hazard documented on Layer 0.
+          iconSize: kIsWeb
+              ? [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  14.0, 0.15,
+                  18.0, 0.7082,
+                  18.3, 0.75,
+                  22.0, 0.75,
+                ]
+              : 1.5,
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,
@@ -3564,9 +4182,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 5000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          // Same standalone-pin class as the user marker above — kept in
-          // step with it (restored to 1.5).
-          iconSize: 1.5,
+          // Same standalone-pin class as the user and selected markers, so it
+          // keeps the same visual weight as those.
+          iconSize: 1.5 * _kIconScale,
           iconAllowOverlap: true,
           textAllowOverlap: false,
         ),
@@ -3589,7 +4207,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         SymbolLayerProperties(
           symbolSortKey: ["+", 15000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          iconSize: 0.8, // restored to original — keep in step with Layer 2
+          iconSize: 0.8 * _kIconScale, // overlap-override markers
           iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
@@ -3635,14 +4253,21 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["concat", ["get", "icon"], "-selected"],
             ["get", "icon"],
           ],
-          // iconSize: [
-          //   "interpolate",
-          //   ["linear"],
-          //   ["zoom"],
-          //   13,  0.2,
-          //   18,  1.5,
-          // ],
-          iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
+          // The zoom ramp (both stops scale together so the pin keeps its
+          // shape at every zoom) is multiplied by the per-feature
+          // `iconScaleFactor`, which is 1.0 unless a tap animation is running
+          // (see animateMarkerSelection / buildFeature).
+          iconSize: [
+            "*",
+            [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              13,  0.2 * _kIconScale,
+              18,  1.5 * _kIconScale,
+            ],
+            ["get", "iconScaleFactor"],
+          ],
           iconRotate: ["get", "iconShake"],
           iconRotationAlignment: "viewport",
           // Custom-rendering markers (animal photos, museum POIs) bake their
@@ -4055,7 +4680,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       SymbolLayerProperties(
         symbolSortKey: ["+", 7000, _kSortKeyExpression],
         iconImage: ["get", "icon"],
-        iconSize: 0.8, // restored to original — keep in step with the add above
+        iconSize: 0.8 * _kIconScale, // keep in step with the add above
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
@@ -4085,6 +4710,23 @@ class MaplibreMapProvider extends BaseMapProvider {
     );
 
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
+
+    // The venue is now genuinely on screen: polygons pushed, patch and section
+    // fade curves applied, marker layers retuned. This is the point hosts need
+    // in order to aim the camera at something — the style-loaded and
+    // map-created callbacks both fire many seconds earlier, at which point a
+    // camera move lands on tiles that have not drawn.
+    // Release anything waiting on the venue being drawn (deferred marker work,
+    // and the host's deep-link camera focus) before invoking the host callback,
+    // so a throwing host handler cannot strand those waiters forever.
+    if (!_venueRenderedCompleter.isCompleted) {
+      _venueRenderedCompleter.complete();
+    }
+    try {
+      _onVenueRenderedCb?.call();
+    } catch (e) {
+      print('onVenueRendered handler threw: $e');
+    }
   }
 
   Future<void> _refreshMarkerLayerMinZooms(
@@ -4100,42 +4742,107 @@ class MaplibreMapProvider extends BaseMapProvider {
       fadeInEnd,   1.0,
     ];
 
-    // Full property sets, not partials: setLayerProperties replaces rather than
-    // merges, so the previous partial calls left these layers with no
-    // `text-field` / `icon-image` at all and they rendered nothing — which is
-    // why only the collision dots were ever visible. Reusing the same builders
-    // as the creation path also restores the collisionBase sort bases, which
-    // the old `symbolSortKey: _kSortKeyExpression` overwrite discarded.
+    // ── WEB ONLY ────────────────────────────────────────────────────────────
+    //
+    // These calls push each layer's FULL property set instead of just the two
+    // opacity/sort keys. The part that actually matters is `symbol-sort-key`:
+    // `setLayerProperties` MERGES on both platforms (Android routes
+    // `layer#setProperties` into `Layer.setProperties`, which applies only the
+    // keys present; the web binding loops setPaintProperty/setLayoutProperty
+    // per key), so nothing was ever dropped — but a partial call that names
+    // `symbolSortKey` still OVERWRITES it, and the bare `_kSortKeyExpression`
+    // discards the per-layer base from [_collisionBase] (text 0, fixed 1000,
+    // icon 2000/3000, customRendering 4000).
+    //
+    // That base is the whole marker→dot cascade: a feature's dot sorts at
+    // `collisionBase + 0.6`, i.e. immediately after its own full marker, so the
+    // full marker wins and suppresses its own dot. Flatten every full marker to
+    // ~0 and they instead all place first as one undifferentiated block, knock
+    // each other out under `iconAllowOverlap: false`, and each loser's dot then
+    // places into the gap. For an animal that dot is the paw — which is the
+    // "paw at every zoom" defect this fixes on web.
+    //
+    // NOT applied on native. Restoring the bases re-sorts customRendering to
+    // 4000, i.e. *after* text/fixed/icon markers, so the large labelled animal
+    // composites start losing collisions to them as you zoom in and drop back
+    // to paws. Mobile shipped for a long time with the flattened sort key and
+    // that is the accepted look there, so native keeps the original partial
+    // calls verbatim. Re-unify only with a deliberate mobile design pass.
+    if (kIsWeb) {
+      await controller.setLayerProperties(
+        _normalTextMarkerLayerId,
+        _normalTextLayerProps(opacityExpression),
+      );
+
+      await controller.setLayerProperties(
+        "$_normalIconMarkerLayerId-withSectionId",
+        _normalIconLayerProps(sortBase: 3000, opacity: opacityExpression),
+      );
+
+      await controller.setLayerProperties(
+        "$_normalIconMarkerLayerId-withoutSectionId",
+        _normalIconLayerProps(sortBase: 2000, opacity: opacityExpression),
+      );
+
+      await controller.setLayerProperties(
+        _customRenderingMarkerLayerId,
+        _customRenderingLayerProps(opacityExpression),
+      );
+
+      // icon-opacity keeps the layer's own creation ramp: the partial call this
+      // stands in for only ever retuned text-opacity for the fixed markers.
+      await controller.setLayerProperties(
+        _fixedMarkerLayerId,
+        _fixedMarkerLayerProps(
+          iconOpacity: _kDefaultMarkerOpacity,
+          textOpacity: opacityExpression,
+        ),
+      );
+      return;
+    }
+
+    // Native: unchanged from before the web work — partial sets that retune the
+    // fade ramp and flatten symbol-sort-key. Deliberately kept as-is.
     await controller.setLayerProperties(
       _normalTextMarkerLayerId,
-      _normalTextLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        textOpacity: opacityExpression,
+      ),
     );
 
     await controller.setLayerProperties(
       "$_normalIconMarkerLayerId-withSectionId",
-      _normalIconLayerProps(sortBase: 3000, opacity: opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
     );
 
     await controller.setLayerProperties(
       "$_normalIconMarkerLayerId-withoutSectionId",
-      _normalIconLayerProps(sortBase: 2000, opacity: opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: opacityExpression,
+        textOpacity: opacityExpression,
+      ),
     );
 
-    // Full property sets via the shared builders (see their doc comments) —
-    // a partial update here previously dropped icon-image/icon-size/
-    // icon-anchor/icon-allow-overlap from these two layers entirely, which
-    // is why customRendering markers (animal/POI photos) never rendered:
-    // the layer had nothing left to draw and every one of them silently
-    // fell back to its collision dot, even though the icon was correctly
-    // registered and referenced in the source data.
     await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
-      _customRenderingLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        iconOpacity: opacityExpression,
+      ),
     );
 
     await controller.setLayerProperties(
       _fixedMarkerLayerId,
-      _fixedMarkerLayerProps(opacityExpression),
+      SymbolLayerProperties(
+        symbolSortKey: _kSortKeyExpression,
+        textOpacity: opacityExpression,
+      ),
     );
   }
 
@@ -4840,6 +5547,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     _isCircleLayersEnabled = false;
     _compassSub?.cancel();
     _compassSub = null;
+    _compassThrottleTimer?.cancel();
+    _compassThrottleTimer = null;
+    _pendingCompassHeading = null;
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
     _iconAnimationTimer?.cancel();
@@ -4849,20 +5559,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const String osmRasterStyle = '''
 {
   "version": 8,
-  "name": "CARTO Dark No Labels",
+  "name": "Esri Dark Gray Canvas",
   "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   "sources": {
     "osm-tiles": {
       "type": "raster",
       "tiles": [
-        "https://a.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png",
-        "https://d.basemaps.cartocdn.com/rastertiles/dark_nolabels/{z}/{x}/{y}.png"
+        "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
       ],
       "tileSize": 256,
-      "attribution": "© OpenStreetMap contributors © CARTO",
-      "maxzoom": 20
+      "attribution": "© Esri, HERE, Garmin, © OpenStreetMap contributors",
+      "maxzoom": 16
     },
     "empty": {
       "type": "geojson",

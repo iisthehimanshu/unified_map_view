@@ -34,6 +34,18 @@ abstract class BaseMapProvider {
   /// Add a marker to the map
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker);
 
+  /// Completes once the venue geometry is actually drawn — polygons pushed and
+  /// the patch fade applied.
+  ///
+  /// Deferred marker work awaits this so icon baking does not compete for the
+  /// single web thread while the polygons are still painting. Polygons take
+  /// ~850ms; markers take seconds, so letting them overlap makes the venue
+  /// appear late for no benefit.
+  ///
+  /// Defaults to already-complete, so providers that do not model a venue
+  /// render (and any future provider) behave exactly as before.
+  Future<void> get venueRendered => Future<void>.value();
+
   Future<void> addMarkers(dynamic controller, List<GeoJsonMarker> markers);
 
   Future<void> localizeUser(dynamic controller, GeoJsonMarker marker);
@@ -55,6 +67,15 @@ abstract class BaseMapProvider {
 
   /// Turn the temporary overlap override OFF for every marker it was set on.
   Future<void> clearAllMarkersAllowOverlap(dynamic controller) async {}
+
+  /// Rotate the compass-driven markers (the user puck) from [heading] instead
+  /// of the device compass; null hands them back to the live sensor.
+  ///
+  /// For a host showing a position that is not a live fix — a simulated or
+  /// replayed walk — where the recorded heading, not the phone in the user's
+  /// hand, is what the puck should point at. Providers without a compass
+  /// subscription inherit a no-op.
+  Future<void> setHeadingOverride(dynamic controller, double? heading) async {}
 
   /// Get current camera position
   Future<MapLocation?> getCurrentLocation(dynamic controller);
