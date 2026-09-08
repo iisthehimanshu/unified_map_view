@@ -247,14 +247,18 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// stops matching features.
   final Map<String, Future<void> Function()> _layerReAdders = {};
 
-  /// Last opacity actually pushed through a re-adder, per layer.
+  /// Last state actually pushed through a re-adder, per layer.
   ///
   /// A re-add is a remove + add of a real layer — visibly a flicker, and far
   /// more expensive than setting a property. [_applyLayerPolicy] runs on far
-  /// more than opacity changes (selection, camera idle, furniture setup), so
+  /// more than policy changes (selection, camera idle, furniture setup), so
   /// without this every one of those rebuilds all three extrusion layers for no
   /// change at all. Keyed absent = never pushed.
-  final Map<String, double?> _reAddedOpacity = {};
+  ///
+  /// Compares the whole [MapLayerState], not just its opacity: a config that
+  /// repaints an extrusion layer changes `properties` with the opacity untouched
+  /// and must still trigger the rebuild that is the only way to apply it.
+  final Map<String, MapLayerState> _reAddedState = {};
 
   /// Layers we have written a policy value to at least once.
   ///
@@ -264,10 +268,79 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// a layer after a host un-hides it or clears an opacity override.
   final Set<String> _everApplied = {};
 
-  MapLayerState _stateForLayer(String layerId) {
-    final group = _layerGroups[layerId];
-    return group == null ? MapLayerState.defaults : _policy.resolve(group);
+  /// The resolved settings for one style layer: defaults → family → member →
+  /// layer id, each link overriding only the fields it names.
+  ///
+  /// A layer with no [_layerGroups] entry — the basemap raster — still resolves,
+  /// it just has nothing above it to inherit from. That is what makes
+  /// `osm-tiles-layer` configurable from a config file even though it is
+  /// deliberately outside the [MapLayer] taxonomy.
+  MapLayerState _stateForLayer(String layerId) =>
+      _policy.resolveLayer(layerId, _layerGroups[layerId]);
+
+  /// [built] with the layer's configured style properties written over it.
+  ///
+  /// Property overrides cannot go through the [_OpacityResolver] the way
+  /// [MapLayerState.opacity] does: they are arbitrary keys, and a builder
+  /// constructs a typed `LayerProperties` whose fields this code cannot reach by
+  /// name. So the merge happens on the serialised form — the exact map
+  /// `setLayerProperties` would have sent — and the result is rebuilt through
+  /// the matching `fromJson`. Round-tripping is lossless: `toJson`/`fromJson`
+  /// name the same keys, and `skipNulls: false` keeps the unset ones present so
+  /// nothing is silently dropped.
+  ///
+  /// Idempotent, so it is safe on a property set that already went through
+  /// [_layerProps].
+  P _withStyleOverrides<P extends LayerProperties>(String layerId, P built) {
+    final state = _stateForLayer(layerId);
+    final overrides = MapLayerState.normalizeKeys(state.properties);
+    if (overrides.isEmpty) return built;
+
+    final json = built.toJson(skipNulls: false);
+    // `visible` owns visibility. A config naming `visibility` was warned about
+    // at parse time; restoring the renderer's value here covers a hand-built
+    // policy too, so there is exactly one answer to "is this layer drawn".
+    final visibility = json['visibility'];
+    json.addAll(overrides);
+    json['visibility'] = visibility;
+
+    final merged = switch (built) {
+      SymbolLayerProperties _ => SymbolLayerProperties.fromJson(json),
+      CircleLayerProperties _ => CircleLayerProperties.fromJson(json),
+      LineLayerProperties _ => LineLayerProperties.fromJson(json),
+      FillLayerProperties _ => FillLayerProperties.fromJson(json),
+      FillExtrusionLayerProperties _ =>
+        FillExtrusionLayerProperties.fromJson(json),
+      RasterLayerProperties _ => RasterLayerProperties.fromJson(json),
+      HillshadeLayerProperties _ => HillshadeLayerProperties.fromJson(json),
+      HeatmapLayerProperties _ => HeatmapLayerProperties.fromJson(json),
+      // Unknown LayerProperties subclass: nothing to rebuild it with, so leave
+      // the layer exactly as the renderer built it rather than dropping it.
+      _ => built,
+    };
+    return merged as P;
   }
+
+  /// [MapLibreMapController.setLayerProperties] with the layer's configured
+  /// style properties merged in.
+  ///
+  /// For the call sites that build their property set OUTSIDE [_layerProps] and
+  /// so have not been through [_withStyleOverrides] already — the ones that
+  /// deliberately push a PARTIAL set: the native branch of
+  /// [_refreshMarkerLayerMinZooms], and greyscale's raster saturation. A partial
+  /// push must still carry the host's overrides, or it silently undoes them
+  /// until the next full re-apply.
+  ///
+  /// A set that came from [_layerProps] is already merged and can be pushed
+  /// through the controller directly; sending it through here anyway is
+  /// harmless, since the merge is idempotent.
+  Future<void> _pushLayerProperties(
+    MapLibreMapController controller,
+    String layerId,
+    LayerProperties properties,
+  ) =>
+      controller.setLayerProperties(
+          layerId, _withStyleOverrides(layerId, properties));
 
   /// Registers [layerId]'s full property set as a function of the opacity
   /// resolver, and returns the properties to push right now.
@@ -279,7 +352,10 @@ class MaplibreMapProvider extends BaseMapProvider {
       String layerId, P Function(_OpacityResolver op) build) {
     _propBuilders[layerId] = build;
     final override = _stateForLayer(layerId).opacity;
-    return build((base) => override ?? base);
+    // Overrides are applied on the way OUT rather than inside the builder, so
+    // what gets registered stays the renderer's own intent and a later policy
+    // change re-resolves against the current config instead of a baked-in one.
+    return _withStyleOverrides(layerId, build((base) => override ?? base));
   }
 
   /// Registers [layerId]'s full property set without pushing it.
@@ -373,7 +449,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       final build = _propBuilders[id];
       if (build == null) continue;
       final state = _stateForLayer(id);
-      final isDefault = state.opacity == null && state.visible != false;
+      final isDefault = state.opacity == null &&
+          state.visible != false &&
+          state.properties.isEmpty;
       if (!force && isDefault && !_everApplied.contains(id)) continue;
       if (!isDefault) _everApplied.add(id);
       try {
@@ -383,16 +461,15 @@ class MaplibreMapProvider extends BaseMapProvider {
           // UNSUPPORTED_LAYER_TYPE, so rebuild the layer instead. The builder
           // registered for it reads the live policy, so the re-add picks up the
           // override on its own.
-          if (_reAddedOpacity.containsKey(id) &&
-              _reAddedOpacity[id] == state.opacity) {
+          if (_reAddedState[id] == state) {
             continue; // nothing changed — do not pay a rebuild
           }
           await reAdd();
-          _reAddedOpacity[id] = state.opacity;
-          print('layer policy: $id rebuilt <- opacity ${state.opacity}');
+          _reAddedState[id] = state;
+          print('layer policy: $id rebuilt <- $state');
         } else {
-          await controller.setLayerProperties(
-              id, build((base) => state.opacity ?? base));
+          await _pushLayerProperties(
+              controller, id, build((base) => state.opacity ?? base));
         }
       } catch (e) {
         // Usually benign: the layer is not present right now (furniture in 2D,
@@ -686,7 +763,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               // These close over layers the style reload just destroyed; the
               // re-creation below registers fresh ones.
               _layerReAdders.clear();
-              _reAddedOpacity.clear();
+              _reAddedState.clear();
 
               // Re-register all marker icons — style reload wipes addImage() calls
               //
@@ -1750,6 +1827,44 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Whether markers and the venue boundary ramp their opacity across a zoom
+  /// window, or simply draw at full strength wherever they draw at all.
+  ///
+  /// The ramps themselves are computed per venue from its fit zoom
+  /// ([_refreshPatchAboveOpacity], [_refreshMarkerLayerMinZooms]); this only
+  /// decides whether those interpolate expressions are emitted or collapsed to a
+  /// flat value. Zoom RANGES are left alone — the venue label still stops
+  /// drawing above its maxzoom, it just pops instead of fading.
+  bool _fadeEnabled = true;
+
+  /// [ramp] while the zoom fade is on; a flat, fully-opaque value when it is
+  /// off.
+  ///
+  /// Takes a closure rather than a value so the ramp is not built when it is
+  /// about to be discarded, and applies `op` itself on the off branch so both
+  /// call-site shapes collapse to the same `op(1.0)`. Those shapes differ on
+  /// purpose: where `op` sits INSIDE a ramp an opacity override lowers the
+  /// ramp's peak, and where it wraps the whole expression an override replaces
+  /// the ramp outright.
+  Object? _fadeRamp(_OpacityResolver op, Object? Function() ramp) =>
+      _fadeEnabled ? ramp() : op(1.0);
+
+  /// Turn the zoom fade ramp on markers and the venue boundary on or off.
+  ///
+  /// Mirrors [setGreyscale]: a single global switch, applied by recomputing the
+  /// curves rather than by storing a second set of them.
+  @override
+  Future<void> setFade(dynamic controller, bool enabled) async {
+    if (controller is! MapLibreMapController) return;
+    if (_fadeEnabled == enabled) return;
+    _fadeEnabled = enabled;
+    // Rebuilds the boundary/section curves AND, at its tail, the marker ones —
+    // calling _refreshMarkerLayerMinZooms alone would leave the venue label and
+    // section polygons still fading. Cheap to re-run: it no-ops until the marker
+    // layers exist, and the venue's fit zoom is recomputed from cached polygons.
+    await _refreshPatchAboveOpacity(controller, screenSize: _screenSize);
+  }
+
   /// Draw the map in greyscale, or back in full colour.
   ///
   /// Covers the basemap (via raster-saturation), polygons and polylines. Marker
@@ -1764,7 +1879,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     // The basemap is a raster layer, which DOES have a saturation property —
     // the one place this can be done without rewriting data.
     try {
-      await controller.setLayerProperties(
+      await _pushLayerProperties(controller,
         _baseMapRasterLayerId,
         RasterLayerProperties(rasterSaturation: enabled ? -1.0 : 0.0),
       );
@@ -4392,11 +4507,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       _layerProps(_patchAbovePolygonLayerId, (op) => FillLayerProperties(
         visibility: _visibility(_patchAbovePolygonLayerId),
         fillColor: ["get", "fillColorSecondary"],
-        fillOpacity: [
+        fillOpacity: _fadeRamp(op, () => [
           "interpolate", ["linear"], ["zoom"],
           fadeInZoom, op(1.0),
           fadeOutZoom, 0.0,
-        ],
+        ]),
         fillOutlineColor: ["get", "strokeColor"],
       )),
     );
@@ -4409,11 +4524,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       _layerProps(
           _patchAboveMarkerLayerId,
           (op) => _patchAboveMarkerProps(
-                opacity: op([
+                opacity: _fadeRamp(op, () => op([
                   "interpolate", ["linear"], ["zoom"],
                   fadeInZoom, 1.0,
                   fadeOutZoom, 0.0,
-                ]),
+                ])),
                 allowOverlap: true,
                 visibility: _visibility(_patchAboveMarkerLayerId),
               )),
@@ -4432,11 +4547,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       _layerProps(
           _sectionPolygonLayerId,
           (op) => _sectionPolygonProps(
-                [
+                _fadeRamp(op, () => [
                   "interpolate", ["linear"], ["zoom"],
                   fadeOutZoom + 1.5, op(1.0),
                   fadeOutZoom + 2.0, 0.0,
-                ],
+                ]),
                 visibility: _visibility(_sectionPolygonLayerId),
               )),
     );
@@ -4447,11 +4562,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       _layerProps(
           _sectionMarkerLayerId,
           (op) => _sectionMarkerProps(
-                opacity: op([
+                opacity: _fadeRamp(op, () => op([
                   "interpolate", ["linear"], ["zoom"],
                   fadeOutZoom + 1.5, 1.0,
                   fadeOutZoom + 2.0, 0.0,
-                ]),
+                ])),
                 visibility: _visibility(_sectionMarkerLayerId),
               )),
       filter: ["to-boolean", ["get", "section"]],
@@ -4492,11 +4607,17 @@ class MaplibreMapProvider extends BaseMapProvider {
     final fadeInEnd = fadeOutZoom;
     fadeOutZoom --;
 
-    final opacityExpression = [
-      "interpolate", ["linear"], ["zoom"],
-      fadeOutZoom, 0.0,
-      fadeInEnd,   1.0,
-    ];
+    // Collapsed rather than routed through [_fadeRamp]: every use below is
+    // `op(opacityExpression)` — the resolver always wraps the whole value here —
+    // so flattening the shared expression once gives the same `op(1.0)` at all
+    // eleven call sites without threading a closure through each.
+    final Object opacityExpression = _fadeEnabled
+        ? [
+            "interpolate", ["linear"], ["zoom"],
+            fadeOutZoom, 0.0,
+            fadeInEnd,   1.0,
+          ]
+        : 1.0;
 
     // ── WEB ONLY ────────────────────────────────────────────────────────────
     //
@@ -4596,7 +4717,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         (op) => _normalTextLayerProps(op(opacityExpression),
             visibility: _visibility(_normalTextMarkerLayerId),
             sortKey: _kSortKeyExpression));
-    await controller.setLayerProperties(
+    await _pushLayerProperties(controller,
       _normalTextMarkerLayerId,
       SymbolLayerProperties(
         symbolSortKey: _kSortKeyExpression,
@@ -4613,7 +4734,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             opacity: op(opacityExpression),
             visibility: _visibility(withSecId),
             sortKey: _kSortKeyExpression));
-    await controller.setLayerProperties(
+    await _pushLayerProperties(controller,
       withSecId,
       SymbolLayerProperties(
         symbolSortKey: _kSortKeyExpression,
@@ -4631,7 +4752,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             opacity: op(opacityExpression),
             visibility: _visibility(withoutSecId),
             sortKey: _kSortKeyExpression));
-    await controller.setLayerProperties(
+    await _pushLayerProperties(controller,
       withoutSecId,
       SymbolLayerProperties(
         symbolSortKey: _kSortKeyExpression,
@@ -4646,7 +4767,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         (op) => _customRenderingLayerProps(op(opacityExpression),
             visibility: _visibility(_customRenderingMarkerLayerId),
             sortKey: _kSortKeyExpression));
-    await controller.setLayerProperties(
+    await _pushLayerProperties(controller,
       _customRenderingMarkerLayerId,
       SymbolLayerProperties(
         symbolSortKey: _kSortKeyExpression,
@@ -4664,7 +4785,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                   internalVisible: !_config.immersive),
               sortKey: _kSortKeyExpression,
             ));
-    await controller.setLayerProperties(
+    await _pushLayerProperties(controller,
       _fixedMarkerLayerId,
       SymbolLayerProperties(
         symbolSortKey: _kSortKeyExpression,

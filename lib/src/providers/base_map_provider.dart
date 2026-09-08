@@ -91,10 +91,16 @@ abstract class BaseMapProvider {
   /// Providers without support inherit a no-op.
   Future<void> setGreyscale(dynamic controller, bool enabled) async {}
 
-  /// Apply a per-group visibility / opacity / tappability policy.
+  /// Turn the zoom fade ramp on markers and the venue boundary on or off.
+  ///
+  /// Providers without a fade ramp inherit a no-op.
+  Future<void> setFade(dynamic controller, bool enabled) async {}
+
+  /// Apply a layer policy: per-group and per-style-layer visibility, opacity,
+  /// tappability and raw style properties.
   ///
   /// [policy] is absolute, not a delta — it fully describes the desired state,
-  /// and groups it does not mention return to their defaults.
+  /// and layers it does not mention return to their defaults.
   ///
   /// Providers without layer-level control inherit this no-op, so only the
   /// MapLibre provider implements it.
