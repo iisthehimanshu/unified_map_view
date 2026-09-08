@@ -1,0 +1,121 @@
+# ============================================================================
+# Unified Map View — example layer/render config
+# ----------------------------------------------------------------------------
+# Every key here maps onto the existing UnifiedMapController / MapConfig API.
+# See docs/map_layers.md for the full layer inventory and the Dart loader that
+# turns this file into a MapLayerPolicy + a handful of controller calls.
+#
+# Per layer you can control:  visible (on/off) · opacity (0.0-1.0) · tappable
+# Omit any field to keep the renderer's own default.
+# Set a FAMILY (e.g. markers) to affect all its members at once; set a MEMBER
+# afterwards to override just that one.
+# ============================================================================
+
+# ---- Global render modes ---------------------------------------------------
+
+# 3D immersive mode. false = flat 2D (extrusions & 3D furniture hide).
+# Maps to MapConfig.immersive (set at map creation).
+immersive: true
+
+# Greyscale / colour. true = desaturate basemap, polygons, polylines.
+# (Marker ICONS keep their colour — they are pre-baked PNGs.)
+# Maps to controller.setGreyscale(bool).
+greyscale: false
+
+# Zoom fade ramp for markers & venue boundary.
+# NOTE: proposed toggle — needs the small setFade() addition described in
+# docs/map_layers.md §5. Ignored by the loader until that method exists.
+fade: true
+
+# Which landmark symbol types to draw.
+#   mode: all           -> every type (controller.clearMarkerTypeFilter)
+#   mode: only + types  -> only these (controller.showMarkerTypes({...}))
+# Type names accept MarkerTypes constants OR a venue's exact spelling.
+# Source/destination pins are always drawn regardless of this filter.
+symbols:
+  mode: all
+  # mode: only
+  # types:
+  #   - washroom          # matches "Male Washroom", "Accessible Washroom", ...
+  #   - lift
+  #   - first aid
+  #   - "Pharmacy / Dispensary"   # this venue's exact wording
+
+# ---- Per-layer control -----------------------------------------------------
+# Groups: families in CAPS-comments, members indented under them.
+layers:
+
+  # ===== MARKERS ============================================================
+  markers:                    # family: all markers & labels below
+    visible: true
+    tappable: true
+    # opacity: 1.0
+
+  landmarkMarkers:            # text/icon/custom markers + collision dots
+    visible: true
+    opacity: 1.0
+    tappable: true
+
+  entryMarkers:              # building-entry pins (auto-hidden in 3D)
+    visible: true
+    tappable: true
+
+  priorityMarkers:           # source & destination pins
+    visible: true
+    tappable: true
+
+  sectionLabels:
+    visible: true
+    tappable: true
+
+  subSectionLabels:
+    visible: true
+    opacity: 0.9
+    tappable: true
+
+  venueLabel:                # venue name when zoomed out
+    visible: true
+
+  # ===== POLYGONS ===========================================================
+  polygons:                  # family: all polygons
+    visible: true
+    tappable: true
+
+  rooms:                     # room/unit fills (incl. textured)
+    visible: true
+    opacity: 1.0
+    tappable: true
+
+  extrusions:                # 3D building volumes (opacity => layer rebuild)
+    visible: true
+    opacity: 1.0
+
+  # ===== ROUTE ==============================================================
+  route:                     # family: nav line + travelled overlay + polylines
+    visible: true
+
+  routeLine:                 # solid + outline + dashed nav route
+    visible: true
+    opacity: 1.0
+
+  routeTraveled:             # grey overlay on already-walked path
+    visible: true
+    opacity: 0.6
+
+  polylines:                 # generic host-drawn lines
+    visible: true
+    tappable: true
+
+  # ===== FURNITURE ==========================================================
+  furniture:                 # 2D footprint + 3D furniture (zoom >= 17.5)
+    visible: true
+    opacity: 1.0
+
+  # ===== USER LOCATION ======================================================
+  userLocation:              # position puck + accuracy circle
+    visible: true
+
+  # ===== SELECTION ==========================================================
+  selection:                 # highlight on the tapped landmark/room
+    visible: true
+    tappable: true
