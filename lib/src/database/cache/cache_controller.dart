@@ -100,10 +100,16 @@ class CacheController {
   /// basemap with no error. The bake already caches its *composited output*
   /// (_bakedIconCache / _animalIconCache / _animalSourceCache), which is where
   /// dedup belongs.
-  Future<Uint8List?> fetchWithCache(String url) => _fetch(url);
 
-  Future<Uint8List?> _fetch(String url) async {
+  Future<Uint8List?> fetchWithCache(String url) async {
+    // path_provider ships no web implementation (it isn't in the generated web
+    // plugin registrant at all), so getApplicationCacheDirectory below throws
+    // MissingPluginException on the very first line for *every* URL in a
+    // browser. Callers swallow that and fall back to their placeholder, which
+    // is why http-sourced marker icons stayed dots/paws on web while working
+    // on device.
     if (kIsWeb) return _fetchWithCacheWeb(url);
+
     final dir = await getApplicationCacheDirectory();
     final fileName = md5.convert(utf8.encode(url)).toString(); // 32 chars
     final file = File('${dir.path}/$fileName');
