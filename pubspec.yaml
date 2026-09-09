@@ -29,6 +29,11 @@ dependencies:
   hive_flutter: ^1.1.0
   path_provider: ^2.1.5
 
+  # Parses the layer/render config file (docs/map_config.example.yaml) that
+  # MapStyleConfig loads. YAML is a superset of JSON, so the same loader accepts
+  # a .json config with no extra code path.
+  yaml: ^3.1.2
+
 dev_dependencies:
   google_maps_flutter:
   hive_generator: ^2.0.0

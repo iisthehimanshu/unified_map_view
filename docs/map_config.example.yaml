@@ -1,37 +1,48 @@
 # ============================================================================
-# Unified Map View — example layer/render config
+# Unified Map View — layer / render config
 # ----------------------------------------------------------------------------
-# Every key here maps onto the existing UnifiedMapController / MapConfig API.
-# See docs/map_layers.md for the full layer inventory and the Dart loader that
-# turns this file into a MapLayerPolicy + a handful of controller calls.
+# Hand this file to the app and it drives the whole map. Load it with:
 #
-# Per layer you can control:  visible (on/off) · opacity (0.0-1.0) · tappable
-# Omit any field to keep the renderer's own default.
-# Set a FAMILY (e.g. markers) to affect all its members at once; set a MEMBER
-# afterwards to override just that one.
+#     final style = await MapStyleConfig.fromAsset('assets/map_config.yaml');
+#     UnifiedMapController(..., styleConfig: style);
+#
+# YAML or JSON — the same loader reads both.
+#
+# EVERY KEY IS OPTIONAL. A key you leave out is not applied at all, so the
+# renderer's own default stands. That is the whole contract: name only what you
+# want to change.
+#
+# WHERE TO LOOK:
+#   docs/map_layers.md  §0  which function to call for which job
+#                       §1  every layer id, and what it draws
+#                       §2  what visible/opacity/tappable/properties mean
+#                       §4  worked recipes — the same jobs in YAML and in Dart
 # ============================================================================
 
 # ---- Global render modes ---------------------------------------------------
 
 # 3D immersive mode. false = flat 2D (extrusions & 3D furniture hide).
-# Maps to MapConfig.immersive (set at map creation).
+# Creation-time only: it reaches MapConfig.immersive, so it takes effect when
+# the config is passed to the UnifiedMapController constructor.
 immersive: true
 
 # Greyscale / colour. true = desaturate basemap, polygons, polylines.
 # (Marker ICONS keep their colour — they are pre-baked PNGs.)
-# Maps to controller.setGreyscale(bool).
 greyscale: false
 
-# Zoom fade ramp for markers & venue boundary.
-# NOTE: proposed toggle — needs the small setFade() addition described in
-# docs/map_layers.md §5. Ignored by the loader until that method exists.
+# Zoom fade ramp on markers & the venue boundary.
+# false = they pop in and out instead of dissolving. Zoom RANGES are unaffected:
+# the venue name still stops drawing once you zoom past it.
 fade: true
 
 # Which landmark symbol types to draw.
-#   mode: all           -> every type (controller.clearMarkerTypeFilter)
-#   mode: only + types  -> only these (controller.showMarkerTypes({...}))
-# Type names accept MarkerTypes constants OR a venue's exact spelling.
+#   mode: all           -> every type
+#   mode: only + types  -> only these
+# Type names accept MarkerTypes constants OR a venue's exact spelling; a type
+# matches when the marker's own type CONTAINS it, case-insensitively.
 # Source/destination pins are always drawn regardless of this filter.
+# Omit the whole `symbols:` block to leave the current filter alone — that is
+# different from `mode: all`, which actively clears it.
 symbols:
   mode: all
   # mode: only
@@ -42,7 +53,52 @@ symbols:
   #   - "Pharmacy / Dispensary"   # this venue's exact wording
 
 # ---- Per-layer control -----------------------------------------------------
-# Groups: families in CAPS-comments, members indented under them.
+#
+# Keys under `layers:` are of two kinds, and they mix freely in one block:
+#
+#   * a GROUP name  — `markers`, `rooms`, `route`, ... — the semantic taxonomy.
+#     A family (markers) covers all its members; a member (rooms) covers its
+#     own style layers.
+#   * a STYLE LAYER id — `normal-polygons-layer`, `osm-tiles-layer`, ... — one
+#     exact layer. The full inventory is in docs/map_layers.md §1.
+#
+# Resolution, most specific last:
+#
+#     default  ->  family  ->  member  ->  style layer id
+#
+# Each link overrides only the fields it names, so a layer id that sets
+# `fill-color` still inherits the family's `opacity` and the renderer's
+# everything-else.
+#
+# Under each key:
+#
+#   visible:   true/false  — hide the layer outright. NOT the same as opacity 0:
+#                            a hidden marker takes no part in collision and
+#                            returns nothing from hit-testing.
+#   opacity:   0.0-1.0     — absolute override. Semantic and cross-cutting: it
+#                            resolves into EVERY opacity a layer has (a symbol
+#                            layer's icon and text alike) and replaces any zoom
+#                            fade ramp.
+#   tappable:  true/false  — false makes the layer fully inert to taps: no
+#                            highlight, no camera move, no onMarkerTap /
+#                            onPolygonTap. Programmatic selectLocation still
+#                            works.
+#
+#   ...anything else       — a raw MapLibre style property, passed straight to
+#                            the layer: fill-color, text-size, line-width,
+#                            circle-stroke-color, icon-offset, raster-opacity,
+#                            any paint or layout key the layer's type accepts.
+#                            Values may be literals ("red", 0.7, "#ff0000") or
+#                            full style expressions (["get", "fillColor"]).
+#                            Keys may be kebab-case (fill-color) or camelCase
+#                            (fillColor).
+#
+# `visibility` is NOT accepted as a raw property — use `visible`, so one field
+# owns whether a layer draws.
+#
+# A raw property must match the layer's TYPE: `fill-color` on a symbol layer
+# does nothing. docs/map_layers.md §1 lists each layer's type.
+
 layers:
 
   # ===== MARKERS ============================================================
@@ -119,3 +175,37 @@ layers:
   selection:                 # highlight on the tapped landmark/room
     visible: true
     tappable: true
+
+  # ===== INDIVIDUAL STYLE LAYERS ============================================
+  # Reach for these when a group is too broad. Each one inherits everything set
+  # above for the group it belongs to, and overrides only what it names.
+
+  # Plain room fills painted red at 0.7, while pattern-polygons-layer — the
+  # other half of `rooms` — keeps the colour the renderer gave it.
+  # normal-polygons-layer:
+  #   opacity: 0.7
+  #   fill-color: red
+  #   fill-outline-color: "#990000"
+
+  # Bigger, darker section labels without touching any other symbol layer.
+  # section-markers-layer:
+  #   text-size: 16
+  #   text-color: "#333333"
+  #   text-halo-color: "#ffffff"
+  #   text-halo-width: 1.5
+
+  # Thicker navigation route.
+  # path-solid-polyline-layer:
+  #   line-width: 8
+  #   line-color: "#0066ff"
+
+  # The accuracy circle around the user puck.
+  # normal-circle-layer:
+  #   circle-color: "#2196F3"
+  #   circle-stroke-width: 3
+
+  # The basemap raster. Outside the group taxonomy — this id is the only way to
+  # reach it.
+  # osm-tiles-layer:
+  #   raster-opacity: 0.6
+  #   raster-saturation: -0.5

@@ -27,6 +27,7 @@ class UnifiedMapController extends ChangeNotifier {
   String? onReadyLandmarkSelectionID;
 
   MapLayerPolicy _layerPolicy = MapLayerPolicy.all;
+  MapStyleConfig? _styleConfig;
 
   UnifiedMapController({
     required MapProvider initialProvider,
@@ -61,12 +62,30 @@ class UnifiedMapController extends ChangeNotifier {
     /// Applied as the layers are first created, so the map never briefly shows
     /// content the host asked to hide. Change it later with [setLayers].
     MapLayerPolicy layerPolicy = MapLayerPolicy.all,
+
+    /// A whole render configuration parsed from a config file — per-layer
+    /// settings plus the global immersive / greyscale / fade / symbol modes.
+    ///
+    /// Its [MapStyleConfig.layers] are merged OVER [layerPolicy], so a host can
+    /// keep a compiled-in baseline and let the file override parts of it. The
+    /// global modes are applied once the map exists (see [applyStyleConfig]);
+    /// [MapStyleConfig.immersive] is creation-time and reaches
+    /// [MapConfig.immersive] directly.
+    MapStyleConfig? styleConfig,
   }) {
     AppConfig.url = url;
     AppConfig.setLanguage(value: languageCode);
     _providers.addAll(providers);
     _currentProvider = initialProvider;
-    _layerPolicy = layerPolicy;
+    _styleConfig = styleConfig;
+    _layerPolicy = styleConfig == null
+        ? layerPolicy
+        : layerPolicy.merge(styleConfig.layers);
+    if (styleConfig?.greyscale != null) _greyscale = styleConfig!.greyscale!;
+    if (styleConfig?.fade != null) _fadeEnabled = styleConfig!.fade!;
+    if (styleConfig?.symbolsSpecified == true) {
+      _markerTypeFilter = styleConfig!.symbolTypes;
+    }
 
     _config = MapConfig(
         initialLocation: initialLocation,
@@ -81,7 +100,8 @@ class UnifiedMapController extends ChangeNotifier {
       onPolygonTap: onPolygon??onPolygonTap,
       onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback,
       onVenueRendered: onVenueRendered,
-      initialLayerPolicy: layerPolicy,
+      initialLayerPolicy: _layerPolicy,
+      immersive: styleConfig?.immersive ?? true,
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
@@ -130,8 +150,48 @@ class UnifiedMapController extends ChangeNotifier {
   /// Called when map is created
   void onMapCreated(dynamic controller) {
     _currentMapController = controller;
+    _applyInitialRenderModes();
     _annotationController.renderVenue();
     // fitBoundsToGeoJson();
+  }
+
+  /// Push the global render modes the host asked for before the map existed.
+  ///
+  /// The layer policy needs none of this — it reaches the provider through
+  /// [MapConfig.initialLayerPolicy] and is baked in as each layer is created.
+  /// Greyscale, fade and the symbol filter have no such creation-time seam, so
+  /// they are pushed here, at the earliest moment there is a controller to push
+  /// them to.
+  ///
+  /// Only a NON-DEFAULT value is pushed. Each condition below is the provider's
+  /// own default inverted, so a host that passed no config — or one whose config
+  /// omits these keys — makes no call at all from here and the renderer keeps
+  /// the state it has always had.
+  ///
+  /// Deliberately fire-and-forget: [onMapCreated] is a synchronous callback from
+  /// the platform view, and none of these can be awaited without blocking it.
+  /// Each is also safe this early — greyscale and the fade curves are re-derived
+  /// from provider state as the venue's layers and sources are built afterwards,
+  /// so an early push is honoured rather than overwritten.
+  void _applyInitialRenderModes() {
+    Future<void> apply() async {
+      if (_greyscale) {
+        await currentProviderImplementation
+            .setGreyscale(_currentMapController, true);
+      }
+      if (!_fadeEnabled) {
+        await currentProviderImplementation
+            .setFade(_currentMapController, false);
+      }
+      if (_markerTypeFilter != null) {
+        await currentProviderImplementation.setMarkerTypeFilter(
+            _currentMapController, _markerTypeFilter);
+      }
+    }
+
+    apply().catchError((Object e) {
+      print('initial render modes failed: $e');
+    });
   }
 
   /// Called when style is created
@@ -391,6 +451,53 @@ class UnifiedMapController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Whether markers and the venue boundary fade in and out across a zoom
+  /// window.
+  bool get isFadeEnabled => _fadeEnabled;
+  bool _fadeEnabled = true;
+
+  /// Turn the zoom fade ramp on markers and the venue boundary on or off.
+  ///
+  /// ```dart
+  /// controller.setFade(false);   // labels pop in instead of fading
+  /// ```
+  ///
+  /// Only the opacity ramp is affected. Zoom RANGES stand: the venue name still
+  /// stops drawing once you are zoomed past it, it just appears and disappears
+  /// cleanly rather than dissolving.
+  Future<void> setFade(bool enabled) async {
+    _fadeEnabled = enabled;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setFade(_currentMapController, enabled);
+    notifyListeners();
+  }
+
+  /// The render configuration this controller was built with, if any.
+  MapStyleConfig? get styleConfig => _styleConfig;
+
+  /// Apply a whole render configuration — per-layer settings plus the global
+  /// immersive / greyscale / fade / symbol modes.
+  ///
+  /// Its layer settings are merged over the current policy rather than replacing
+  /// it, and a global mode the file does not mention is left alone, so a partial
+  /// config changes only what it names.
+  ///
+  /// [MapStyleConfig.immersive] is NOT applied here: 3D is fixed when the map is
+  /// built (`MapConfig.immersive`), which is why a config passed to the
+  /// constructor is the only way it takes effect.
+  ///
+  /// ```dart
+  /// final style = await MapStyleConfig.fromAsset('assets/map_config.yaml');
+  /// await controller.applyStyleConfig(style);
+  /// ```
+  Future<void> applyStyleConfig(MapStyleConfig config) async {
+    _styleConfig = config;
+    await updateLayers(config.layers);
+    if (config.greyscale != null) await setGreyscale(config.greyscale!);
+    if (config.fade != null) await setFade(config.fade!);
+    if (config.symbolsSpecified) await showMarkerTypes(config.symbolTypes);
+  }
+
   /// Which map content is currently drawn, how strongly, and what responds to
   /// taps.
   MapLayerPolicy get layerPolicy => _layerPolicy;
@@ -423,6 +530,52 @@ class UnifiedMapController extends ChangeNotifier {
         opacity: opacity,
         tappable: tappable,
         clearOpacity: clearOpacity,
+      ),
+    ));
+  }
+
+  /// Change one STYLE LAYER, leaving every other layer and every unspecified
+  /// field alone.
+  ///
+  /// Where [setLayer] speaks the semantic taxonomy — "every room polygon" —
+  /// this addresses one exact layer by the ids in [MapStyleLayers], and can set
+  /// any MapLibre paint or layout property on it, not just the three semantic
+  /// fields:
+  ///
+  /// ```dart
+  /// controller.setStyleLayer(
+  ///   MapStyleLayers.normalPolygons,
+  ///   opacity: 0.7,
+  ///   properties: {'fill-color': 'red', 'fill-outline-color': '#900'},
+  /// );
+  /// ```
+  ///
+  /// Properties merge with any already set on the layer; keys not named keep
+  /// the renderer's own value. Pass [clearProperties] to drop them all — an
+  /// empty map means "add nothing", not "remove what is there". Keys may be
+  /// kebab-case or camelCase.
+  ///
+  /// A layer-level setting wins over anything [setLayer] said about the group it
+  /// belongs to, since it is the more specific of the two.
+  Future<void> setStyleLayer(
+    String layerId, {
+    bool? visible,
+    double? opacity,
+    bool? tappable,
+    Map<String, Object?>? properties,
+    bool clearOpacity = false,
+    bool clearProperties = false,
+  }) {
+    final current = _layerPolicy.layers[layerId] ?? const MapLayerState();
+    return _pushLayerPolicy(_layerPolicy.withLayer(
+      layerId,
+      current.copyWith(
+        visible: visible,
+        opacity: opacity,
+        tappable: tappable,
+        properties: properties,
+        clearOpacity: clearOpacity,
+        clearProperties: clearProperties,
       ),
     ));
   }

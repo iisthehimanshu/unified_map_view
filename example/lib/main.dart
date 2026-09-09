@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/maplibre.dart';
 import 'package:unified_map_view/mappls.dart';
@@ -16,24 +17,52 @@ void main() async {
   MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
   MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
   await UnifiedMapViewPackage.initialize(venueName: 'AIGHospital');
-  runApp(const GeoJsonExampleApp());
+
+  // Loaded HERE, not in initState, because the controller wants it at
+  // construction: `styleConfig` seeds MapConfig.initialLayerPolicy, so every
+  // layer is created in the configured state instead of drawing the default
+  // first and being restyled a frame later. initState is synchronous and cannot
+  // await an asset.
+  //
+  // A missing or malformed file must not cost the demo its map, so this falls
+  // back to "change nothing" and prints why.
+  var styleConfig = MapStyleConfig.none;
+  try {
+    styleConfig = await MapStyleConfig.fromAsset(_kMapConfigAsset);
+    print('HARNESS config loaded <- $_kMapConfigAsset  $styleConfig');
+  } catch (e) {
+    print('HARNESS config load failed ($_kMapConfigAsset): $e — '
+        'falling back to renderer defaults');
+  }
+
+  runApp(GeoJsonExampleApp(styleConfig: styleConfig));
 }
 
+/// The config file the developer maintains. Declared under `assets/` in
+/// example/pubspec.yaml.
+const String _kMapConfigAsset = 'assets/map_config.yaml';
+
 class GeoJsonExampleApp extends StatelessWidget {
-  const GeoJsonExampleApp({Key? key}) : super(key: key);
+  const GeoJsonExampleApp({Key? key, required this.styleConfig})
+      : super(key: key);
+
+  final MapStyleConfig styleConfig;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'GeoJSON Map Example',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
-      home: const GeoJsonMapScreen(),
+      home: GeoJsonMapScreen(styleConfig: styleConfig),
     );
   }
 }
 
 class GeoJsonMapScreen extends StatefulWidget {
-  const GeoJsonMapScreen({Key? key}) : super(key: key);
+  const GeoJsonMapScreen({Key? key, required this.styleConfig})
+      : super(key: key);
+
+  final MapStyleConfig styleConfig;
 
   @override
   State<GeoJsonMapScreen> createState() => _GeoJsonMapScreenState();
@@ -57,6 +86,18 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   bool _fadeOnPath = false;
 
   bool _greyscale = false;
+
+  /// Mirrors controller.isFadeEnabled — the zoom fade ramp on markers and the
+  /// venue boundary.
+  bool _fadeEnabled = true;
+
+  /// What the loader could not make sense of in the config file, if anything.
+  /// Surfaced in the harness rather than only printed, since a silently ignored
+  /// key is the failure mode a config file invites.
+  List<String> _configWarnings = const [];
+
+  /// Whether a runtime re-apply of the config file is in flight.
+  bool _reloadingConfig = false;
 
   Timer? _moveUserTimer;
 
@@ -146,14 +187,58 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
       url: "https://dev.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
-          MapProvider.mappls: MapplsMapProvider()}
+          MapProvider.mappls: MapplsMapProvider()},
+      // The whole config file in one argument: per-layer settings seed the
+      // layers as they are created, and the global immersive / greyscale /
+      // fade / symbol modes are pushed as soon as there is a map controller.
+      styleConfig: widget.styleConfig,
     );
-    
+
+    // Mirror the file's global modes into the harness switches, so they show
+    // the effective value rather than their own hardcoded default.
+    _greyscale = widget.styleConfig.greyscale ?? _greyscale;
+    _fadeEnabled = widget.styleConfig.fade ?? _fadeEnabled;
+    _configWarnings = widget.styleConfig.warnings;
+
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
     // TEST: drop a lone plain-asset icon marker to isolate icon rendering in maplibre 0.26
     // Future.delayed(const Duration(seconds: 6), () {
     //   _addTestMarker();
     // });
+  }
+
+  /// Re-read the config file and apply it to the live map.
+  ///
+  /// The runtime half of the same config: [MapStyleConfig.immersive] is fixed
+  /// when the map is built and is the one key this cannot change, so editing
+  /// `immersive` needs a hot restart. Everything else — per-layer settings, the
+  /// global modes — takes effect immediately.
+  ///
+  /// `applyStyleConfig` MERGES the file's layer settings over the live policy
+  /// rather than replacing it, so whatever the preset chips and sliders above
+  /// have set stays put unless the file names the same field. Press 'all' first
+  /// for a clean slate.
+  Future<void> _reloadConfig() async {
+    setState(() => _reloadingConfig = true);
+    try {
+      // rootBundle caches every string it has loaded, so without this the
+      // reload would re-apply the copy read at startup and edits to the file
+      // would look like they did nothing.
+      rootBundle.evict(_kMapConfigAsset);
+      final config = await MapStyleConfig.fromAsset(_kMapConfigAsset);
+      await _unifiedMapController.applyStyleConfig(config);
+      setState(() {
+        _greyscale = config.greyscale ?? _greyscale;
+        _fadeEnabled = config.fade ?? _fadeEnabled;
+        _configWarnings = config.warnings;
+      });
+      print('HARNESS config reloaded -> $config');
+    } catch (e) {
+      setState(() => _configWarnings = ['load failed: $e']);
+      print('HARNESS config reload failed: $e');
+    } finally {
+      setState(() => _reloadingConfig = false);
+    }
   }
 
   Future<void> _applyPreset(String name, MapLayerPolicy policy) async {
@@ -496,6 +581,41 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                       ),
                   ]),
                 ),
+                // ── config file ──────────────────────────────────────
+                Row(children: [
+                  const Text('fade: ',
+                      style: TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.bold)),
+                  Switch(
+                    value: _fadeEnabled,
+                    onChanged: (v) {
+                      setState(() => _fadeEnabled = v);
+                      _unifiedMapController.setFade(v);
+                      print('HARNESS fade -> $v');
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: _reloadingConfig ? null : _reloadConfig,
+                    icon: _reloadingConfig
+                        ? const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.description, size: 14),
+                    label: const Text('reload config',
+                        style: TextStyle(fontSize: 11)),
+                  ),
+                ]),
+                if (_configWarnings.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      'config warnings:\n  ${_configWarnings.join("\n  ")}',
+                      style: TextStyle(
+                          fontSize: 10, color: Colors.orange.shade900),
+                    ),
+                  ),
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   child: Row(children: [
@@ -571,7 +691,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               ],
             ),
           ),
-
           // Map
           Expanded(
             child: Stack(
