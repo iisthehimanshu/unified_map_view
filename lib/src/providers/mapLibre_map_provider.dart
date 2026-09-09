@@ -2160,8 +2160,6 @@ class MaplibreMapProvider extends BaseMapProvider {
         final props = item['properties'] as Map<String, dynamic>? ?? {};
         return _furnitureRefOf(props) != null;
       }).toList();
-      print('addFurniture: ${furnitureItems.length}/${items.length} items '
-          'carry a usable 3dRef');
       if (furnitureItems.isEmpty) return;
 
       _furnitureItems.addAll(furnitureItems);
@@ -2466,6 +2464,21 @@ class MaplibreMapProvider extends BaseMapProvider {
     final shape = p['shape'] as String? ?? 'box';
     final ox = double.tryParse('${p['ox'] ?? 0}') ?? 0.0;
     final oz = double.tryParse('${p['oz'] ?? 0}') ?? 0.0;
+
+    // "polygon" -> an explicit footprint given as a "points" list of [x, z]
+    // corners in local metres, relative to the part centre. Used for shells
+    // whose outline is not a simple rectangle (e.g. an MRI housing body).
+    if (shape == 'polygon') {
+      final pts = p['points'] as List?;
+      if (pts == null || pts.isEmpty) return const [];
+      return pts
+          .whereType<List>()
+          .map<List<double>>((pt) => [
+                ox + (double.tryParse('${pt[0]}') ?? 0.0),
+                oz + (double.tryParse('${pt.length > 1 ? pt[1] : 0}') ?? 0.0),
+              ])
+          .toList();
+    }
 
     if (shape == 'cylinder' || shape == 'sphere') {
       final r = double.tryParse('${p['r'] ?? 0}') ?? 0.0;
