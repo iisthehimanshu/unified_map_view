@@ -218,6 +218,9 @@ class GeoJsonPolyline {
 }
 
 class GeoJsonMarker {
+  // ------------------------------
+// Selection animation properties
+// ------------------------------
   final String id;
   MapLocation position;
   final String? title;
