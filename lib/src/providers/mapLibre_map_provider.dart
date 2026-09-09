@@ -540,18 +540,30 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// MapLibre expression: negate priority so higher number → lower sort key → wins.
   static const List<dynamic> _kSortKeyExpression = [
-    "*",
-    ["get", _kPriorityKey],
-    -1,
+    "+",
+    // Priority dominates: negated so a HIGHER priority number sorts lower and
+    // therefore places first and wins collision.
+    // coalesce because the rotation source builds its own features and writes
+    // neither key; a bare `get` there yields null and taints the arithmetic.
+    ["*", ["coalesce", ["get", _kPriorityKey], 0], -1],
+    // Stable tiebreaker, < 0.5. See 'sortBias' in setGeoJsonSource for why an
+    // all-equal sort key makes a whole layer vanish as one block. coalesce
+    // because the rotation source builds its own features and has no bias.
+    ["coalesce", ["get", "sortBias"], 0],
   ];
 
-  /// Markers whose full marker only appears from zoom 18 (text markers with
-  /// collisionBase 0 and icon-with-sectionId markers with collisionBase 3000).
-  /// Used to pick the dot's opacity ramp; see [enableMarkerLayers].
+  /// Markers whose full marker only appears from zoom 18 — text markers
+  /// (collisionBase 0), whose layer still carries `minzoom: 18`. Their dot is
+  /// held at 0 until 18 so nothing is drawn where the full marker cannot be.
+  ///
+  /// icon-with-sectionId (base 3000) used to be in here too. Its layer's z18
+  /// gate was removed, so it now fades in 12→14 like every other icon marker
+  /// and its dot follows the ordinary ramp; leaving it listed here would hide
+  /// the dot below 18 and break the fallback. Used to pick the dot's opacity
+  /// ramp; see [enableMarkerLayers].
   static const List<dynamic> _kDotStepGroupExpression = [
     "any",
     ["==", ["get", "collisionBase"], 0],
-    ["==", ["get", "collisionBase"], 3000],
   ];
 
   // ---------------------------------------------------------------------------
@@ -804,20 +816,14 @@ class MaplibreMapProvider extends BaseMapProvider {
                   // the URL-icon fetches overlap, which reads as noticeably
                   // faster. Sequencing is preserved: every icon is registered
                   // before enable*Layers below.
-                  await Future.wait(iconMarkers.map((marker) async {
-                    try {
-                      await _loadMarkerIcon(_controller!, marker);
-                    } catch (e) {
-                      print('Warning: failed to reload icon for ${marker.id}: $e');
-                    }
-                  }));
+                  // Tracked, so an icon that fails to re-register after a
+                  // style reload demotes its marker to a text marker instead
+                  // of leaving it pointing at a wiped image.
+                  await Future.wait(iconMarkers.map(
+                      (marker) => _loadAndTrackMarkerIcon(_controller!, marker)));
                 } else {
                   for (final marker in iconMarkers) {
-                    try {
-                      await _loadMarkerIcon(_controller!, marker);
-                    } catch (e) {
-                      print('Warning: failed to reload icon for ${marker.id}: $e');
-                    }
+                    await _loadAndTrackMarkerIcon(_controller!, marker);
                   }
                 }
               });
@@ -907,6 +913,9 @@ class MaplibreMapProvider extends BaseMapProvider {
                 print("tilt $tilt");
                 print("zoom $zoom");
                 print("bearing $bearing");
+                if (_kDebugLayerCensus) {
+                  unawaited(_debugLayerCensus(_controller!, zoom));
+                }
                 // The labelled animal composites are only drawn from
                 // _kLabelZoomThreshold up, so they are baked the first time the
                 // camera actually settles there instead of during load. Not
@@ -1281,7 +1290,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker, {String? selectedMarkerId}) async {
     if (controller is MapLibreMapController) {
-      await _loadMarkerIcon(controller, marker);
+      await _loadAndTrackMarkerIcon(controller, marker);
       _symbols.add(marker);
       try {
         setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
@@ -1352,13 +1361,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       // label is painted into its own PNG (UnifiedMarkerCreator keys its cache
       // on the text), so the images are genuinely unique — neither dedup nor
       // concurrency can help, since web is single-threaded.
-      await Future.wait(otherMarkers.map((marker) async {
-        try {
-          await _loadMarkerIcon(controller, marker);
-        } catch (e) {
-          print("error in addMarkers $e");
-        }
-      }));
+      // The result is recorded, not discarded: a marker whose image did not
+      // register must not be built claiming an icon. See
+      // [_iconRegistrationFailed].
+      await Future.wait(otherMarkers.map(
+          (marker) => _loadAndTrackMarkerIcon(controller, marker)));
       try {
         // Pushed immediately: animal markers reference their paw placeholder
         // (or the shared icon, if it's already loaded from an earlier call)
@@ -1472,6 +1479,134 @@ class MaplibreMapProvider extends BaseMapProvider {
     await _setGeoJsonCircle(controller);
   }
 
+  /// Marker ids whose icon image could not be registered with the style.
+  ///
+  /// [_loadMarkerIcon] answers this already, but every caller used to discard
+  /// its return value, so a marker whose image never uploaded was still built
+  /// claiming `icon`. It then sat in an icon layer referencing an image that
+  /// does not exist, and MapLibre drew its label with the icon silently
+  /// omitted — a marker that renders as a bare floating label.
+  ///
+  /// Membership is what [_hasUsableIcon] consults, so a failure routes the
+  /// marker to the text layer instead. Entries are removed on a later success:
+  /// a style reload re-runs registration, and an asset that was broken server
+  /// side may have been re-uploaded since.
+  final Set<String> _iconRegistrationFailed = {};
+
+  /// Whether [marker] has an icon that is actually drawable right now.
+  ///
+  /// Animal markers are exempt: they always resolve through
+  /// [_animalDisplayIconId], which falls back to the paw placeholder, so they
+  /// are never icon-less even before their photo arrives.
+  bool _hasUsableIcon(GeoJsonMarker marker) =>
+      marker.assetPath != null &&
+      (_isAnimalMarker(marker) || !_iconRegistrationFailed.contains(marker.id));
+
+  /// [_loadMarkerIcon] plus bookkeeping for [_iconRegistrationFailed].
+  ///
+  /// Use this rather than calling [_loadMarkerIcon] directly anywhere the
+  /// result feeds a source push, so the feature and the registered images
+  /// cannot disagree.
+  Future<bool> _loadAndTrackMarkerIcon(
+      MapLibreMapController controller, GeoJsonMarker marker) async {
+    bool ok = false;
+    try {
+      ok = await _loadMarkerIcon(controller, marker);
+    } catch (e) {
+      print('icon registration threw for ${marker.id}: $e');
+      ok = false;
+    }
+    if (ok) {
+      _iconRegistrationFailed.remove(marker.id);
+    } else if (!_isAnimalMarker(marker)) {
+      if (_iconRegistrationFailed.add(marker.id)) {
+        // Title first: the id is a composite blob, and the only question worth
+        // answering from a log is WHICH landmark on screen has no icon.
+        print('NOICON "${marker.title}" asset=${marker.assetPath}');
+      }
+    }
+    return ok;
+  }
+
+  /// Set true to log, on every camera idle, what each marker layer is actually
+  /// DRAWING and whether any rendered feature references an unregistered image.
+  ///
+  /// This is what identified the empty-200 icon bug: it distinguishes a feature
+  /// filtered out of a layer, one that lost its collision, and one drawn without
+  /// its icon — three states that look identical on screen. Off by default: it
+  /// runs eight full-viewport queryRenderedFeatures calls per idle.
+  static const bool _kDebugLayerCensus = false;
+
+  /// Every image id successfully handed to addImage(). Read by the census.
+  /// Compared against the `icon` of each rendered feature to prove whether a
+  /// missing icon is an unregistered image or a placement loss.
+  final Set<String> _dbgRegisteredImages = {};
+
+  /// TEMPORARY DIAGNOSTIC — remove once the marker-persistence work is closed.
+  ///
+  /// Counts what each marker layer is actually DRAWING at the current zoom, by
+  /// querying rendered features over the whole viewport. Rendered means it
+  /// survived collision, so this distinguishes the three things that look
+  /// identical on screen: a feature filtered out of a layer, a feature in the
+  /// layer that lost its collision, and a feature drawn as a dot instead.
+  ///
+  /// Also reports which layer is drawing the currently selected marker, which
+  /// is the question the source alone cannot answer.
+  String _dbgReg(String id) { _dbgRegisteredImages.add(id); return id; }
+
+  Future<void> _debugLayerCensus(
+      MapLibreMapController controller, double zoom) async {
+    final layerIds = <String>[
+      _dotMarkerLayerId,
+      _normalTextMarkerLayerId,
+      "$_normalIconMarkerLayerId-withSectionId",
+      "$_normalIconMarkerLayerId-withoutSectionId",
+      _customRenderingMarkerLayerId,
+      _fixedMarkerLayerId,
+      _priorityMarkerLayerId,
+      _selectedMarkerLayerId,
+    ];
+    // Deliberately far larger than any viewport: queryRenderedFeaturesInRect
+    // takes screen coordinates whose scale (logical vs device pixels) differs
+    // per platform, and a rect built from _screenSize returned 0 everywhere
+    // while markers were plainly drawn. Oversizing removes the unit question.
+    final rect = const Rect.fromLTWH(-5000, -5000, 20000, 20000);
+    final selectedId = selectedLocation?.marker?.id;
+    final counts = <String, int>{};
+    String selectedDrawnIn = 'NONE';
+    final missingIcons = <String>{};
+    for (final id in layerIds) {
+      try {
+        final feats = await controller.queryRenderedFeaturesInRect(
+            rect, <String>[id], null);
+        counts[id] = feats.length;
+        for (final f in feats) {
+          final props = (f is Map) ? f['properties'] : null;
+          if (props is! Map) continue;
+          if (selectedId != null && props['id'] == selectedId) {
+            selectedDrawnIn = id;
+          }
+          // The question this whole diagnostic exists to answer: is the icon
+          // image this feature asks for actually registered right now?
+          final iconId = props['icon'];
+          if (iconId is String && !_dbgRegisteredImages.contains(iconId)) {
+            missingIcons.add(iconId);
+          }
+        }
+      } catch (e) {
+        counts[id] = -1; // layer absent right now
+      }
+    }
+    final summary = counts.entries
+        .map((e) =>
+            '${e.key.replaceAll("-markers-layer", "").replaceAll("-marker-layer", "")}=${e.value}')
+        .join(' ');
+    print('CENSUS z=${zoom.toStringAsFixed(2)} $summary '
+        'selected=${selectedId ?? "-"} drawnIn=$selectedDrawnIn '
+        'registeredImages=${_dbgRegisteredImages.length} '
+        'MISSING=${missingIcons.length}${missingIcons.isEmpty ? "" : " ${missingIcons.take(4).toList()}"}');
+  }
+
   /// Reads the numeric priority from a marker's properties.
   /// Returns 0 if the property is absent or not a number.
   int _markerPriority(GeoJsonMarker marker) {
@@ -1526,7 +1661,12 @@ class MaplibreMapProvider extends BaseMapProvider {
             ' types=${_markerTypeFilter!.join(",")}');
       }
 
-      final features = visible.map((marker) {
+      // Denominator for the per-feature sort bias below. Guarded so a single
+      // marker cannot divide by zero.
+      final biasDenominator = visible.isEmpty ? 1 : visible.length;
+
+      final features = visible.indexed.map((entry) {
+        final (index, marker) = entry;
         final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
             ? "center"
             : "bottom";
@@ -1559,7 +1699,12 @@ class MaplibreMapProvider extends BaseMapProvider {
                 marker.title ?? "", TextFormat.smartWrap)
                 : '',
             'id': marker.id,
-            if (marker.assetPath != null)
+            // _hasUsableIcon, not `assetPath != null`: an asset path the server
+            // never served leaves the image unregistered, and claiming `icon`
+            // anyway puts the feature in an icon layer pointing at nothing —
+            // MapLibre then draws the label with no icon. Dropping the property
+            // routes it to the text layer, which is what it actually is.
+            if (_hasUsableIcon(marker))
               'icon': _isAnimalMarker(marker)
                   ? _animalDisplayIconId(marker)
                   : marker.id,
@@ -1591,12 +1736,38 @@ class MaplibreMapProvider extends BaseMapProvider {
             // Numeric priority used by symbolSortKey: higher value → higher sort
             // precedence (wins collision). Negated inside the layer expression.
             _kPriorityKey: _markerPriority(marker),
+            // Stable per-feature tiebreaker for symbolSortKey.
+            //
+            // Without it the sort key is the priority term alone, and this
+            // venue's data sets priority to 0 on every marker — so every
+            // feature in a layer ties on the exact same key. MapLibre then
+            // places tied symbols in tile-arrival order, which is not stable
+            // across the tile regeneration a zoom causes, so a collision never
+            // resolves as "this marker loses": the whole tied layer is one
+            // undifferentiated block and its outcome flips together. That is
+            // the markers vanishing and reappearing as a group.
+            //
+            // Normalised by the feature count so the bias stays under 0.5 at
+            // any venue size. That bound is load-bearing: the dot layer sorts
+            // at `collisionBase + 0.6`, so keeping every bias below 0.6 means
+            // each full marker still sorts ahead of every dot and the
+            // marker → dot cascade is untouched.
+            //
+            // Index order is arbitrary but STABLE, which is the property that
+            // matters here. To make the winner meaningful rather than merely
+            // deterministic, set real `priority` values in the venue data —
+            // the priority term already outranks this bias.
+            'sortBias': index / biasDenominator * 0.5,
             // Per-feature base of the full marker's symbolSortKey. The dot layer
             // reuses this (+ a fractional offset) so each feature's dot is
             // placed right after its own full marker in the global collision
             // pass, yielding the marker → dot → hidden fallback cascade.
             'collisionBase': _collisionBase(
-              hasIcon: marker.assetPath != null,
+              // Must use the same predicate as the `icon` property above, or a
+              // marker lands in the text layer while its collisionBase claims
+              // it is an icon marker — the dot would then sort against a base
+              // no layer is using and the marker → dot cascade breaks for it.
+              hasIcon: _hasUsableIcon(marker),
               bearing: effectiveBearing,
               customRendering: marker.customRendering,
               sectionId: hasSectionId,
@@ -2983,7 +3154,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         marker.anchor = baked.anchor;
         _smallIconBytes[smallId] = bytes;
       }
-      await controller.addImage(smallId, bytes);
+      await controller.addImage(_dbgReg(smallId), bytes);
       _registeredSmallIconIds.add(smallId);
       return true;
     } catch (e) {
@@ -3017,7 +3188,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         marker.anchor = baked.anchor;
         _animalIconCache[contentKey] = composite;
       }
-      await controller.addImage(imageId, composite);
+      await controller.addImage(_dbgReg(imageId), composite);
       _loadedAnimalIcons.add(contentKey);
       return true;
     } catch (e) {
@@ -3157,7 +3328,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _loadDotImage(MapLibreMapController controller) async {
     try {
       final bd = await rootBundle.load(_kDotAssetPath);
-      await controller.addImage(_kDotImageId, bd.buffer.asUint8List());
+      await controller.addImage(_dbgReg(_kDotImageId), bd.buffer.asUint8List());
       _registeredDotImageIds.add(_kDotImageId);
     } catch (e) {
       print("_loadDotImage $e");
@@ -3179,7 +3350,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         bytes = bd.buffer.asUint8List();
       }
       if (bytes != null) {
-        await controller.addImage(path, bytes);
+        await controller.addImage(_dbgReg(path), bytes);
         _registeredDotImageIds.add(path);
       }
     } catch (e) {
@@ -3207,10 +3378,10 @@ class MaplibreMapProvider extends BaseMapProvider {
             ? null
             : _smallIconBytes[baked.smallIconId]);
     await Future.wait([
-      controller.addImage(marker.id, baked.main),
-      if (smallBytes != null) controller.addImage(baked.smallIconId, smallBytes),
+      controller.addImage(_dbgReg(marker.id), baked.main),
+      if (smallBytes != null) controller.addImage(_dbgReg(baked.smallIconId), smallBytes),
       if (baked.selected != null)
-        controller.addImage("${marker.id}-selected", baked.selected!),
+        controller.addImage(_dbgReg("${marker.id}-selected"), baked.selected!),
     ]);
     if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
     _smallIconIds[marker.id] = baked.smallIconId;
@@ -3293,7 +3464,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             museum: RenderingTheme.current.isMuseum,
             stopName: marker.properties?['stopName'] ?? "",
           );
-          await controller.addImage(marker.id, iconBytes);
+          await controller.addImage(_dbgReg(marker.id), iconBytes);
           return true;
         }else{
           double fontSize = marker.properties?["fontSize"]??14.5;
@@ -3392,8 +3563,25 @@ class MaplibreMapProvider extends BaseMapProvider {
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
         }
-        if (iconBytes != null) {
-          await controller.addImage(marker.id, iconBytes);
+        // A server upload that is missing or truncated must not cost the marker
+        // its icon. `imageFile` wins the assetPath slot outright during parsing
+        // (`assetPath ??= asset.assetPath`), so the bundled artwork the landmark
+        // type already matched — cafeteria, waiting area, counter … — is carried
+        // on the marker as fallbackAssetPath purely for this moment.
+        if ((iconBytes == null || iconBytes.isEmpty) &&
+            marker.fallbackAssetPath != null &&
+            marker.fallbackAssetPath != marker.assetPath) {
+          try {
+            final bd = await rootBundle.load(marker.fallbackAssetPath!);
+            iconBytes = bd.buffer.asUint8List();
+            print('icon fallback: "${marker.title}" -> '
+                '${marker.fallbackAssetPath} (remote asset unavailable)');
+          } catch (e) {
+            print('icon fallback failed for "${marker.title}": $e');
+          }
+        }
+        if (iconBytes != null && iconBytes.isNotEmpty) {
+          await controller.addImage(_dbgReg(marker.id), iconBytes);
           return true;
         }
       }
@@ -3453,6 +3641,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   ///
   /// Not applied to the custom-rendering layer (layer 3, the animal/POI
   /// composites): its ramp was never rescaled and both platforms share it.
+  /// Global multiplier on every marker `iconSize`: 0.5 on web, full size on
+  /// native.
+  ///
+  /// Native is deliberately back at 1.0 — the sizes shipped before the web work
+  /// and the ones this venue is tuned for. Dropping it to 0.5 does make the
+  /// collision fights milder, but that is a side effect, not the fix: dots are
+  /// cleared by the marker→dot cascade in [_refreshMarkerLayerMinZooms], which
+  /// works at any size. Do not shrink icons to solve a collision problem.
+  ///
+  /// Call sites stay written as `<value> * _kIconScale` so the native number in
+  /// the source is the real one.
   static final double _kIconScale = kIsWeb ? 0.5 : 1.0;
 
   /// Default zoom fade used when the layers are first created; replaced at
@@ -3521,6 +3720,23 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
         textAllowOverlap: false,
         iconAllowOverlap: false,
+        // Icon-led placement. Both of these default to false, and that default
+        // is what produced the reported bug: an icon that loses its quad — an
+        // image not in the style at that moment, or a placement the icon loses
+        // while the label wins — leaves the LABEL drawn on its own. The
+        // landmark then reads as a bare floating word, and it flips back as you
+        // zoom because placement is recomputed on every pass.
+        //
+        //   icon-optional: false  -> no icon, no symbol. Never a naked label.
+        //   text-optional: true   -> a label that cannot fit is dropped while
+        //                            the icon stays.
+        //
+        // So the marker has exactly one behaviour: it draws its icon (with the
+        // label when there is room), or it is not drawn at all and its dot
+        // takes over through the cascade. That is what reads as stable when you
+        // zoom, and it is why a marker never half-renders.
+        iconOptional: false,
+        textOptional: true,
         iconOpacity: opacity,
         textOpacity: opacity,
       );
@@ -3797,6 +4013,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
+          // A selected feature is never a dot. Its full marker is now forced
+          // visible by the selected layer regardless of collision, so the dot
+          // is no longer a fallback for it — it would just sit behind the
+          // highlighted icon.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
         belowLayerId: null,
@@ -3844,13 +4065,31 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          // A selected marker is drawn by the selected layer instead. Without
+          // this, the SAME feature is rendered twice — here at base 3000 and
+          // again at 8000 — and because both layers have iconAllowOverlap
+          // false, the two copies collide with each other. Which one wins is
+          // re-decided on every placement pass, so the icon flickers between
+          // its plain and highlighted form. Layer 3 has carried this exclusion
+          // all along; these two layers were missed.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["to-boolean", ["get", "sectionId"]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
         ],
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _normalTextMarkerLayerId),
-        minzoom: 18.0,
+        // No minzoom. This layer used to be gated at z18, so an icon+label
+        // landmark drew nothing below 18 and popped in at 18 — the swap that
+        // reads as the marker "refreshing" on a zoom in/out. The gate is not
+        // needed to keep the map uncluttered: these markers participate in the
+        // same collision pass as every other icon layer, so a crowded plan
+        // thins itself out and each loser falls back to its own dot via the
+        // cascade in [_refreshMarkerLayerMinZooms].
+        //
+        // Paired with dropping base 3000 from [_kDotStepGroupExpression] — the
+        // dot ramp has to stop special-casing these or the dot stays hidden
+        // below 18 and the fallback has nothing to draw.
       );
 
       // Layer 2b: Normal icon markers — without sectionId
@@ -3872,6 +4111,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          // Same double-draw exclusion as the withSectionId layer above.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["!", ["to-boolean", ["get", "sectionId"]]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
@@ -4043,7 +4284,10 @@ class MaplibreMapProvider extends BaseMapProvider {
                   18.3, 0.75,
                   22.0, 0.75,
                 ]
-              : 1.5,
+              // The one call site 6f387c5 left as a bare number. Written with
+              // the multiplier like every other layer so it tracks _kIconScale
+              // instead of silently staying at double the reference size.
+              : 1.5 * _kIconScale,
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,
@@ -4140,8 +4384,18 @@ class MaplibreMapProvider extends BaseMapProvider {
             13,  0.2 * _kIconScale,
             18,  1.5 * _kIconScale,
           ],
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
+          // Selection is an explicit user act, so it outranks collision: the
+          // marker the user tapped stays drawn at every zoom until it is
+          // deselected, rather than being placed out by whatever happens to be
+          // near it. At most one feature matches this layer's filter, so
+          // forcing overlap here cannot crowd the plan the way it would on a
+          // layer covering every landmark.
+          //
+          // This is also the second half of the flicker fix: with overlap
+          // forced on, the selected copy no longer competes for placement at
+          // all, so there is nothing left to re-decide between frames.
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
           iconOpacity: op(null),
         )),
         filter: ["to-boolean", ["get", "isSelected"]],
@@ -4619,178 +4873,76 @@ class MaplibreMapProvider extends BaseMapProvider {
           ]
         : 1.0;
 
-    // ── WEB ONLY ────────────────────────────────────────────────────────────
+    // ── BOTH PLATFORMS ──────────────────────────────────────────────────────
     //
-    // These calls push each layer's FULL property set instead of just the two
-    // opacity/sort keys. The part that actually matters is `symbol-sort-key`:
-    // `setLayerProperties` MERGES on both platforms (Android routes
-    // `layer#setProperties` into `Layer.setProperties`, which applies only the
-    // keys present; the web binding loops setPaintProperty/setLayoutProperty
-    // per key), so nothing was ever dropped — but a partial call that names
-    // `symbolSortKey` still OVERWRITES it, and the bare `_kSortKeyExpression`
-    // discards the per-layer base from [_collisionBase] (text 0, fixed 1000,
-    // icon 2000/3000, customRendering 4000).
+    // Pushes each layer's FULL property set rather than the two opacity/sort
+    // keys. The load-bearing line is `symbol-sort-key`: a partial call that
+    // names it OVERWRITES it, and the bare `_kSortKeyExpression` discards the
+    // per-layer base from [_collisionBase] (text 0, fixed 1000, icon 2000/3000,
+    // customRendering 4000).
     //
-    // That base is the whole marker→dot cascade: a feature's dot sorts at
-    // `collisionBase + 0.6`, i.e. immediately after its own full marker, so the
-    // full marker wins and suppresses its own dot. Flatten every full marker to
-    // ~0 and they instead all place first as one undifferentiated block, knock
-    // each other out under `iconAllowOverlap: false`, and each loser's dot then
-    // places into the gap. For an animal that dot is the paw — which is the
-    // "paw at every zoom" defect this fixes on web.
+    // That base is the whole marker→dot cascade. A feature's dot sorts at
+    // `collisionBase + 0.6` — immediately behind ITS OWN full marker — so the
+    // marker places first, wins, and suppresses its own dot. Flatten every full
+    // marker to ~0 and that pairing is gone: markers all tie while dots keep
+    // their per-feature bases, so a dot is no longer suppressed by the marker it
+    // belongs to and lingers beside it as you zoom in.
     //
-    // NOT applied on native. Restoring the bases re-sorts customRendering to
-    // 4000, i.e. *after* text/fixed/icon markers, so the large labelled animal
-    // composites start losing collisions to them as you zoom in and drop back
-    // to paws. Mobile shipped for a long time with the flattened sort key and
-    // that is the accepted look there, so native keeps the original partial
-    // calls verbatim. Re-unify only with a deliberate mobile design pass.
-    if (kIsWeb) {
-      await controller.setLayerProperties(
-        _normalTextMarkerLayerId,
-        _layerProps(
-            _normalTextMarkerLayerId,
-            (op) => _normalTextLayerProps(op(opacityExpression),
-                visibility: _visibility(_normalTextMarkerLayerId))),
-      );
-
-      await controller.setLayerProperties(
-        "$_normalIconMarkerLayerId-withSectionId",
-        _layerProps(
-            "$_normalIconMarkerLayerId-withSectionId",
-            (op) => _normalIconLayerProps(
-                sortBase: 3000,
-                opacity: op(opacityExpression),
-                visibility:
-                    _visibility("$_normalIconMarkerLayerId-withSectionId"))),
-      );
-
-      await controller.setLayerProperties(
-        "$_normalIconMarkerLayerId-withoutSectionId",
-        _layerProps(
-            "$_normalIconMarkerLayerId-withoutSectionId",
-            (op) => _normalIconLayerProps(
-                sortBase: 2000,
-                opacity: op(opacityExpression),
-                visibility: _visibility(
-                    "$_normalIconMarkerLayerId-withoutSectionId"))),
-      );
-
-      await controller.setLayerProperties(
-        _customRenderingMarkerLayerId,
-        _layerProps(
-            _customRenderingMarkerLayerId,
-            (op) => _customRenderingLayerProps(op(opacityExpression),
-                visibility: _visibility(_customRenderingMarkerLayerId))),
-      );
-
-      // icon-opacity keeps the layer's own creation ramp: the partial call this
-      // stands in for only ever retuned text-opacity for the fixed markers.
-      // Both are wrapped, so a host override collapses them to the same value.
-      await controller.setLayerProperties(
-        _fixedMarkerLayerId,
-        _layerProps(
-            _fixedMarkerLayerId,
-            (op) => _fixedMarkerLayerProps(
-                  iconOpacity: op(_kDefaultMarkerOpacity),
-                  textOpacity: op(opacityExpression),
-                  visibility: _visibility(_fixedMarkerLayerId,
-                      internalVisible: !_config.immersive),
-                )),
-      );
-      return;
-    }
-
-    // Native: unchanged from before the web work — partial sets that retune the
-    // fade ramp and flatten symbol-sort-key. Deliberately kept as-is; the only
-    // change here is that each opacity value passes through the layer's opacity
-    // resolver, so a host override substitutes for it.
-    //
-    // Each layer also re-registers its full property set carrying THIS branch's
-    // flattened sort key rather than the creation-time per-layer base, so that
-    // if a policy is later applied the state it regenerates is the one native
-    // actually wants. (Registering is not pushing: a host that never uses the
-    // layer API triggers no extra write, and native behaviour is unchanged.)
-    final textOp = _opFor(_normalTextMarkerLayerId);
-    _registerLayerProps(
-        _normalTextMarkerLayerId,
-        (op) => _normalTextLayerProps(op(opacityExpression),
-            visibility: _visibility(_normalTextMarkerLayerId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
+    // Was web-only; native ran the partial branch below, as ea627c6 does. So
+    // this is the one place the reference build is NOT the behaviour we want —
+    // its flattened key is why the collision dots never clear. Restoring the
+    // bases on native is a deliberate divergence from ea627c6.
+    await controller.setLayerProperties(
       _normalTextMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        textOpacity: textOp(opacityExpression),
-      ),
+      _layerProps(
+          _normalTextMarkerLayerId,
+          (op) => _normalTextLayerProps(op(opacityExpression),
+              visibility: _visibility(_normalTextMarkerLayerId))),
     );
 
-    final withSecId = "$_normalIconMarkerLayerId-withSectionId";
-    final withSecOp = _opFor(withSecId);
-    _registerLayerProps(
-        withSecId,
-        (op) => _normalIconLayerProps(
-            sortBase: 3000,
-            opacity: op(opacityExpression),
-            visibility: _visibility(withSecId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
-      withSecId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: withSecOp(opacityExpression),
-        textOpacity: withSecOp(opacityExpression),
-      ),
+    await controller.setLayerProperties(
+      "$_normalIconMarkerLayerId-withSectionId",
+      _layerProps(
+          "$_normalIconMarkerLayerId-withSectionId",
+          (op) => _normalIconLayerProps(
+              sortBase: 3000,
+              opacity: op(opacityExpression),
+              visibility:
+                  _visibility("$_normalIconMarkerLayerId-withSectionId"))),
     );
 
-    final withoutSecId = "$_normalIconMarkerLayerId-withoutSectionId";
-    final withoutSecOp = _opFor(withoutSecId);
-    _registerLayerProps(
-        withoutSecId,
-        (op) => _normalIconLayerProps(
-            sortBase: 2000,
-            opacity: op(opacityExpression),
-            visibility: _visibility(withoutSecId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
-      withoutSecId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: withoutSecOp(opacityExpression),
-        textOpacity: withoutSecOp(opacityExpression),
-      ),
+    await controller.setLayerProperties(
+      "$_normalIconMarkerLayerId-withoutSectionId",
+      _layerProps(
+          "$_normalIconMarkerLayerId-withoutSectionId",
+          (op) => _normalIconLayerProps(
+              sortBase: 2000,
+              opacity: op(opacityExpression),
+              visibility: _visibility(
+                  "$_normalIconMarkerLayerId-withoutSectionId"))),
     );
 
-    final customOp = _opFor(_customRenderingMarkerLayerId);
-    _registerLayerProps(
-        _customRenderingMarkerLayerId,
-        (op) => _customRenderingLayerProps(op(opacityExpression),
-            visibility: _visibility(_customRenderingMarkerLayerId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
+    await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: customOp(opacityExpression),
-      ),
+      _layerProps(
+          _customRenderingMarkerLayerId,
+          (op) => _customRenderingLayerProps(op(opacityExpression),
+              visibility: _visibility(_customRenderingMarkerLayerId))),
     );
 
-    final fixedOp = _opFor(_fixedMarkerLayerId);
-    _registerLayerProps(
-        _fixedMarkerLayerId,
-        (op) => _fixedMarkerLayerProps(
-              iconOpacity: op(_kDefaultMarkerOpacity),
-              textOpacity: op(opacityExpression),
-              visibility: _visibility(_fixedMarkerLayerId,
-                  internalVisible: !_config.immersive),
-              sortKey: _kSortKeyExpression,
-            ));
-    await _pushLayerProperties(controller,
+    // icon-opacity keeps the layer's own creation ramp: the partial call this
+    // stands in for only ever retuned text-opacity for the fixed markers.
+    // Both are wrapped, so a host override collapses them to the same value.
+    await controller.setLayerProperties(
       _fixedMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        textOpacity: fixedOp(opacityExpression),
-      ),
+      _layerProps(
+          _fixedMarkerLayerId,
+          (op) => _fixedMarkerLayerProps(
+                iconOpacity: op(_kDefaultMarkerOpacity),
+                textOpacity: op(opacityExpression),
+                visibility: _visibility(_fixedMarkerLayerId,
+                    internalVisible: !_config.immersive),
+              )),
     );
   }
 

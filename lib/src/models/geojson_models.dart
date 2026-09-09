@@ -226,6 +226,17 @@ class GeoJsonMarker {
   final String? title;
   final String? snippet;
   final String? assetPath; // Add icon name/identifier
+
+  /// Bundled artwork to fall back on when [assetPath] cannot be loaded.
+  ///
+  /// A landmark with an `imageFile` property takes its icon from the server,
+  /// and that URL wins the [assetPath] slot outright. When the upload is
+  /// missing or truncated the marker was left with no icon at all — even
+  /// though [RenderingUtilities.getAssetForLandmark] had already matched a
+  /// perfectly good bundled icon for its type (cafeteria, waiting area, …).
+  /// Keeping that match here lets the renderer recover instead of drawing a
+  /// bare label.
+  final String? fallbackAssetPath;
   /// Asset/url for the smaller "dot" icon shown when this marker loses a
   /// collision (falls back to the default room dot when null).
   final String? dotAssetPath;
@@ -246,6 +257,7 @@ class GeoJsonMarker {
     this.title,
     this.snippet,
     this.assetPath,
+    this.fallbackAssetPath,
     this.dotAssetPath,
     this.iconName,
     this.priority,
@@ -265,6 +277,7 @@ class GeoJsonMarker {
     String? title,
     String? snippet,
     String? assetPath,
+    String? fallbackAssetPath,
     String? dotAssetPath,
     String? iconName,
     bool? priority,
@@ -282,6 +295,7 @@ class GeoJsonMarker {
       title: title ?? this.title,
       snippet: snippet ?? this.snippet,
       assetPath: assetPath ?? this.assetPath,
+      fallbackAssetPath: fallbackAssetPath ?? this.fallbackAssetPath,
       dotAssetPath: dotAssetPath ?? this.dotAssetPath,
       iconName: iconName ?? this.iconName,
       priority: priority ?? this.priority,
@@ -423,6 +437,15 @@ class GeoJsonMarker {
       title:  parsedTitle,
       snippet: "",
       assetPath: assetPath,
+      // Always the bundled match, even when a server imageFile won above, and
+      // the generic pin when the landmark type has no bundled artwork of its
+      // own (pharmacy, info desk … have none).
+      //
+      // Safe to set unconditionally: the renderer only consults this after a
+      // load failure on a NON-NULL assetPath, so a marker that was authored
+      // without any icon stays a text marker and does not sprout a pin.
+      fallbackAssetPath:
+          asset?.assetPath ?? LandmarkAssetType.genericMarker.assetPath,
       iconName: iconName,
       properties: feature.properties,
       textVisibility: textVisibility??true,

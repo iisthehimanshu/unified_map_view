@@ -18,24 +18,26 @@ void main() async {
   MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
   await UnifiedMapViewPackage.initialize(venueName: 'AIGHospital');
 
-  // Loaded HERE, not in initState, because the controller wants it at
-  // construction: `styleConfig` seeds MapConfig.initialLayerPolicy, so every
-  // layer is created in the configured state instead of drawing the default
-  // first and being restyled a frame later. initState is synchronous and cannot
-  // await an asset.
+  // Deliberately NOT loaded here. The map starts on the renderer's own
+  // defaults so the config's effect is a visible before/after: press 'reload
+  // config' in the harness to read $_kMapConfigAsset and apply it to the live
+  // map.
   //
-  // A missing or malformed file must not cost the demo its map, so this falls
-  // back to "change nothing" and prints why.
-  var styleConfig = MapStyleConfig.none;
-  try {
-    styleConfig = await MapStyleConfig.fromAsset(_kMapConfigAsset);
-    print('HARNESS config loaded <- $_kMapConfigAsset  $styleConfig');
-  } catch (e) {
-    print('HARNESS config load failed ($_kMapConfigAsset): $e — '
-        'falling back to renderer defaults');
-  }
-
-  runApp(GeoJsonExampleApp(styleConfig: styleConfig));
+  // Seeding it at construction is still the right thing for a real host app —
+  // it creates every layer already in the configured state instead of drawing
+  // the default first and restyling a frame later — so the load is kept here,
+  // commented, rather than deleted:
+  //
+  //   var styleConfig = MapStyleConfig.none;
+  //   try {
+  //     styleConfig = await MapStyleConfig.fromAsset(_kMapConfigAsset);
+  //   } catch (e) { /* fall back to renderer defaults */ }
+  //   runApp(GeoJsonExampleApp(styleConfig: styleConfig));
+  //
+  // The one key this costs is `immersive`: it reaches MapConfig.immersive at
+  // construction and applyStyleConfig deliberately cannot change it, so it now
+  // always takes its default. Testing `immersive` needs the seed above.
+  runApp(const GeoJsonExampleApp(styleConfig: MapStyleConfig.none));
 }
 
 /// The config file the developer maintains. Declared under `assets/` in
@@ -514,86 +516,75 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: [
-                    const Text('grey: ',
-                        style: TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.bold)),
-                    Switch(
-                      value: _greyscale,
-                      onChanged: (v) {
-                        setState(() => _greyscale = v);
-                        _unifiedMapController.setGreyscale(v);
-                        print('HARNESS greyscale -> $v');
-                      },
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    const SizedBox(width: 12),
-                    TextButton(
-                      onPressed: () => _unifiedMapController.setMapFade(true),
-                      child: const Text('fade now',
-                          style: TextStyle(fontSize: 11)),
-                    ),
-                    TextButton(
-                      onPressed: () => _unifiedMapController.setMapFade(false),
-                      child: const Text('unfade',
-                          style: TextStyle(fontSize: 11)),
-                    ),
-                    const SizedBox(width: 12),
-                    const Text('types: ',
-                        style: TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.bold)),
-                    if (_availableTypes.isEmpty)
-                      TextButton(
-                        onPressed: _refreshAvailableTypes,
-                        child: const Text('load types',
-                            style: TextStyle(fontSize: 11)),
-                      ),
-                    ..._availableTypes.map(_typeChip),
-                    // Exercises the BROAD path: a compile-time constant that
-                    // no venue spells exactly, matched by substring. Here it
-                    // should catch Male/Female/Accessible Washroom together.
-                    TextButton(
-                      onPressed: () async {
-                        setState(() {
-                          _markerTypes
-                            ..clear()
-                            ..add(MarkerTypes.washroom);
-                        });
-                        await _unifiedMapController
-                            .showMarkerTypes({MarkerTypes.washroom});
-                        print('HARNESS marker types -> '
-                            'MarkerTypes.washroom (broad)');
-                      },
-                      child: const Text('const: washroom',
-                          style: TextStyle(fontSize: 11)),
-                    ),
-                    if (_availableTypes.isNotEmpty)
-                      TextButton(
-                        onPressed: () async {
-                          setState(_markerTypes.clear);
-                          await _unifiedMapController.clearMarkerTypeFilter();
-                          print('HARNESS marker types -> ALL');
-                        },
-                        child: const Text('all types',
-                            style: TextStyle(fontSize: 11)),
-                      ),
-                  ]),
-                ),
+                // SingleChildScrollView(
+                //   scrollDirection: Axis.horizontal,
+                //   child: Row(children: [
+                //     const Text('grey: ',
+                //         style: TextStyle(
+                //             fontSize: 11, fontWeight: FontWeight.bold)),
+                //     Switch(
+                //       value: _greyscale,
+                //       onChanged: (v) {
+                //         setState(() => _greyscale = v);
+                //         _unifiedMapController.setGreyscale(v);
+                //         print('HARNESS greyscale -> $v');
+                //       },
+                //       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                //     ),
+                //     const SizedBox(width: 12),
+                //     TextButton(
+                //       onPressed: () => _unifiedMapController.setMapFade(true),
+                //       child: const Text('fade now',
+                //           style: TextStyle(fontSize: 11)),
+                //     ),
+                //     TextButton(
+                //       onPressed: () => _unifiedMapController.setMapFade(false),
+                //       child: const Text('unfade',
+                //           style: TextStyle(fontSize: 11)),
+                //     ),
+                //     const SizedBox(width: 12),
+                //     const Text('types: ',
+                //         style: TextStyle(
+                //             fontSize: 11, fontWeight: FontWeight.bold)),
+                //     if (_availableTypes.isEmpty)
+                //       TextButton(
+                //         onPressed: _refreshAvailableTypes,
+                //         child: const Text('load types',
+                //             style: TextStyle(fontSize: 11)),
+                //       ),
+                //     ..._availableTypes.map(_typeChip),
+                //     // Exercises the BROAD path: a compile-time constant that
+                //     // no venue spells exactly, matched by substring. Here it
+                //     // should catch Male/Female/Accessible Washroom together.
+                //     TextButton(
+                //       onPressed: () async {
+                //         setState(() {
+                //           _markerTypes
+                //             ..clear()
+                //             ..add(MarkerTypes.washroom);
+                //         });
+                //         await _unifiedMapController
+                //             .showMarkerTypes({MarkerTypes.washroom});
+                //         print('HARNESS marker types -> '
+                //             'MarkerTypes.washroom (broad)');
+                //       },
+                //       child: const Text('const: washroom',
+                //           style: TextStyle(fontSize: 11)),
+                //     ),
+                //     if (_availableTypes.isNotEmpty)
+                //       TextButton(
+                //         onPressed: () async {
+                //           setState(_markerTypes.clear);
+                //           await _unifiedMapController.clearMarkerTypeFilter();
+                //           print('HARNESS marker types -> ALL');
+                //         },
+                //         child: const Text('all types',
+                //             style: TextStyle(fontSize: 11)),
+                //       ),
+                //   ]),
+                // ),
                 // ── config file ──────────────────────────────────────
                 Row(children: [
-                  const Text('fade: ',
-                      style: TextStyle(
-                          fontSize: 11, fontWeight: FontWeight.bold)),
-                  Switch(
-                    value: _fadeEnabled,
-                    onChanged: (v) {
-                      setState(() => _fadeEnabled = v);
-                      _unifiedMapController.setFade(v);
-                      print('HARNESS fade -> $v');
-                    },
-                  ),
                   const SizedBox(width: 8),
                   TextButton.icon(
                     onPressed: _reloadingConfig ? null : _reloadConfig,
@@ -616,26 +607,26 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                           fontSize: 10, color: Colors.orange.shade900),
                     ),
                   ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(children: [
-                    _presetChip('all', MapLayerPolicy.all),
-                    _presetChip('polygonsOnly', MapLayerPolicy.polygonsOnly),
-                    _presetChip(
-                        'polygonsOnlyNoTap', MapLayerPolicy.polygonsOnlyNoTap),
-                    // Control for the tap gate: pixel-identical to `all`, but
-                    // every group inert. Isolates tappability from visibility.
-                    _presetChip(
-                        'allNoTap',
-                        const MapLayerPolicy({
-                          MapLayer.markers: MapLayerState.untappable,
-                          MapLayer.polygons: MapLayerState.untappable,
-                          MapLayer.selection: MapLayerState.untappable,
-                          MapLayer.userLocation: MapLayerState.untappable,
-                          MapLayer.route: MapLayerState.untappable,
-                        })),
-                  ]),
-                ),
+                // SingleChildScrollView(
+                //   scrollDirection: Axis.horizontal,
+                //   child: Row(children: [
+                //     _presetChip('all', MapLayerPolicy.all),
+                //     _presetChip('polygonsOnly', MapLayerPolicy.polygonsOnly),
+                //     _presetChip(
+                //         'polygonsOnlyNoTap', MapLayerPolicy.polygonsOnlyNoTap),
+                //     // Control for the tap gate: pixel-identical to `all`, but
+                //     // every group inert. Isolates tappability from visibility.
+                //     _presetChip(
+                //         'allNoTap',
+                //         const MapLayerPolicy({
+                //           MapLayer.markers: MapLayerState.untappable,
+                //           MapLayer.polygons: MapLayerState.untappable,
+                //           MapLayer.selection: MapLayerState.untappable,
+                //           MapLayer.userLocation: MapLayerState.untappable,
+                //           MapLayer.route: MapLayerState.untappable,
+                //         })),
+                //   ]),
+                // ),
                 Row(children: [
                   const Text('polygons opacity  ',
                       style: TextStyle(fontSize: 11)),
@@ -663,19 +654,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                         _polygonOverridden = false;
                       });
                       _unifiedMapController.setLayer(MapLayer.polygons,
-                          clearOpacity: true);
-                    },
-                    child: const Text('clear', style: TextStyle(fontSize: 11)),
-                  ),
-                ]),
-                Row(children: [
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _subSectionOpacity = 1.0;
-                        _subSectionOverridden = false;
-                      });
-                      _unifiedMapController.setLayer(MapLayer.subSections,
                           clearOpacity: true);
                     },
                     child: const Text('clear', style: TextStyle(fontSize: 11)),

@@ -75,7 +75,15 @@ class CacheController {
         await Future<void>.delayed(Duration.zero);
         try {
           final response = await http.get(Uri.parse(url));
-          if (response.statusCode == 200) return response.bodyBytes;
+          if (response.statusCode == 200) {
+            // Same empty-200 rejection as the native path above.
+            if (response.bodyBytes.isEmpty) {
+              print("fetchWithCache: $url -> HTTP 200 but EMPTY body "
+                  "(asset is missing server-side)");
+              return null;
+            }
+            return response.bodyBytes;
+          }
           print("fetchWithCache: $url -> HTTP ${response.statusCode}");
         } catch (e) {
           // Most likely CORS or an offline tab; either way the caller keeps its
@@ -114,10 +122,20 @@ class CacheController {
     final fileName = md5.convert(utf8.encode(url)).toString(); // 32 chars
     final file = File('${dir.path}/$fileName');
 
-    // Always serve from disk if available (works offline forever)
+    // Always serve from disk if available (works offline forever).
+    //
+    // An EMPTY cached file is treated as a miss and deleted rather than served.
+    // The write below used to persist a zero-byte 200 response, and once that
+    // landed on disk the marker's icon could never recover on any later run —
+    // the cache hit short-circuits the network every time. Deleting it here
+    // gives a re-uploaded asset a chance to be picked up.
     if (await file.exists()) {
       final bytes = await file.readAsBytes();
-      return bytes;
+      if (bytes.isNotEmpty) return bytes;
+      print('fetchWithCache: cached file for $url is empty — discarding');
+      try {
+        await file.delete();
+      } catch (_) {}
     }
 
     final assetPath = 'assets/icons/$fileName'; // 👈 define your folder
@@ -138,14 +156,33 @@ class CacheController {
     //   return null;
     // }
 
-    // First time — fetch from network AND cache it
+    // First time — fetch from network AND cache it.
+    //
+    // A 200 carrying an EMPTY body is a failure, not a success. This server
+    // serves 0 bytes for some uploads, and returning those bytes made the
+    // caller believe it had an image: the marker was then built claiming an
+    // icon that could never be registered, and MapLibre drew its label with no
+    // icon. Empty is rejected here and never cached, so the marker is routed
+    // as icon-less and a re-uploaded asset can still recover later.
+    //
+    // Every failure path logs. This whole method used to be `catch (_) {}` with
+    // a bare `return null`, which is why a server-side problem was invisible
+    // from the app for as long as it was.
     try {
       final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
+        if (response.bodyBytes.isEmpty) {
+          print('fetchWithCache: $url -> HTTP 200 but EMPTY body '
+              '(asset is missing server-side; not cached)');
+          return null;
+        }
         await file.writeAsBytes(response.bodyBytes); // cache for next time
         return response.bodyBytes;
       }
-    } catch (_) {}
+      print('fetchWithCache: $url -> HTTP ${response.statusCode}');
+    } catch (e) {
+      print('fetchWithCache: $url -> $e');
+    }
     return null; // not cached + no internet
   }
 
