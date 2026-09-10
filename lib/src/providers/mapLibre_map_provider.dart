@@ -1587,6 +1587,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _refreshPatchFadeIfStale(
       MapLibreMapController controller) async {
     if (!_isPolygonLayersEnabled) return;
+    // The marker layers have to exist first. This runs off a polygon push,
+    // which lands between enablePolygonLayers() (sets _isPolygonLayersEnabled)
+    // and enableMarkerLayers() (sets _isClusteringEnabled) — so on the polygon
+    // flag alone it fires into a style that has no marker layers yet, and
+    // _refreshPatchAboveOpacity below then *creates* _patchAboveMarkerLayerId
+    // out of order. enableMarkerLayers hits "Layer patch-above-markers-layer
+    // already exists", and because its whole body is one try/catch that throw
+    // skips every remaining layer, _isClusteringEnabled, and the _symbols
+    // re-push — i.e. the venue renders with no markers at all.
+    // Nothing is lost by waiting: enableMarkerLayers calls back in when done.
+    if (!_isClusteringEnabled) return;
     final boundaryPolygons = _polygons.where((p) =>
         p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
     final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
@@ -3409,6 +3420,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         final symbols = [..._symbols];
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
+
+      // The marker layers are up now, so any fade recompute that was skipped
+      // by the guard in _refreshPatchFadeIfStale can safely run. No-ops when
+      // the polygons have not landed yet — that push calls back in itself.
+      await _refreshPatchFadeIfStale(controller);
     } catch (e, stack) {
       print('Error enabling marker layers: $e');
       print('Stack trace: $stack');
@@ -3807,8 +3823,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       fadeInEnd,   1.0,
     ];
 
-    // ── WEB ONLY ────────────────────────────────────────────────────────────
-    //
     // These calls push each layer's FULL property set instead of just the two
     // opacity/sort keys. The part that actually matters is `symbol-sort-key`:
     // `setLayerProperties` MERGES on both platforms (Android routes
@@ -3824,16 +3838,23 @@ class MaplibreMapProvider extends BaseMapProvider {
     // full marker wins and suppresses its own dot. Flatten every full marker to
     // ~0 and they instead all place first as one undifferentiated block, knock
     // each other out under `iconAllowOverlap: false`, and each loser's dot then
-    // places into the gap. For an animal that dot is the paw — which is the
-    // "paw at every zoom" defect this fixes on web.
+    // places into the gap — the map shows dots where the real markers belong,
+    // at every zoom, because zooming in cannot separate features that are all
+    // tied on the same sort key.
     //
-    // NOT applied on native. Restoring the bases re-sorts customRendering to
-    // 4000, i.e. *after* text/fixed/icon markers, so the large labelled animal
-    // composites start losing collisions to them as you zoom in and drop back
-    // to paws. Mobile shipped for a long time with the flattened sort key and
-    // that is the accepted look there, so native keeps the original partial
-    // calls verbatim. Re-unify only with a deliberate mobile design pass.
-    if (kIsWeb) {
+    // Applied on BOTH platforms as of 2026-09-08. It was web-only while native
+    // never actually reached this code: the call ran before the marker layers
+    // existed and died on LAYER_NOT_FOUND, so native kept the bases it was
+    // created with. Fixing that ordering (see the guard in
+    // _refreshPatchFadeIfStale) let the flattening land on native for the first
+    // time and dots replaced the markers — so the restoration has to cover
+    // native too.
+    //
+    // Zoo caveat: restoring the bases re-sorts customRendering to 4000, i.e.
+    // after text/fixed/icon markers, so large labelled animal composites can
+    // lose collisions as you zoom in and fall back to paws. If that shows up,
+    // fix it by giving the animal composites their own base rather than by
+    // flattening every layer again.
       await controller.setLayerProperties(
         _normalTextMarkerLayerId,
         _normalTextLayerProps(opacityExpression),
@@ -3863,52 +3884,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           textOpacity: opacityExpression,
         ),
       );
-      return;
-    }
-
-    // Native: unchanged from before the web work — partial sets that retune the
-    // fade ramp and flatten symbol-sort-key. Deliberately kept as-is.
-    await controller.setLayerProperties(
-      _normalTextMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        textOpacity: opacityExpression,
-      ),
-    );
-
-    await controller.setLayerProperties(
-      "$_normalIconMarkerLayerId-withSectionId",
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: opacityExpression,
-        textOpacity: opacityExpression,
-      ),
-    );
-
-    await controller.setLayerProperties(
-      "$_normalIconMarkerLayerId-withoutSectionId",
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: opacityExpression,
-        textOpacity: opacityExpression,
-      ),
-    );
-
-    await controller.setLayerProperties(
-      _customRenderingMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: opacityExpression,
-      ),
-    );
-
-    await controller.setLayerProperties(
-      _fixedMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        textOpacity: opacityExpression,
-      ),
-    );
   }
 
   double _calculateFitZoom(List<GeoJsonPolygon> polygons, {Size? screenSize}) {
