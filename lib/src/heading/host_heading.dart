@@ -42,7 +42,6 @@ class HostHeading {
   /// own, and a provider swap or a puck rebuild resubscribes, which a
   /// single-subscription stream would reject.
   static void provide(Stream<CompassEvent>? heading) {
-    print('PUCK-DIAG host: provide(${heading != null})');  // TEMP
     _stream.value = heading == null || heading.isBroadcast
         ? heading
         : heading.asBroadcastStream();

@@ -50,7 +50,6 @@ class PredefinedMarkers{
   static GeoJsonMarker getUserMarker(MapLocation location, String id,
       {UserMarkerStyle? style}){
     final bool directional = HeadingSource.isDirectional;
-    print('PUCK-DIAG marker: directional=$directional');  // TEMP
     // Size is a rendering concern, not a directional one: web draws the puck at
     // half scale either way.
     final Size defaultSize =
