@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../../../unified_map_view.dart';
+import '../../heading/heading_source.dart';
 import '../LandmarkAssetType.dart';
 
 class PredefinedMarkers{
@@ -22,31 +23,53 @@ class PredefinedMarkers{
     );
   }
 
+  /// Asset drawn for the puck when no heading is available, and so nothing can
+  /// point it: a plain disc, which reads honestly as "you are here, facing
+  /// unknown".
+  static const String _nonDirectionalUserAsset =
+      'packages/unified_map_view/assets/markers/userMarkerBlue.png';
+
   /// The user puck.
   ///
-  /// [style] lets a host swap the puck's artwork at runtime — pass null (the
-  /// default) for the stock blue arrow. It is deliberately generic: any asset
-  /// path the root bundle can resolve works, including one shipped by another
-  /// package as `packages/<name>/...`. Applied here rather than at the call
-  /// sites because this is the single place the puck marker is built, so an
-  /// override automatically survives the marker being re-created on a floor
+  /// Two independent choices are made here.
+  ///
+  /// *Artwork and rotation* follow [HeadingSource.isDirectional]: the
+  /// directional arrow, turned by the compass, wherever a heading actually
+  /// reaches the map — every native build, and a web build whose host relays
+  /// one in over its bridge. In a plain browser no heading arrives, so the puck
+  /// becomes the non-directional disc and rotation is switched off rather than
+  /// leaving an arrow frozen at north.
+  ///
+  /// *[style]* lets a host override any of that at runtime — pass null (the
+  /// default) for the stock behaviour above. It is deliberately generic: any
+  /// asset path the root bundle can resolve works, including one shipped by
+  /// another package as `packages/<name>/...`. Applied here rather than at the
+  /// call sites because this is the single place the puck marker is built, so
+  /// an override automatically survives the marker being re-created on a floor
   /// change.
   static GeoJsonMarker getUserMarker(MapLocation location, String id,
       {UserMarkerStyle? style}){
+    final bool directional = HeadingSource.isDirectional;
+    print('PUCK-DIAG marker: directional=$directional');  // TEMP
+    // Size is a rendering concern, not a directional one: web draws the puck at
+    // half scale either way.
+    final Size defaultSize =
+        kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35);
     return GeoJsonMarker(
         id: id,
         position: location,
         title: "",
         snippet: "",
-        assetPath: kIsWeb
-            ? 'packages/unified_map_view/assets/markers/userMarkerBlue.png'
-            : LandmarkAssetType.user.assetPath,
+        assetPath: style?.assetPath ??
+            (directional
+                ? LandmarkAssetType.user.assetPath
+                : _nonDirectionalUserAsset),
         iconName: "User",
         priority: true,
-        imageSize: kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35),
+        imageSize: style?.imageSize ?? defaultSize,
       anchor: LandmarkAssetType.user.anchor,
       renderAnchor: Offset(0.5, 0.5),
-      compassBasedRotation: style?.compassBasedRotation ?? true,
+      compassBasedRotation: style?.compassBasedRotation ?? directional,
       customRendering: true
     );
   }

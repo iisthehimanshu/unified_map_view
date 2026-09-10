@@ -6,6 +6,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+
+import '../heading/heading_source.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import '../../unified_map_view.dart';
@@ -1093,7 +1095,7 @@ class MapboxMapProvider extends BaseMapProvider {
   void _startCompassListening(MapboxMap mapboxMap) {
     if (_compassSub != null) return;
 
-    _compassSub = FlutterCompass.events?.listen((event) async {
+    _compassSub = HeadingSource.events?.listen((event) async {
       if (event.heading == null) return;
 
       try {

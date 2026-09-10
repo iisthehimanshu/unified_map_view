@@ -24,6 +24,8 @@ import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+
+import '../heading/heading_source.dart';
 import 'package:http/http.dart' as http;
 
 /// Everything a custom-rendering marker needs registered with the map style,
@@ -1208,7 +1210,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) {
+    _compassSub = HeadingSource.events?.listen((event) {
       final heading = event.heading;
       if (heading == null) return;
       // Ignore the sensor rather than cancelling the subscription. There *is*
