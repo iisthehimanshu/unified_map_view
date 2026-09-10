@@ -560,6 +560,12 @@ class MaplibreMapProvider extends BaseMapProvider {
             if (_allCornerFeatures.isNotEmpty && _controller != null) {
               _refreshCornerVisibility(_controller!);
             }
+            // The puck glide defers its source pushes while the camera moves
+            // (see _animateMarkerToPosition). The camera just settled, so land
+            // the puck on its current position now that a push is free.
+            if (_rotatingSymbols.isNotEmpty) {
+              unawaited(_updateUserLocation(_controller!));
+            }
             final cameraPos = _controller!.cameraPosition;
             if(cameraPos == null) return;
             final target = cameraPos.target;
@@ -1025,7 +1031,10 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // Awaited: static icon must be confirmed hidden before the animated
     // layer starts drawing, otherwise both are visible for a frame or two.
-    await setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: markerId);
+    // Selection push: skip the settle re-pushes (see setGeoJsonSource) so the
+    // tap doesn't drag three more full-collection rebuilds behind it.
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId,
+        selectedMarkerId: markerId, scheduleSettleRepushes: false);
     await Future.delayed(const Duration(milliseconds: 200)); // let native finish hiding it
 
     const growShrinkDuration = Duration(milliseconds: 2400);
@@ -1167,6 +1176,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker, {String? selectedMarkerId}) async {
     if (controller is MapLibreMapController) {
       await _loadMarkerIcon(controller, marker);
+      // Upsert by id — re-adding an existing marker replaces it rather than
+      // stacking a duplicate.
+      _symbols.removeWhere((m) => m.id == marker.id);
       _symbols.add(marker);
       try {
         await setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
@@ -1211,6 +1223,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         } else {
           otherMarkers.add(marker);
         }
+        // Upsert by id (same as addPolyline does for `_lines`): re-adding a
+        // marker that's already present — a re-render, or two overlapping add
+        // paths — must replace it, not stack a duplicate that then can't be
+        // fully cleared and shows as a doubled icon/label.
+        _symbols.removeWhere((m) => m.id == marker.id);
         _symbols.add(marker);
       }
       // Load every non-animal marker's icon concurrently instead of one at a
@@ -1311,6 +1328,18 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// pan stutter during guided navigation.
   bool _userMarkerAnimating = false;
 
+  /// Wall-clock time the puck's GeoJSON source was last pushed to the map.
+  /// While the camera is moving (a pinch/pan gesture or the nav follow
+  /// animation) the glide below defers its per-frame pushes and leans on this
+  /// for a low-rate keepalive, so a manual zoom isn't fighting a full symbol
+  /// relayout every frame.
+  DateTime _lastPuckSourcePush = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Longest the puck may go without a real source push while the camera is in
+  /// motion. Its on-screen spot is carried by the camera transform meanwhile,
+  /// so this only bounds map-coordinate drift, not visible smoothness.
+  static const int _kPuckMovingKeepaliveMs = 500;
+
   Future<void> _animateMarkerToPosition(
       MapLibreMapController controller,
       String id,
@@ -1329,7 +1358,15 @@ class MaplibreMapProvider extends BaseMapProvider {
     // Pacing off a Stopwatch instead: the glide always finishes in real
     // `duration`, and a device that can't keep up drops frames rather than
     // overrunning.
-    const fps = 20;
+    //
+    // 14fps, not 20: during guided navigation the follow-camera keeps the puck
+    // near screen-centre, so its frame-to-frame *screen* travel is small and a
+    // slightly lower interpolation rate is invisible — while every frame saved
+    // is one fewer full rotation-source push (and render-thread symbol
+    // placement pass) fighting the camera pan. The puck layer is also
+    // ignore-placement now (see enableMarkerLayers Layer 8) so each of these
+    // pushes is far cheaper than before, but fewer still is better.
+    const fps = 14;
     const frameMs = 1000 ~/ fps;
     // The accuracy halo barely moves at walking speed; refreshing it at ~10Hz
     // instead of every frame drops a second per-frame source write.
@@ -1382,6 +1419,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     final totalMs = duration.inMilliseconds;
     final stopwatch = Stopwatch()..start();
     int lastCircleMs = -circleIntervalMs;
+    bool didFirstPush = false;
 
     try {
       while (true) {
@@ -1404,12 +1442,31 @@ class MaplibreMapProvider extends BaseMapProvider {
           lastCircleMs = elapsed;
         }
 
-        // Independent sources — push them concurrently so a frame costs one
-        // round trip's worth of wall time, not two chained ones.
-        await Future.wait([
-          _updateUserLocation(controller),
-          if (pushCircle) _setGeoJsonCircle(controller),
-        ]);
+        // While the camera is moving — a user pinch/pan, or the guided-nav
+        // follow animation — the puck's on-screen position is driven by the
+        // camera transform, not by this source. Pushing the source (and paying
+        // a render-thread symbol-placement pass) every frame in that window is
+        // exactly what makes a hand gesture feel like it lags the fingers.
+        // Skip the push while moving; a keepalive still bounds drift, and both
+        // the final frame and onCameraIdle land the puck exactly.
+        final now = DateTime.now();
+        // Always land the first and last frame of a glide, plus a keepalive
+        // while the camera keeps moving; everything in between yields to the
+        // gesture / follow animation.
+        final mustPush = !didFirstPush ||
+            progress >= 1.0 ||
+            now.difference(_lastPuckSourcePush).inMilliseconds >=
+                _kPuckMovingKeepaliveMs;
+        if (mustPush || !_cameraMovingNow) {
+          didFirstPush = true;
+          _lastPuckSourcePush = now;
+          // Independent sources — push them concurrently so a frame costs one
+          // round trip's worth of wall time, not two chained ones.
+          await Future.wait([
+            _updateUserLocation(controller),
+            if (pushCircle) _setGeoJsonCircle(controller),
+          ]);
+        }
 
         if (token != _markerAnimationToken) return;
         // progress == 1.0 means the frame just pushed sits exactly on
@@ -1471,7 +1528,16 @@ class MaplibreMapProvider extends BaseMapProvider {
       dynamic controller,
       List<GeoJsonMarker> symbols,
       String sourceID,
-      {String? selectedMarkerId}
+      {String? selectedMarkerId,
+      // The 500ms/2s/5s "settle" re-pushes below exist purely to recover
+      // markers that fail to draw during heavy *startup* load. A marker tap
+      // (selectLocation / animateMarkerSelection / deSelectLocation) flips one
+      // feature's `isSelected` and re-pushes the whole collection — by then
+      // every marker is already on screen, so scheduling three more full
+      // rebuilds just janks the map for ~5s and makes the tap feel slow to
+      // register. Pass false from the selection paths to push once and skip
+      // the settle machinery (any startup timers already pending keep running).
+      bool scheduleSettleRepushes = true}
       ) async {
     if (controller is MapLibreMapController) {
       if (!_isClusteringEnabled) {
@@ -1605,50 +1671,54 @@ class MaplibreMapProvider extends BaseMapProvider {
       // icon here, then rebuilding features from live marker/icon state,
       // means a slow or once-failed photo load still gets picked up and
       // rendered instead of being stuck on the placeholder permanently.
-      for (final timer in _settleTimers[sourceID] ?? const <Timer>[]) {
-        timer.cancel();
-      }
-      _settleTimers[sourceID] = [
-        for (final delay in const [
-          Duration(milliseconds: 500),
-          Duration(seconds: 2),
-          Duration(seconds: 5),
-        ])
-          Timer(delay, () async {
-            if (!_isClusteringEnabled) return;
-            print("settle re-push firing for $sourceID after ${delay.inMilliseconds}ms");
-            try {
-              // Snapshot before the loop: `symbols` is usually the live
-              // `_symbols` field, and this loop awaits per-marker icon
-              // loads across several event-loop turns — if another
-              // addMarkers()/removeMarker() call mutates `_symbols` while
-              // this is in flight, iterating the live list throws
-              // "Concurrent modification during iteration". A frozen copy
-              // reflects the state at fire time and stays safe to iterate.
-              final snapshot = List<GeoJsonMarker>.of(symbols);
-              for (final marker in snapshot) {
-                if (_isAnimalMarker(marker) &&
-                    !_registeredSmallIconIds.contains(
-                        _animalSmallImageId(marker))) {
-                  try {
-                    // Load-path variant only (the label-less bake). The
-                    // labelled composite is deferred to camera idle at label
-                    // zoom via _ensureLabelledAnimalIcons.
-                    await _loadAnimalSmallIcon(controller, marker);
-                  } catch (e) {
-                    print("settle re-push animal icon retry failed for ${marker.id}: $e");
+      if (scheduleSettleRepushes) {
+        for (final timer in _settleTimers[sourceID] ?? const <Timer>[]) {
+          timer.cancel();
+        }
+        _settleTimers[sourceID] = [
+          for (final delay in const [
+            Duration(milliseconds: 500),
+            Duration(seconds: 2),
+            Duration(seconds: 5),
+          ])
+            Timer(delay, () async {
+              if (!_isClusteringEnabled) return;
+              print(
+                  "settle re-push firing for $sourceID after ${delay.inMilliseconds}ms");
+              try {
+                // Snapshot before the loop: `symbols` is usually the live
+                // `_symbols` field, and this loop awaits per-marker icon
+                // loads across several event-loop turns — if another
+                // addMarkers()/removeMarker() call mutates `_symbols` while
+                // this is in flight, iterating the live list throws
+                // "Concurrent modification during iteration". A frozen copy
+                // reflects the state at fire time and stays safe to iterate.
+                final snapshot = List<GeoJsonMarker>.of(symbols);
+                for (final marker in snapshot) {
+                  if (_isAnimalMarker(marker) &&
+                      !_registeredSmallIconIds.contains(
+                          _animalSmallImageId(marker))) {
+                    try {
+                      // Load-path variant only (the label-less bake). The
+                      // labelled composite is deferred to camera idle at label
+                      // zoom via _ensureLabelledAnimalIcons.
+                      await _loadAnimalSmallIcon(controller, marker);
+                    } catch (e) {
+                      print(
+                          "settle re-push animal icon retry failed for ${marker.id}: $e");
+                    }
                   }
                 }
+                await controller.setGeoJsonSource(sourceID, {
+                  "type": "FeatureCollection",
+                  "features": snapshot.map(buildFeature).toList(),
+                });
+              } catch (e) {
+                print("settle re-push for $sourceID failed: $e");
               }
-              await controller.setGeoJsonSource(sourceID, {
-                "type": "FeatureCollection",
-                "features": snapshot.map(buildFeature).toList(),
-              });
-            } catch (e) {
-              print("settle re-push for $sourceID failed: $e");
-            }
-          }),
-      ];
+            }),
+        ];
+      }
     }
   }
 
@@ -1663,12 +1733,33 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> setHeadingOverride(dynamic controller, double? heading) async {
     _headingOverride = heading;
     // Written through to _currentHeading so the *position* repaint
-    // (_updateUserLocation, which runs on every move) carries the same value
-    // the compass path would have written. Without this a move would push a
-    // feature bearing the last live heading and undo the override.
+    // (_updateUserLocation, which runs on every glide frame) carries the same
+    // value the compass path would have written. Without this a move would push
+    // a feature bearing the last live heading and undo the override.
     if (heading != null) _currentHeading = heading;
     if (controller is! MapLibreMapController) return;
-    await _updateUserLocation(controller);
+
+    if (heading == null) {
+      // Override cleared — drop any heading still queued from the override and
+      // repaint once so control hands straight back to the live compass
+      // without waiting for its next event.
+      _compassThrottleTimer?.cancel();
+      _compassThrottleTimer = null;
+      _pendingCompassHeading = null;
+      await _updateUserLocation(controller);
+      return;
+    }
+
+    // The navigation SDK feeds a fused GPS/sensor heading here, typically on
+    // every location fix (~1Hz) and faster mid-turn. Pushing the rotation
+    // source synchronously on every call re-parses it and relayouts symbols on
+    // the render thread while the follow-camera is also animating — that
+    // contention is the lag/jitter seen only during guided navigation (this
+    // app drives heading from the throttled compass listener instead, which is
+    // why it doesn't show there). Route through the same coalescing throttle
+    // the live compass uses: caps at ~10Hz, drops sub-2° changes, and stands
+    // down entirely while a user-marker glide is repainting the source itself.
+    _requestRotationPush(controller, _rotationSourceId, heading);
   }
 
   void _startCompassListening(
@@ -1756,6 +1847,20 @@ class MaplibreMapProvider extends BaseMapProvider {
     // set and bail: the glide is repainting the source itself, and its
     // finally-block re-arms this flush once it releases.
     if (_userMarkerAnimating) return;
+
+    // The camera is mid-gesture / mid-follow-animation. A rotation-only source
+    // rewrite (with its render-thread symbol placement pass) here competes with
+    // the pan for frames. Hold the heading and retry after a fixed delay — the
+    // puck's visible orientation doesn't meaningfully change over the hold, and
+    // the fixed delay avoids a 0ms re-arm loop while the camera keeps moving.
+    if (_cameraMovingNow) {
+      _compassThrottleTimer?.cancel();
+      _compassThrottleTimer = Timer(const Duration(milliseconds: 150), () {
+        _compassThrottleTimer = null;
+        _flushRotationPush(controller, sourceID);
+      });
+      return;
+    }
 
     // Sub-threshold jitter: not worth a full source rewrite.
     final last = _lastPushedHeading;
@@ -2180,10 +2285,19 @@ class MaplibreMapProvider extends BaseMapProvider {
         final props = item['properties'] as Map<String, dynamic>? ?? {};
         return _furnitureRefOf(props) != null;
       }).toList();
-      print('addFurniture: ${furnitureItems.length}/${items.length} items '
-          'carry a usable 3dRef');
       if (furnitureItems.isEmpty) return;
 
+      // Upsert by id: the same building's furniture can be pushed more than
+      // once — a floor switch, or the deferred furniture-model load re-rendering
+      // the current floors — and a blind addAll would stack duplicate extruded
+      // parts that removeFurniture(buildingId) then only partly clears.
+      final incomingIds = furnitureItems
+          .map((it) => it['id'])
+          .where((id) => id != null)
+          .toSet();
+      if (incomingIds.isNotEmpty) {
+        _furnitureItems.removeWhere((it) => incomingIds.contains(it['id']));
+      }
       _furnitureItems.addAll(furnitureItems);
       await _enableFurnitureLayer(controller);
       await _updateFurnitureSource(controller);
@@ -2452,6 +2566,21 @@ class MaplibreMapProvider extends BaseMapProvider {
     final ox = double.tryParse('${p['ox'] ?? 0}') ?? 0.0;
     final oz = double.tryParse('${p['oz'] ?? 0}') ?? 0.0;
 
+    // "polygon" -> an explicit footprint given as a "points" list of [x, z]
+    // corners in local metres, relative to the part centre. Used for shells
+    // whose outline is not a simple rectangle (e.g. an MRI housing body).
+    if (shape == 'polygon') {
+      final pts = p['points'] as List?;
+      if (pts == null || pts.isEmpty) return const [];
+      return pts
+          .whereType<List>()
+          .map<List<double>>((pt) => [
+                ox + (double.tryParse('${pt[0]}') ?? 0.0),
+                oz + (double.tryParse('${pt.length > 1 ? pt[1] : 0}') ?? 0.0),
+              ])
+          .toList();
+    }
+
     if (shape == 'cylinder' || shape == 'sphere') {
       final r = (double.tryParse('${p['r'] ?? 0}') ?? 0.0) + eps;
       return List.generate(_circleSegments, (i) {
@@ -2641,6 +2770,12 @@ class MaplibreMapProvider extends BaseMapProvider {
             final String turnLabel = _turnLabel(diff);
             final String bubbleIconId = await _ensureTurnBubbleImage(controller, turnLabel);
 
+            // Shorter of the two path segments meeting at this bend. Used by
+            // _refreshCornerVisibility to drop the arrow when that segment is
+            // too short on screen for the fixed-size sprite to sit on.
+            final double segIn = _haversineMeters(line.points[i - 1], line.points[i]);
+            final double segOut = _haversineMeters(line.points[i], line.points[i + 1]);
+
             cornerFeatures.add({
               'type': 'Feature',
               'geometry': {
@@ -2655,6 +2790,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                 'icon': iconId,
                 'turnBubbleIcon': bubbleIconId,
                 'turnSharpness': diff.abs(),
+                'minSegMeters': segIn < segOut ? segIn : segOut,
               }
             });
           }
@@ -2761,6 +2897,13 @@ class MaplibreMapProvider extends BaseMapProvider {
     const double pixelThreshold = 80.0;
     final double meterThreshold = pixelThreshold * metersPerPixel;
 
+    // The big corner arrow is a fixed ~48px sprite pivoted on the bend. When a
+    // path segment meeting the bend is shorter than that on screen — a tight
+    // route near the destination, or the view zoomed out — the arrow overruns
+    // the turn and reads as floating free of the path. Flag those per corner so
+    // the arrow layer can drop just the arrow (the turn bubble still shows).
+    const double arrowFitMinSegPixels = 55.0;
+
     final sorted = [..._allCornerFeatures]
       ..sort((a, b) => (b['properties']['turnSharpness'] as double)
           .compareTo(a['properties']['turnSharpness'] as double));
@@ -2778,7 +2921,13 @@ class MaplibreMapProvider extends BaseMapProvider {
           break;
         }
       }
-      if (!tooClose) kept.add(feature);
+      if (tooClose) continue;
+
+      final segMeters =
+          (feature['properties']['minSegMeters'] as num?)?.toDouble();
+      feature['properties']['arrowFits'] = segMeters == null ||
+          segMeters / metersPerPixel >= arrowFitMinSegPixels;
+      kept.add(feature);
     }
 
     await controller.setGeoJsonSource(_pathCornerSourceId, {
@@ -4086,6 +4235,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["!", ["to-boolean", ["get", "boundary"]]],
             ["!", ["to-boolean", ["get", "bearing"]]],
             ["!", ["to-boolean", ["get", "icon"]]],
+            // The selected marker's label is drawn (enlarged) by Layer 10 —
+            // don't also draw it here at rest size underneath.
+            ["!", ["to-boolean", ["get", "isSelected"]]],
           ],
           enableInteraction: true,
           belowLayerId: null,
@@ -4363,6 +4515,16 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,
+          // Keep the puck OUT of the collision index. During guided navigation
+          // its source is re-pushed many times a second (the glide in
+          // _animateMarkerToPosition); if the puck is a collision obstacle,
+          // every one of those pushes forces MapLibre to re-run symbol
+          // placement for every nearby venue marker/label — the "location
+          // update makes the whole map lag/jitter" symptom. With
+          // ignore-placement it moves freely and perturbs nothing.
+          iconIgnorePlacement: true,
+          textAllowOverlap: true,
+          textIgnorePlacement: true,
         ),
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _sectionMarkerLayerId),
@@ -4439,9 +4601,17 @@ class MaplibreMapProvider extends BaseMapProvider {
         _clusterSourceId,
         _selectedMarkerLayerId,
         SymbolLayerProperties(
-          symbolSortKey: ["+", 8000, _kSortKeyExpression],
+          // Placed first in MapLibre's single global collision pass (lowest
+          // sort key) so the selected marker's label wins against every
+          // neighbour. Paired with textIgnorePlacement:false below, a
+          // neighbouring label that would overlap the selected label yields
+          // and hides instead of drawing through it.
+          symbolSortKey: ["+", -100000, _kSortKeyExpression],
           iconImage: [
             "case",
+            // Text-only marker (a selected room/polygon label): no icon image.
+            ["!", ["to-boolean", ["get", "icon"]]],
+            "",
             ["to-boolean", ["get", "hasSelectedIcon"]],
             ["concat", ["get", "icon"], "-selected"],
             ["get", "icon"],
@@ -4481,18 +4651,35 @@ class MaplibreMapProvider extends BaseMapProvider {
           textColor: "#000000",
           textHaloColor: "#f8f9fa",
           textHaloWidth: 1.5,
-          textAnchor: "top",
-          textOffset: ["literal", [0, 1.2]],
+          // With an icon the label sits below it; a text-only marker keeps the
+          // centred, unoffset placement its resting (Layer 1) version uses so
+          // the label doesn't jump position on selection.
+          textAnchor: ["case", ["to-boolean", ["get", "icon"]], "top", "center"],
+          textOffset: [
+            "case",
+            ["to-boolean", ["get", "icon"]],
+            ["literal", [0, 1.2]],
+            ["literal", [0, 0]],
+          ],
           iconAllowOverlap: true,
           textAllowOverlap: true,
-          iconIgnorePlacement: true,
-          textIgnorePlacement: true,
+          // Both the (enlarged) selected icon and its label are added to the
+          // collision index, and this layer is placed first (lowest sort key
+          // above), so a neighbouring marker's icon or label that would overlap
+          // the selected pin gives way and hides instead of drawing across it.
+          // The selected marker itself is still always shown via
+          // icon/textAllowOverlap.
+          iconIgnorePlacement: false,
+          textIgnorePlacement: false,
         ),
         filter: [
           "all",
           ["to-boolean", ["get", "isSelected"]],
           ["!", ["to-boolean", ["get", "isAnimating"]]],
-          ["to-boolean", ["get", "icon"]],
+          // Render the selected marker if it has an icon OR just a label — a
+          // room/polygon whose marker is text-only (shown as the green
+          // collision dot at rest) still gets its label enlarged on tap.
+          ["any", ["to-boolean", ["get", "icon"]], ["to-boolean", ["get", "title"]]],
         ],
         enableInteraction: true,
         belowLayerId: null,
@@ -5164,8 +5351,15 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "path"]],
           ["==", ["get", "style"], "solid"],
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+          // Set per corner by _refreshCornerVisibility: false when the bend's
+          // path segments are too short on screen for the fixed-size arrow, so
+          // it doesn't float free of the route. (The turn bubble has no such
+          // filter and still shows.)
+          ["to-boolean", ["get", "arrowFits"]],
         ],
-        minzoom: 19.0,
+        // Only once the route is clearly zoomed in — below this the fixed-size
+        // arrow dwarfs the thinned path and stops reading as "on" it.
+        minzoom: 20.0,
       );
 
       // Moving shine that travels along the active path.
@@ -5421,11 +5615,16 @@ class MaplibreMapProvider extends BaseMapProvider {
           _restScaledMarkerId = marker.id;
         }
 
+        // Selection push: one rebuild to flip `isSelected`, no settle
+        // re-pushes (see setGeoJsonSource) — every marker is already drawn, so
+        // the extra 500ms/2s/5s full rebuilds only jank the map and make the
+        // tap feel unresponsive.
         setGeoJsonSource(
           controller,
           _symbols,
           _clusterSourceId,
           selectedMarkerId: marker.id,
+          scheduleSettleRepushes: false,
         );
       }
 
@@ -5569,11 +5768,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         'features': [],
       });
 
+      // Deselection push: same as selection — one rebuild to clear
+      // `isSelected`, no settle re-pushes (see setGeoJsonSource).
       await setGeoJsonSource(
         controller,
         _symbols,
         _clusterSourceId,
         selectedMarkerId: null,
+        scheduleSettleRepushes: false,
       );
 
       selectedLocation = null;

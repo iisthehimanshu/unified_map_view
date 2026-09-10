@@ -318,8 +318,16 @@ class UnifiedMapController extends ChangeNotifier {
   // GeoJSON Methods
   // ============================================
 
-  /// Add GeoJSON feature collection to map
-  Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection) async {
+  /// Add GeoJSON feature collection to map.
+  ///
+  /// [deferMarkers] streams the (CPU-bound) marker icon bake in AFTER the
+  /// geometry paints — right for the one big initial venue render, where the
+  /// user would otherwise stare at a grey basemap for seconds. Floor switches
+  /// pass false: they add far fewer markers, the caller has already awaited the
+  /// matching removeMarker(buildingID), and a detached bake from a *previous*
+  /// switch finishing late would re-add the floor the user just left.
+  Future<void> addGeoJsonFeatures(GeoJsonFeatureCollection collection,
+      {bool deferMarkers = false}) async {
     // See note on animateCamera above — dart2js stack capture on a hot path.
     if (!kIsWeb) print("addGeoJsonFeatures ${StackTrace.current}");
     // Add polygons
@@ -353,29 +361,90 @@ class UnifiedMapController extends ChangeNotifier {
     await PerfTrace.timeAsync('addPolylines (${polylines.length})',
         () => addPolylines(polylines));
 
-    // Same reasoning as polygons above: addMarkers pushes the whole
-    // accumulated marker set on every call, so these groups (kept for
-    // paint-order clarity) are merged into a single call/push instead of 4.
+    // Extract once here; added either inline or by the detached block below,
+    // depending on [deferMarkers]. (A merge once left BOTH an awaited
+    // addMarkers([...]) here and the detached block, so every call baked and
+    // pushed the whole marker set twice — doubling `_symbols`.)
     final markers = GeoJsonLoader.extractMarkers(collection);
-    final urlMarkers = markers.where((marker)=> (marker.assetPath != null && marker.assetPath!.contains("http"))).toList();
-    final localMarkers = markers.where((marker)=> !urlMarkers.contains(marker)).toList();
-    final sectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "Section").toList();
-    final subSectionMarkers = localMarkers.where((marker) => marker.properties?["type"] == "SubSection").toList();
-    final normalMarker = localMarkers.where((marker) => !sectionMarkers.contains(marker) && !subSectionMarkers.contains(marker)).toList();
-    await addMarkers([
-      ...urlMarkers,
-      ...normalMarker,
-      ...sectionMarkers,
-      ...subSectionMarkers,
-    ]);
+
+    Future<void> addAllMarkers() async {
+      final urlMarkers = markers
+          .where((m) => m.assetPath != null && m.assetPath!.contains("http"))
+          .toList();
+      final localMarkers =
+          markers.where((m) => !urlMarkers.contains(m)).toList();
+      final sectionMarkers = localMarkers
+          .where((m) => m.properties?["type"] == "Section")
+          .toList();
+      final subSectionMarkers = localMarkers
+          .where((m) => m.properties?["type"] == "SubSection")
+          .toList();
+      final normalMarker = localMarkers
+          .where((m) =>
+              !sectionMarkers.contains(m) && !subSectionMarkers.contains(m))
+          .toList();
+      // url-backed icons first (network latency to hide), then local.
+      await addMarkers([
+        ...urlMarkers,
+        ...normalMarker,
+        ...sectionMarkers,
+        ...subSectionMarkers,
+      ]);
+    }
 
     // Point features carrying a "3dRef" part list are rendered as extruded 3D
     // furniture. Whether they also get a marker is decided by the
     // "hideElement" property (see GeoJsonMarker.fromFeature).
+    final furnitureItems = _extractFurnitureItems(collection);
+    if (furnitureItems.isNotEmpty) {
+      await PerfTrace.timeAsync('addFurniture (${furnitureItems.length})',
+          () => addFurniture(furnitureItems));
+    }
+
+    if (deferMarkers) {
+      // Initial venue render. Marker icon baking is CPU-bound and by far the
+      // most expensive part of the load — at NationalZoologicalPark, skipping
+      // markers took time-to-venue from 25.7s to 11.4s. Detach it so the venue
+      // paints as soon as the geometry is in; markers then stream on as their
+      // icons finish. The venueRendered wait keeps the bake from competing with
+      // the polygon paint (web is single-threaded); the timeout is a safety net
+      // for a venue with no polygons at all.
+      unawaited(() async {
+        try {
+          await PerfTrace.timeAsync(
+              'deferred markers: waiting for venue render',
+              () => currentProviderImplementation.venueRendered
+                  .timeout(const Duration(seconds: 20), onTimeout: () {
+                print('deferred markers: venue-render signal never came, '
+                    'starting markers anyway');
+              }));
+          await PerfTrace.timeAsync(
+              'deferred addMarkers (${markers.length})', addAllMarkers);
+          notifyListeners();
+        } catch (e) {
+          // Detached, so an escape here would be an unhandled async error.
+          print('deferred marker rendering failed: $e');
+        }
+      }());
+    } else {
+      // Floor switch (or any explicit re-render): add inline and awaited, so
+      // the caller's already-awaited removeMarker(buildingID) stays ordered
+      // ahead of this and no late detached bake can resurrect the old floor.
+      await PerfTrace.timeAsync(
+          'addMarkers (${markers.length})', addAllMarkers);
+    }
+
+    notifyListeners();
+  }
+
+  /// Pulls the extruded-furniture items out of a feature collection: every
+  /// point feature carrying a "3dRef" part list, tagged with its buildingId so
+  /// [removeFurniture] can clear one building on a floor switch.
+  List<Map<String, dynamic>> _extractFurnitureItems(
+      GeoJsonFeatureCollection collection) {
     final furnitureItems = <Map<String, dynamic>>[];
     for (final f in collection.features) {
       if (f.geometry.type != GeoJsonGeometryType.point) continue;
-
       if (f.properties?['3dRef'] == null) continue;
       // Point coordinates arrive nested ([[lng, lat]]) from the API models
       // (GlobalAppGeoGeometry wraps them) — unwrap the same way
@@ -386,90 +455,25 @@ class UnifiedMapController extends ChangeNotifier {
       }
       if (coords is! List || coords.length < 2) continue;
       furnitureItems.add({
-        // Kept so removeFurniture(buildingId) can clear one building's
-        // furniture on a floor switch, mirroring removeMarker/removePolygon.
+        // id + buildingId let the provider upsert by id and let
+        // removeFurniture(buildingId) clear one building on a floor switch.
+        'id': f.id,
         'buildingId': f.buildingId,
         'geometry': {'coordinates': coords},
         'properties': f.properties,
       });
     }
-    if (furnitureItems.isNotEmpty) {
-      await PerfTrace.timeAsync('addFurniture (${furnitureItems.length})',
-          () => addFurniture(furnitureItems));
-    }
+    return furnitureItems;
+  }
 
-    // ---- Markers last, and detached ----
-    //
-    // Everything above (polygons, polylines, furniture) is what makes the venue
-    // appear. Marker icon baking is CPU-bound and by far the most expensive
-    // part of the load — measured on device at NationalZoologicalPark: skipping
-    // markers entirely took time-to-venue from 25.7s to 11.4s. Awaiting them
-    // here meant the user stared at a grey basemap for the whole bake even
-    // though the venue itself was ready.
-    //
-    // Detached (not awaited), so addGeoJsonFeatures completes — and the venue
-    // paints — as soon as the geometry is in. Markers then stream onto the map
-    // as their icons finish. notifyListeners() below fires on the geometry, not
-    // on the markers, which is the point.
-    //
-    // Ordering within the marker work is preserved: url-backed icons start
-    // first (they have network latency to hide), then local ones.
-    unawaited(() async {
-      try {
-        // Wait for the polygons to actually be on screen before starting any
-        // icon baking. Web is single-threaded: starting the bake immediately
-        // (even detached) means it competes with the polygon paint, which is
-        // why time-to-venue sat at 14.3s against an 11.4s markers-off floor.
-        // Polygons take ~850ms and markers take seconds — there is nothing to
-        // gain from overlapping them, and the venue appearing sooner is what
-        // the user actually perceives as "fast".
-        //
-        // Timed out rather than awaited unconditionally: if the venue-rendered
-        // signal never arrives (a venue with no polygons at all, say), markers
-        // must still render rather than be lost.
-        await PerfTrace.timeAsync(
-            'deferred markers: waiting for venue render',
-            () => currentProviderImplementation.venueRendered
-                .timeout(const Duration(seconds: 20), onTimeout: () {
-              print('deferred markers: venue-render signal never came, '
-                  'starting markers anyway');
-            }));
-
-        final urlMarkers = markers
-            .where((m) => m.assetPath != null && m.assetPath!.contains("http"))
-            .toList();
-        final localMarkers =
-            markers.where((m) => !urlMarkers.contains(m)).toList();
-        final sectionMarkers = localMarkers
-            .where((m) => m.properties?["type"] == "Section")
-            .toList();
-        final subSectionMarkers = localMarkers
-            .where((m) => m.properties?["type"] == "SubSection")
-            .toList();
-        final normalMarker = localMarkers
-            .where((m) =>
-                !sectionMarkers.contains(m) && !subSectionMarkers.contains(m))
-            .toList();
-
-        await PerfTrace.timeAsync('deferred addMarkers url (${urlMarkers.length})',
-            () => addMarkers(urlMarkers));
-        await PerfTrace.timeAsync(
-            'deferred addMarkers normal (${normalMarker.length})',
-            () => addMarkers(normalMarker));
-        await PerfTrace.timeAsync(
-            'deferred addMarkers section (${sectionMarkers.length})',
-            () => addMarkers(sectionMarkers));
-        await PerfTrace.timeAsync(
-            'deferred addMarkers subSection (${subSectionMarkers.length})',
-            () => addMarkers(subSectionMarkers));
-        notifyListeners();
-      } catch (e) {
-        // Detached, so an escape here would be an unhandled async error.
-        print('deferred marker rendering failed: $e');
-      }
-    }());
-
-    notifyListeners();
+  /// Adds only the furniture from [collection], leaving polygons/markers alone.
+  /// Used when the furniture model data lands after the venue has already been
+  /// drawn (see [AnnotationController] — the furniture fetch no longer blocks
+  /// the first render).
+  Future<void> renderFurnitureFrom(GeoJsonFeatureCollection collection) async {
+    final items = _extractFurnitureItems(collection);
+    if (items.isEmpty) return;
+    await addFurniture(items);
   }
 
   /// Render point features carrying a "3dRef" part list as extruded 3D
