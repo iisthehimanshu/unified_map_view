@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -10,7 +11,93 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../config.dart';
 
+/// Caps how many `http.get` calls made through [CacheController] are ever
+/// in flight at once, across every caller and platform.
+///
+/// A zoo venue can have 100+ distinct animal photos, and the marker bake
+/// pipeline fetches every one it hasn't seen yet concurrently (see
+/// `_batchLoadAnimalIcons` in mapLibre_map_provider.dart) — deliberately, so a
+/// whole enclosure's worth of photos decode in parallel instead of one at a
+/// time. Unbounded, that fires 100+ simultaneous HTTPS connections at the
+/// same host from one device, and the host (or an intermediate proxy/WAF)
+/// starts resetting them mid-response: every fetch fails with
+/// `ClientException: Connection closed while receiving data`, and every
+/// marker falls back to its paw placeholder — not because any single photo
+/// was unreachable, but because the whole burst tripped a limit together.
+/// Throttling to a small pool keeps the parallel-decode benefit for a normal
+/// enclosure-sized batch while staying under whatever connection limit the
+/// host enforces.
+class _FetchThrottle {
+  _FetchThrottle(this._maxConcurrent);
+
+  final int _maxConcurrent;
+  int _active = 0;
+  final List<Completer<void>> _queue = [];
+
+  Future<T> run<T>(Future<T> Function() task) async {
+    if (_active >= _maxConcurrent) {
+      final waiter = Completer<void>();
+      _queue.add(waiter);
+      await waiter.future;
+    }
+    _active++;
+    try {
+      return await task();
+    } finally {
+      _active--;
+      if (_queue.isNotEmpty) {
+        _queue.removeAt(0).complete();
+      }
+    }
+  }
+}
+
 class CacheController {
+  static final _FetchThrottle _networkThrottle = _FetchThrottle(6);
+
+  /// Throttled `http.get` with several retries on failure, each attempt
+  /// bounded by a timeout.
+  ///
+  /// Two things were tried and reverted here:
+  /// - A persistent `http.Client()` reused across requests, meant to avoid
+  ///   TLS-handshake churn. On the office Wi-Fi this app is tested from
+  ///   (same network as the dev.iwayplus.in server) it made things worse: a
+  ///   connection the server had silently dropped looked identical to a live
+  ///   one until reused, and reusing it hung with no exception — the whole
+  ///   85-photo batch went completely silent for 90+ seconds waiting on one
+  ///   stuck request. `http.get` opens a fresh connection per call, which
+  ///   sidesteps that.
+  /// - A request-dispatch rate limiter on top of the concurrency throttle.
+  ///   It didn't measurably help and added another way to stall.
+  ///
+  /// Throttle to 6 concurrent, fresh connection per request — that
+  /// combination is what cut failures from 206/206 down to single digits in
+  /// testing. The failures that remain are the server resetting an
+  /// individual connection for no discernible reason (confirmed working,
+  /// slowly, from a different network) — a transient per-attempt fault, not
+  /// a standing block — so a couple of retries buy real coverage.
+  ///
+  /// Kept to 3 attempts at a 6s cap each (worst case ~19s including backoff),
+  /// not more: a longer per-attempt budget (5 attempts × 10s was tried) makes
+  /// each genuinely-failing marker block its concurrency slot for the better
+  /// part of a minute, and with 190+ markers sharing 6 slots that stalls the
+  /// whole batch far worse than the extra retries recover.
+  static Future<http.Response> _getThrottled(String url) async {
+    const backoffs = [
+      Duration(milliseconds: 300),
+      Duration(milliseconds: 800),
+    ];
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await _networkThrottle.run(
+          () => http.get(Uri.parse(url)).timeout(const Duration(seconds: 6)),
+        );
+      } catch (_) {
+        if (attempt >= backoffs.length) rethrow;
+        await Future.delayed(backoffs[attempt]);
+      }
+    }
+  }
   /// Every bundled asset path, resolved once from the asset manifest.
   ///
   /// Checked for the *exact* file before any `rootBundle.load`, so a miss costs
@@ -68,6 +155,22 @@ class CacheController {
     // on device.
     if (kIsWeb) return _fetchWithCacheWeb(url);
 
+    // Dedupe concurrent requests for the same URL, mirroring the web path
+    // below: the disk-cache check a few lines down is a check-then-write, so
+    // two markers sharing a photo that both miss it at the same tick would
+    // otherwise fetch and write the same file twice.
+    final inFlight = _inFlight[url];
+    if (inFlight != null) return inFlight;
+    final future = _fetchWithCacheNative(url);
+    _inFlight[url] = future;
+    try {
+      return await future;
+    } finally {
+      _inFlight.remove(url);
+    }
+  }
+
+  Future<Uint8List?> _fetchWithCacheNative(String url) async {
     final dir = await getApplicationCacheDirectory();
     final fileName = md5.convert(utf8.encode(url)).toString(); // 32 chars
     final file = File('${dir.path}/$fileName');
@@ -96,21 +199,27 @@ class CacheController {
     //   return null;
     // }
 
-    // First time — fetch from network AND cache it
+    // First time — fetch from network AND cache it. Throttled + retried: see
+    // [_FetchThrottle] on why an unbounded burst (every animal photo in a zoo
+    // at once) gets its connections reset instead of just being slow.
     try {
-      final response = await http.get(Uri.parse(url));
+      final response = await _getThrottled(url);
       if (response.statusCode == 200) {
         await file.writeAsBytes(response.bodyBytes); // cache for next time
         return response.bodyBytes;
       }
-    } catch (_) {}
+      print('fetchWithCache: $url -> HTTP ${response.statusCode}');
+    } catch (e) {
+      print('fetchWithCache: $url -> $e');
+    }
     return null; // not cached + no internet
   }
 
   /// Requests already in flight, keyed by url. A whole enclosure's markers ask
   /// for the same photo within the same tick, and without this each one would
-  /// issue its own fetch — the disk check that dedupes them on native has no
-  /// web equivalent.
+  /// issue its own fetch. Shared by both platforms: native's disk-cache check
+  /// is check-then-write and not otherwise race-safe, and web has no disk
+  /// cache to dedupe through at all.
   static final Map<String, Future<Uint8List?>> _inFlight = {};
 
   /// Web variant of [fetchWithCache]: no filesystem, so bundled icons still
@@ -129,7 +238,7 @@ class CacheController {
           // Not bundled — fall through to the network.
         }
         try {
-          final response = await http.get(Uri.parse(url));
+          final response = await _getThrottled(url);
           if (response.statusCode == 200) return response.bodyBytes;
           print("fetchWithCache: $url -> HTTP ${response.statusCode}");
         } catch (e) {

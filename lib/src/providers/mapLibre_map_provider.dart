@@ -1717,6 +1717,24 @@ class MaplibreMapProvider extends BaseMapProvider {
                           "settle re-push animal icon retry failed for ${marker.id}: $e");
                     }
                   }
+                  // Labelled (Phase B) composite: only retry once the camera
+                  // has actually reached label zoom at least once — baking it
+                  // any earlier just spends network/CPU on a composite the
+                  // layer won't reference yet (see _kLabelZoomThreshold).
+                  // _ensureLabelledAnimalIcons itself only ever fires once
+                  // per style (_labelledAnimalsStarted guard) and does not
+                  // retry markers whose fetch/bake failed on that one pass —
+                  // this is their only other chance to pick the photo up.
+                  if (_isAnimalMarker(marker) &&
+                      _labelledAnimalsStarted &&
+                      !_loadedAnimalIcons.contains(_animalIconKey(marker))) {
+                    try {
+                      await _loadAnimalLabelledIcon(controller, marker);
+                    } catch (e) {
+                      print("settle re-push labelled animal icon retry "
+                          "failed for ${marker.id}: $e");
+                    }
+                  }
                 }
                 await controller.setGeoJsonSource(sourceID, {
                   "type": "FeatureCollection",
@@ -3431,7 +3449,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         marker.anchor = baked.anchor;
         _smallIconBytes[smallId] = bytes;
       }
-      await controller.addImage(smallId, bytes);
+      await _addImageSafe(controller, smallId, bytes);
       _registeredSmallIconIds.add(smallId);
       return true;
     } catch (e) {

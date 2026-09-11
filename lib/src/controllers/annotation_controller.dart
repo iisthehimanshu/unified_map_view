@@ -18,6 +18,16 @@ import '../utils/geoJson/predefined_markers.dart';
 class AnnotationController{
   final UnifiedMapController _unifiedMapController;
   late VenueData _venueData;
+  // `_venueData` is `late` and assigned only once `_setVenue`'s API fetches
+  // resolve. `renderVenue` is also called directly from
+  // `UnifiedMapController.onMapCreated` (a platform-view lifecycle callback,
+  // not gated on the fetch), so a map view created/recreated before that
+  // fetch finishes calls `renderVenue` while `_venueData` is still
+  // unassigned — a `LateInitializationError` that aborts the render with no
+  // recovery until something else calls `renderVenue` again. Tracked
+  // separately because Dart gives no way to test a `late` field for
+  // "assigned yet" without risking the same throw.
+  bool _venueDataReady = false;
 
   String? _focusedBuilding;
   List<int>? _focusedBuildingAvailableFloors;
@@ -97,6 +107,7 @@ class AnnotationController{
     // once they arrive.
     _venueData = PerfTrace.time('VenueData parse',
         () => VenueData(venueName, apiData, buildingData));
+    _venueDataReady = true;
     await PerfTrace.timeAsync('renderVenue', () => renderVenue());
     if (PerfTrace.enabled) print(PerfTrace.report());
 
@@ -126,6 +137,11 @@ class AnnotationController{
 
   Future<void> renderVenue() async {
     if(!_unifiedMapController.controllerIsInitialized) return;
+    // See _venueDataReady's doc comment: onMapCreated can call this before
+    // _setVenue's fetch has assigned _venueData. _setVenue calls renderVenue
+    // itself right after the assignment, so skipping here just waits for
+    // that call instead of losing the render.
+    if(!_venueDataReady) return;
     try{
       List<GeoJsonFeature> venueRenderData = [];
       _venueData.availableFloors.forEach((buildingId,floors){
