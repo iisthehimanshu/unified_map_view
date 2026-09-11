@@ -21,6 +21,8 @@ import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+
+import '../heading/heading_source.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 
@@ -630,7 +632,7 @@ class MapplsMapProvider extends BaseMapProvider {
   double? _currentHeading;
   void _startCompassListening(MapplsMapController controller, String sourceID) {
     if(_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) async {
+    _compassSub = HeadingSource.events?.listen((event) async {
       if (event.heading == null) return;
       _currentHeading = event.heading;
       final cameraPos = controller.cameraPosition;

@@ -25,6 +25,8 @@ import '../models/map_config.dart';
 import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+
+import '../heading/heading_source.dart';
 import 'package:http/http.dart' as http;
 
 /// Everything a custom-rendering marker needs registered with the map style,
@@ -1509,9 +1511,16 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// The per-layer base offset of the full marker's [symbolSortKey] for a
   /// collision-participating marker. Mirrors the layer filters/bases in
-  /// [enableMarkerLayers] (text=0, fixed/bearing=1000, icon-withoutSectionId=
-  /// 2000, icon-withSectionId=3000, customRendering=4000). Used by the dot layer
-  /// so a feature's dot sorts right after its own full marker.
+  /// [enableMarkerLayers] (text=0, fixed/bearing=1000, customRendering=1500,
+  /// icon-withoutSectionId=2000, icon-withSectionId=3000). Used by the dot
+  /// layer so a feature's dot sorts right after its own full marker.
+  ///
+  /// customRendering sits ahead of the plain icon layers (see the "Zoo fix"
+  /// in [_refreshMarkerLayerMinZooms]) so a zoo's animal photo composites —
+  /// the content the map actually exists to show — don't routinely lose
+  /// collisions to incidental amenity icons and fall back to their paw dot.
+  /// It still loses to text/fixed, which are wayfinding furniture rather
+  /// than content.
   int _collisionBase({
     required bool hasIcon,
     required double bearing,
@@ -1520,7 +1529,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }) {
     if (bearing != 0.0) return 1000; // Layer 4: fixed/bearing
     if (!hasIcon) return 0; // Layer 1: text-only
-    if (customRendering) return 4000; // Layer 3: custom rendering
+    if (customRendering) return 1500; // Layer 3: custom rendering
     return sectionId ? 3000 : 2000; // Layer 2 / 2b: icon markers
   }
 
@@ -1765,7 +1774,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) {
+    _compassSub = HeadingSource.events?.listen((event) {
       final heading = event.heading;
       if (heading == null) return;
       // Ignore the sensor rather than cancelling the subscription. There *is*
@@ -2168,6 +2177,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _refreshPatchFadeIfStale(
       MapLibreMapController controller) async {
     if (!_isPolygonLayersEnabled) return;
+    // The marker layers have to exist first. This runs off a polygon push,
+    // which lands between enablePolygonLayers() (sets _isPolygonLayersEnabled)
+    // and enableMarkerLayers() (sets _isClusteringEnabled) — so on the polygon
+    // flag alone it fires into a style that has no marker layers yet, and
+    // _refreshPatchAboveOpacity below then *creates* _patchAboveMarkerLayerId
+    // out of order. enableMarkerLayers hits "Layer patch-above-markers-layer
+    // already exists", and because its whole body is one try/catch that throw
+    // skips every remaining layer, _isClusteringEnabled, and the _symbols
+    // re-push — i.e. the venue renders with no markers at all.
+    // Nothing is lost by waiting: enableMarkerLayers calls back in when done.
+    if (!_isClusteringEnabled) return;
     final boundaryPolygons = _polygons.where((p) =>
         p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
     final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
@@ -4023,7 +4043,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Used at creation on every platform, and by the **web** branch of
   /// [_refreshMarkerLayerMinZooms]. `icon-image` here is not what was broken —
   /// setLayerProperties merges, so it was never dropped. The load-bearing line
-  /// is `symbolSortKey`'s 4000 base, which the refresh's partial call used to
+  /// is `symbolSortKey`'s 1500 base (see [_collisionBase] for why it sits
+  /// ahead of the plain icon layers), which the refresh's partial call used to
   /// overwrite: without it every full marker flattens to ~0, they collide with
   /// each other as one block under `iconAllowOverlap: false`, and each loser
   /// falls back to the layer-0 dot — for an animal, the paw. That is the "every
@@ -4031,7 +4052,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// not an icon-loading one: the composites were registered fine throughout.
   SymbolLayerProperties _customRenderingLayerProps(List<dynamic> iconOpacity) =>
       SymbolLayerProperties(
-        symbolSortKey: ["+", 4000, _kSortKeyExpression],
+        symbolSortKey: ["+", 1500, _kSortKeyExpression],
         // The zoom step is a LABEL toggle, not a placeholder→photo swap:
         // `icon` is the composite with the title baked in, the low-zoom id the
         // same photo with text: "". Custom-rendering markers carry that id in
@@ -4723,6 +4744,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         final symbols = [..._symbols];
         await setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
+
+      // The marker layers are up now, so any fade recompute that was skipped
+      // by the guard in _refreshPatchFadeIfStale can safely run. No-ops when
+      // the polygons have not landed yet — that push calls back in itself.
+      await _refreshPatchFadeIfStale(controller);
     } catch (e, stack) {
       print('Error enabling marker layers: $e');
       print('Stack trace: $stack');
@@ -5124,31 +5150,39 @@ class MaplibreMapProvider extends BaseMapProvider {
       fadeInEnd,   1.0,
     ];
 
-    // ── BOTH PLATFORMS ──────────────────────────────────────────────────────
-    //
-    // Push each layer's FULL property set instead of just the two opacity/sort
-    // keys. The part that actually matters is `symbol-sort-key`:
-    // `setLayerProperties` MERGES the keys it is given (Android routes
+    // These calls push each layer's FULL property set instead of just the two
+    // opacity/sort keys. The part that actually matters is `symbol-sort-key`:
+    // `setLayerProperties` MERGES on both platforms (Android routes
     // `layer#setProperties` into `Layer.setProperties`, which applies only the
     // keys present; the web binding loops setPaintProperty/setLayoutProperty
     // per key), so nothing else is dropped — but a partial call that names
     // `symbolSortKey` still OVERWRITES it, and the bare `_kSortKeyExpression`
     // discards the per-layer base from [_collisionBase] (text 0, fixed 1000,
-    // icon 2000/3000, customRendering 4000).
+    // customRendering 1500, icon 2000/3000).
     //
     // That base is the whole marker→dot cascade: a feature's dot sorts at
     // `collisionBase + 0.6`, i.e. immediately after its own full marker, so the
     // full marker wins and suppresses its own dot. Flatten every full marker to
     // ~0 and they instead all place first as one undifferentiated block, knock
     // each other out under `iconAllowOverlap: false`, and each loser's dot then
-    // places into the gap. For a photo/animal marker that dot is the paw/room
-    // dot — which is the "placeholder dot at every zoom, real image only on
-    // tap" defect. Tapping worked only because the selected-marker layer draws
-    // with `iconIgnorePlacement: true` and skips the collision pass entirely.
+    // places into the gap — the map shows dots where the real markers belong,
+    // at every zoom, because zooming in cannot separate features that are all
+    // tied on the same sort key.
     //
-    // Previously scoped to web only, on the theory that native's long-shipped
-    // flattened sort key was an "accepted look". It is not — it is the same
-    // bug — so both platforms now restore the per-layer bases.
+    // Applied on BOTH platforms as of 2026-09-08. It was web-only while native
+    // never actually reached this code: the call ran before the marker layers
+    // existed and died on LAYER_NOT_FOUND, so native kept the bases it was
+    // created with. Fixing that ordering (see the guard in
+    // _refreshPatchFadeIfStale) let the flattening land on native for the first
+    // time and dots replaced the markers — so the restoration has to cover
+    // native too.
+    //
+    // Zoo fix (2026-09-11): customRendering used to re-sort to 4000, i.e. after
+    // every other layer including the plain amenity icons, so animal photo
+    // composites routinely lost collisions and fell back to paws — even
+    // against unrelated icons nowhere near as important as the photo itself.
+    // [_collisionBase] now gives customRendering its own base (1500), ahead of
+    // the icon layers, so it only loses to text/fixed wayfinding furniture.
     await controller.setLayerProperties(
       _normalTextMarkerLayerId,
       _normalTextLayerProps(opacityExpression),
