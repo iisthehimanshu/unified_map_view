@@ -46,6 +46,9 @@ export 'src/utils/geoJson/geojson_loader.dart';
 export 'src/utils/geoJson/geoJsonUtils.dart';
 export 'src/utils/geoJson/predefined_markers.dart';
 
+// Heading. Hosts only need HostHeading — the map resolves HeadingSource itself.
+export 'src/heading/host_heading.dart';
+
 class UnifiedMapViewPackage {
   static bool _initialized = false;
   static Future<void>? _initFuture;

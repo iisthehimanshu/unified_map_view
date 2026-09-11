@@ -107,6 +107,18 @@ class UnifiedMapController extends ChangeNotifier {
     _annotationController = AnnotationController(this, venueName: venueName);
     _cameraPosition = initialLocation;
     AppConfig.instance;
+    HostHeading.changes.addListener(_onHostHeadingChanged);
+  }
+
+  /// Rebuilds the puck when a relayed heading appears or disappears.
+  ///
+  /// On web the arrow-versus-disc choice depends on whether a heading is
+  /// reaching the map, and a host cannot answer that until its bridge
+  /// handshake completes — typically after the map is already on screen. The
+  /// rebuild also restarts the provider's compass subscription, which found no
+  /// stream to listen to the first time round.
+  void _onHostHeadingChanged() {
+    _annotationController.refreshUserMarker();
   }
 
 
@@ -1162,6 +1174,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   @override
   void dispose() {
+    HostHeading.changes.removeListener(_onHostHeadingChanged);
     currentProviderImplementation.dispose();
     _currentMapController = null;
     AppConfig.dispose();

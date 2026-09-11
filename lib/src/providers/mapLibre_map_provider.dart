@@ -25,6 +25,8 @@ import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import '../models/map_layer.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+
+import '../heading/heading_source.dart';
 import 'package:http/http.dart' as http;
 import '../utils/LandmarkAssetType.dart';
 import '../models/marker_type_info.dart';
@@ -1814,7 +1816,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) {
+    _compassSub = HeadingSource.events?.listen((event) {
       final heading = event.heading;
       if (heading == null) return;
       // Ignore the sensor rather than cancelling the subscription. There *is*
@@ -2360,6 +2362,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _refreshPatchFadeIfStale(
       MapLibreMapController controller) async {
     if (!_isPolygonLayersEnabled) return;
+    // The marker layers have to exist first. This runs off a polygon push,
+    // which lands between enablePolygonLayers() (sets _isPolygonLayersEnabled)
+    // and enableMarkerLayers() (sets _isClusteringEnabled) — so on the polygon
+    // flag alone it fires into a style that has no marker layers yet, and
+    // _refreshPatchAboveOpacity below then *creates* _patchAboveMarkerLayerId
+    // out of order. enableMarkerLayers hits "Layer patch-above-markers-layer
+    // already exists", and because its whole body is one try/catch that throw
+    // skips every remaining layer, _isClusteringEnabled, and the _symbols
+    // re-push — i.e. the venue renders with no markers at all.
+    // Nothing is lost by waiting: enableMarkerLayers calls back in when done.
+    if (!_isClusteringEnabled) return;
     final boundaryPolygons = _polygons.where((p) =>
         p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
     final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
@@ -4410,6 +4423,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         final symbols = [..._symbols];
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
+
+      // The marker layers are up now, so any fade recompute that was skipped
+      // by the guard in _refreshPatchFadeIfStale can safely run. No-ops when
+      // the polygons have not landed yet — that push calls back in itself.
+      await _refreshPatchFadeIfStale(controller);
     } catch (e, stack) {
       print('Error enabling marker layers: $e');
       print('Stack trace: $stack');
