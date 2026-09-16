@@ -89,6 +89,21 @@ class RenderingUtilities{
     'default': {'strokeColor': Color(0xffCCCCCC), 'fillColor': Color(0xffE6E6E6)},
   };
 
+  /// [color] reduced to its grey equivalent, preserving alpha.
+  ///
+  /// Uses the Rec. 601 luma weights (0.299/0.587/0.114) on the sRGB components
+  /// rather than [Color.computeLuminance], which is gamma-corrected relative
+  /// luminance and renders noticeably darker than what people mean by
+  /// "greyscale".
+  static Color toGreyscale(Color color) {
+    final argb = color.value;
+    final r = (argb >> 16) & 0xFF;
+    final g = (argb >> 8) & 0xFF;
+    final b = argb & 0xFF;
+    final grey = (0.299 * r + 0.587 * g + 0.114 * b).round().clamp(0, 255);
+    return Color.fromARGB((argb >> 24) & 0xFF, grey, grey, grey);
+  }
+
   static String colorToMapplsHex(Color color) {
     return color.value
         .toRadixString(16)
@@ -125,6 +140,28 @@ class RenderingUtilities{
     }
     return "#bdbdbd";
   }
+
+  /// The landmark's type exactly as the venue's GeoJSON spells it, or null when
+  /// the properties carry none.
+  ///
+  /// This is the single source of truth for "what type is this marker" — both
+  /// [getAssetForLandmark] and the host-facing type filter read it, so a venue
+  /// whose spelling changes cannot make the two disagree. Returned verbatim
+  /// (original case, untrimmed content) because hosts show it in UI; compare it
+  /// with [normaliseLandmarkType].
+  static String? rawLandmarkType(Map<String, dynamic>? landmarkProperties) {
+    if (landmarkProperties == null) return null;
+    if (landmarkProperties['global'] == true) {
+      return landmarkProperties['type'] as String?;
+    }
+    final element = landmarkProperties['element'] as Map<String, dynamic>?;
+    if (element == null) return null;
+    return (element['subType'] ?? element['type']) as String?;
+  }
+
+  /// Comparison form of a raw type: lowercased and trimmed, so a host passing
+  /// 'Male Washroom' matches data spelling it 'male washroom'.
+  static String normaliseLandmarkType(String raw) => raw.toLowerCase().trim();
 
   static LandmarkAssetType? getAssetForLandmark(Map<String, dynamic>? landmarkProperties) {
     try {

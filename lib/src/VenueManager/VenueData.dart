@@ -8,7 +8,11 @@ import '../utils/renderingUtilities.dart';
 
 class VenueData{
   VenueData._internal(this.venueName, this.json, this.buildingData, {this.furnitureData = const []}) {
-    venueLatLng = MapLocation(latitude: buildingData.buildings!.first.coordinates.first, longitude: buildingData.buildings!.first.coordinates.last);
+    // A building filter that matches nothing leaves the list empty.
+    final firstBuilding = buildingData.buildings?.firstOrNull;
+    if (firstBuilding != null) {
+      venueLatLng = MapLocation(latitude: firstBuilding.coordinates.first, longitude: firstBuilding.coordinates.last);
+    }
     // The venue response is parsed exactly once. Re-parsing it per call was
     // walking every feature of every floor (and doing a jsonEncode/jsonDecode
     // round-trip per feature's properties), which froze the UI thread when a
@@ -24,8 +28,40 @@ class VenueData{
 
   // Public factory constructor
   factory VenueData(String venueName, Map<String, dynamic> json, BuildingData buildingData, {List<FurnitureModel> furnitureData = const []}) {
+    final allowed = UnifiedMapViewPackage.allowedBuildingIds;
+    if (allowed != null) {
+      buildingData = _restrictBuildings(buildingData, allowed);
+      json = _restrictFeatures(json, allowed);
+    }
     _instance = VenueData._internal(venueName, json, buildingData, furnitureData: furnitureData);
     return _instance!;
+  }
+
+  /// Keeps the allowed buildings, and the campus only if its id is allowed.
+  static BuildingData _restrictBuildings(BuildingData data, Set<String> allowed) {
+    final campus = data.campus;
+    return BuildingData(
+      buildings: data.buildings?.where((b) => allowed.contains(b.id)).toList(),
+      campus: campus is Campus && allowed.contains(campus.id) ? campus : null,
+    );
+  }
+
+  /// Drops features of buildings — the campus included — outside [allowed].
+  /// Features with no building id belong to no building and are kept.
+  ///
+  /// Returns a copy — [json] is the cached response held by the Hive box, and
+  /// the unfiltered venue has to survive for a later, different filter.
+  static Map<String, dynamic> _restrictFeatures(
+      Map<String, dynamic> json, Set<String> allowed) {
+    final features = json['data'];
+    if (features is! List) return json;
+    return {
+      ...json,
+      'data': features.where((feature) {
+        final buildingId = feature is Map ? feature['building_ID'] : null;
+        return buildingId == null || allowed.contains(buildingId);
+      }).toList(),
+    };
   }
   static VenueData? get instance => _instance;
 

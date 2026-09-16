@@ -9,6 +9,7 @@ import 'package:unified_map_view/src/utils/perf_trace.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
 import '../models/Cell.dart';
+import '../utils/LandmarkAssetType.dart';
 
 /// Main controller for managing map providers and operations
 class UnifiedMapController extends ChangeNotifier {
@@ -24,6 +25,9 @@ class UnifiedMapController extends ChangeNotifier {
   late AnnotationController _annotationController;
 
   String? onReadyLandmarkSelectionID;
+
+  MapLayerPolicy _layerPolicy = MapLayerPolicy.all;
+  MapStyleConfig? _styleConfig;
 
   UnifiedMapController({
     required MapProvider initialProvider,
@@ -51,13 +55,37 @@ class UnifiedMapController extends ChangeNotifier {
 
     String? url,
 
-    String languageCode = 'en'
+    String languageCode = 'en',
 
+    /// Which map content is drawn, how strongly, and what responds to taps.
+    ///
+    /// Applied as the layers are first created, so the map never briefly shows
+    /// content the host asked to hide. Change it later with [setLayers].
+    MapLayerPolicy layerPolicy = MapLayerPolicy.all,
+
+    /// A whole render configuration parsed from a config file — per-layer
+    /// settings plus the global immersive / greyscale / fade / symbol modes.
+    ///
+    /// Its [MapStyleConfig.layers] are merged OVER [layerPolicy], so a host can
+    /// keep a compiled-in baseline and let the file override parts of it. The
+    /// global modes are applied once the map exists (see [applyStyleConfig]);
+    /// [MapStyleConfig.immersive] is creation-time and reaches
+    /// [MapConfig.immersive] directly.
+    MapStyleConfig? styleConfig,
   }) {
     AppConfig.url = url;
     AppConfig.setLanguage(value: languageCode);
     _providers.addAll(providers);
     _currentProvider = initialProvider;
+    _styleConfig = styleConfig;
+    _layerPolicy = styleConfig == null
+        ? layerPolicy
+        : layerPolicy.merge(styleConfig.layers);
+    if (styleConfig?.greyscale != null) _greyscale = styleConfig!.greyscale!;
+    if (styleConfig?.fade != null) _fadeEnabled = styleConfig!.fade!;
+    if (styleConfig?.symbolsSpecified == true) {
+      _markerTypeFilter = styleConfig!.symbolTypes;
+    }
 
     _config = MapConfig(
         initialLocation: initialLocation,
@@ -72,6 +100,8 @@ class UnifiedMapController extends ChangeNotifier {
       onPolygonTap: onPolygon??onPolygonTap,
       onPolylineTap: onPolyline??onPolylineTap, onStyleLoadedCallback: onStyleLoadedCallback,
       onVenueRendered: onVenueRendered,
+      initialLayerPolicy: _layerPolicy,
+      immersive: styleConfig?.immersive ?? true,
     );
 
     _annotationController = AnnotationController(this, venueName: venueName);
@@ -132,8 +162,48 @@ class UnifiedMapController extends ChangeNotifier {
   /// Called when map is created
   void onMapCreated(dynamic controller) {
     _currentMapController = controller;
+    _applyInitialRenderModes();
     _annotationController.renderVenue();
     // fitBoundsToGeoJson();
+  }
+
+  /// Push the global render modes the host asked for before the map existed.
+  ///
+  /// The layer policy needs none of this — it reaches the provider through
+  /// [MapConfig.initialLayerPolicy] and is baked in as each layer is created.
+  /// Greyscale, fade and the symbol filter have no such creation-time seam, so
+  /// they are pushed here, at the earliest moment there is a controller to push
+  /// them to.
+  ///
+  /// Only a NON-DEFAULT value is pushed. Each condition below is the provider's
+  /// own default inverted, so a host that passed no config — or one whose config
+  /// omits these keys — makes no call at all from here and the renderer keeps
+  /// the state it has always had.
+  ///
+  /// Deliberately fire-and-forget: [onMapCreated] is a synchronous callback from
+  /// the platform view, and none of these can be awaited without blocking it.
+  /// Each is also safe this early — greyscale and the fade curves are re-derived
+  /// from provider state as the venue's layers and sources are built afterwards,
+  /// so an early push is honoured rather than overwritten.
+  void _applyInitialRenderModes() {
+    Future<void> apply() async {
+      if (_greyscale) {
+        await currentProviderImplementation
+            .setGreyscale(_currentMapController, true);
+      }
+      if (!_fadeEnabled) {
+        await currentProviderImplementation
+            .setFade(_currentMapController, false);
+      }
+      if (_markerTypeFilter != null) {
+        await currentProviderImplementation.setMarkerTypeFilter(
+            _currentMapController, _markerTypeFilter);
+      }
+    }
+
+    apply().catchError((Object e) {
+      print('initial render modes failed: $e');
+    });
   }
 
   /// Called when style is created
@@ -312,6 +382,235 @@ class UnifiedMapController extends ChangeNotifier {
   Future<void> clearAllMarkersAllowOverlap() async {
     if (_currentMapController == null) return;
     await currentProviderImplementation.clearAllMarkersAllowOverlap(_currentMapController);
+  }
+
+  /// The landmark types currently drawn, or null when every type is drawn.
+  Set<String>? get markerTypeFilter =>
+      _markerTypeFilter == null ? null : Set.unmodifiable(_markerTypeFilter!);
+  Set<String>? _markerTypeFilter;
+
+  /// Every landmark type the loaded venue actually contains, commonest first.
+  ///
+  /// Build the type UI from THIS rather than a hardcoded list — the vocabulary
+  /// is per-venue. One venue has `Male Washroom`/`Female Washroom` and no
+  /// generic `Washroom` at all; another has neither. A fixed list shows dead
+  /// options on one venue and silently misses types on the next.
+  ///
+  /// ```dart
+  /// for (final t in controller.availableMarkerTypes) {
+  ///   chips.add(Chip(label: Text('${t.rawType} (${t.count})')));
+  /// }
+  /// ```
+  ///
+  /// Empty until markers have loaded — read it after the venue is rendered.
+  List<MarkerTypeInfo> get availableMarkerTypes =>
+      currentProviderImplementation.availableMarkerTypes();
+
+  /// Draw only the markers whose landmark type matches one of [types].
+  ///
+  /// Two ways to name a type, and they mix freely:
+  ///
+  /// * [MarkerTypes] constants, known at compile time — use these when the UI
+  ///   must exist before markers load, or when no venue API is wired up yet.
+  /// * Exact spellings from [availableMarkerTypes], once the venue has loaded.
+  ///
+  /// ```dart
+  /// controller.showMarkerTypes({
+  ///   MarkerTypes.washroom,      // every washroom, however this venue spells it
+  ///   MarkerTypes.lift,
+  ///   'Pharmacy / Dispensary',   // this venue's exact wording
+  /// });
+  /// ```
+  ///
+  /// A type matches when the marker's own type CONTAINS it, case- and
+  /// whitespace-insensitively — the same rule the renderer uses to choose an
+  /// icon. So `MarkerTypes.washroom` catches `Male Washroom` and
+  /// `Accessible Washroom` alike, and broad values are broad on purpose:
+  /// `MarkerTypes.room` also matches `Room Door`. Pass an exact spelling when
+  /// you need precision.
+  ///
+  /// Source and destination pins are always drawn, filter or not. Passing an
+  /// empty set hides every other marker; pass null, or call
+  /// [clearMarkerTypeFilter], to draw them all again.
+  Future<void> showMarkerTypes(Set<String>? types) async {
+    _markerTypeFilter = types == null ? null : Set.of(types);
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setMarkerTypeFilter(
+        _currentMapController, _markerTypeFilter);
+  }
+
+  /// Draw every marker type again, undoing [showMarkerTypes].
+  Future<void> clearMarkerTypeFilter() => showMarkerTypes(null);
+
+  /// Whether the map is currently drawn in greyscale.
+  bool get isGreyscale => _greyscale;
+  bool _greyscale = false;
+
+  /// Draw the map in greyscale, or back in full colour (the default).
+  ///
+  /// ```dart
+  /// controller.setGreyscale(true);
+  /// ```
+  ///
+  /// Covers the basemap, polygons and polylines. Marker ICONS keep their
+  /// colour: each is a PNG composited when the venue loads, so desaturating
+  /// them would mean re-baking every icon — seconds of work on a large venue.
+  Future<void> setGreyscale(bool enabled) async {
+    _greyscale = enabled;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setGreyscale(
+        _currentMapController, enabled);
+    notifyListeners();
+  }
+
+  /// Whether markers and the venue boundary fade in and out across a zoom
+  /// window.
+  bool get isFadeEnabled => _fadeEnabled;
+  bool _fadeEnabled = true;
+
+  /// Turn the zoom fade ramp on markers and the venue boundary on or off.
+  ///
+  /// ```dart
+  /// controller.setFade(false);   // labels pop in instead of fading
+  /// ```
+  ///
+  /// Only the opacity ramp is affected. Zoom RANGES stand: the venue name still
+  /// stops drawing once you are zoomed past it, it just appears and disappears
+  /// cleanly rather than dissolving.
+  Future<void> setFade(bool enabled) async {
+    _fadeEnabled = enabled;
+    if (_currentMapController == null) return;
+    await currentProviderImplementation.setFade(_currentMapController, enabled);
+    notifyListeners();
+  }
+
+  /// The render configuration this controller was built with, if any.
+  MapStyleConfig? get styleConfig => _styleConfig;
+
+  /// Apply a whole render configuration — per-layer settings plus the global
+  /// immersive / greyscale / fade / symbol modes.
+  ///
+  /// Its layer settings are merged over the current policy rather than replacing
+  /// it, and a global mode the file does not mention is left alone, so a partial
+  /// config changes only what it names.
+  ///
+  /// [MapStyleConfig.immersive] is NOT applied here: 3D is fixed when the map is
+  /// built (`MapConfig.immersive`), which is why a config passed to the
+  /// constructor is the only way it takes effect.
+  ///
+  /// ```dart
+  /// final style = await MapStyleConfig.fromAsset('assets/map_config.yaml');
+  /// await controller.applyStyleConfig(style);
+  /// ```
+  Future<void> applyStyleConfig(MapStyleConfig config) async {
+    _styleConfig = config;
+    await updateLayers(config.layers);
+    if (config.greyscale != null) await setGreyscale(config.greyscale!);
+    if (config.fade != null) await setFade(config.fade!);
+    if (config.symbolsSpecified) await showMarkerTypes(config.symbolTypes);
+  }
+
+  /// Which map content is currently drawn, how strongly, and what responds to
+  /// taps.
+  MapLayerPolicy get layerPolicy => _layerPolicy;
+
+  /// Replace the whole layer policy.
+  ///
+  /// ```dart
+  /// controller.setLayers(MapLayerPolicy.polygonsOnlyNoTap);
+  /// ```
+  Future<void> setLayers(MapLayerPolicy policy) => _pushLayerPolicy(policy);
+
+  /// Change one group, leaving every other group and every unspecified field
+  /// alone.
+  ///
+  /// Pass [clearOpacity] to drop an opacity override and hand the group back to
+  /// the renderer's own opacity — `opacity: null` cannot say that, because null
+  /// already means "leave unchanged".
+  Future<void> setLayer(
+    MapLayer group, {
+    bool? visible,
+    double? opacity,
+    bool? tappable,
+    bool clearOpacity = false,
+  }) {
+    final current = _layerPolicy.states[group] ?? const MapLayerState();
+    return _pushLayerPolicy(_layerPolicy.withGroup(
+      group,
+      current.copyWith(
+        visible: visible,
+        opacity: opacity,
+        tappable: tappable,
+        clearOpacity: clearOpacity,
+      ),
+    ));
+  }
+
+  /// Change one STYLE LAYER, leaving every other layer and every unspecified
+  /// field alone.
+  ///
+  /// Where [setLayer] speaks the semantic taxonomy — "every room polygon" —
+  /// this addresses one exact layer by the ids in [MapStyleLayers], and can set
+  /// any MapLibre paint or layout property on it, not just the three semantic
+  /// fields:
+  ///
+  /// ```dart
+  /// controller.setStyleLayer(
+  ///   MapStyleLayers.normalPolygons,
+  ///   opacity: 0.7,
+  ///   properties: {'fill-color': 'red', 'fill-outline-color': '#900'},
+  /// );
+  /// ```
+  ///
+  /// Properties merge with any already set on the layer; keys not named keep
+  /// the renderer's own value. Pass [clearProperties] to drop them all — an
+  /// empty map means "add nothing", not "remove what is there". Keys may be
+  /// kebab-case or camelCase.
+  ///
+  /// A layer-level setting wins over anything [setLayer] said about the group it
+  /// belongs to, since it is the more specific of the two.
+  Future<void> setStyleLayer(
+    String layerId, {
+    bool? visible,
+    double? opacity,
+    bool? tappable,
+    Map<String, Object?>? properties,
+    bool clearOpacity = false,
+    bool clearProperties = false,
+  }) {
+    final current = _layerPolicy.layers[layerId] ?? const MapLayerState();
+    return _pushLayerPolicy(_layerPolicy.withLayer(
+      layerId,
+      current.copyWith(
+        visible: visible,
+        opacity: opacity,
+        tappable: tappable,
+        properties: properties,
+        clearOpacity: clearOpacity,
+        clearProperties: clearProperties,
+      ),
+    ));
+  }
+
+  /// Field-wise merge of [patch] into the current policy.
+  Future<void> updateLayers(MapLayerPolicy patch) =>
+      _pushLayerPolicy(_layerPolicy.merge(patch));
+
+  /// Restore every group to visible, tappable, and the renderer's own opacity.
+  Future<void> resetLayers() => _pushLayerPolicy(MapLayerPolicy.all);
+
+  Future<void> _pushLayerPolicy(MapLayerPolicy next) async {
+    if (next == _layerPolicy) return;
+    _layerPolicy = next;
+    // Mirror it into the config so a map that has not been created yet — and a
+    // map rebuilt by switchProvider, which drops _currentMapController — seeds
+    // its layers from the same value instead of the stale one.
+    _config = _config.copyWith(initialLayerPolicy: next);
+    if (_currentMapController != null) {
+      await currentProviderImplementation
+          .setLayerPolicy(_currentMapController, next);
+    }
+    notifyListeners();
   }
 
   /// Get current camera location
@@ -729,16 +1028,53 @@ class UnifiedMapController extends ChangeNotifier {
     return _annotationController.addMultiPathGraph(path.map((map)=>Cell.fromJson(map)).toList());
   }
 
+  /// Whether drawing a path dims the rest of the map.
+  ///
+  /// Null means "use the venue's default", which is the historical behaviour:
+  /// on for zoo themes, off everywhere else. Set it explicitly to override that
+  /// per venue.
+  bool? _mapFadeOnPath;
+
+  /// Whether [annotatePath] will dim the map, taking the host override into
+  /// account and otherwise falling back to the theme default.
+  bool get mapFadeOnPath => _mapFadeOnPath ?? RenderingTheme.current.isZoo;
+
+  /// Turn the path map-fade on or off.
+  ///
+  /// The fade dims everything outside the drawn route so the path reads
+  /// clearly; it is applied by [annotatePath] and lifted by [clearPath]. Pass
+  /// null to hand the decision back to the venue's theme default.
+  ///
+  /// Takes effect on the NEXT [annotatePath]; it does not add or remove the
+  /// fade on a route that is already drawn — use [setMapFade] for that.
+  void setMapFadeOnPath(bool? enabled) {
+    _mapFadeOnPath = enabled;
+    notifyListeners();
+  }
+
+  /// Apply or lift the map fade right now, independently of any path.
+  Future<void> setMapFade(bool faded) async {
+    if (_currentMapController == null) return;
+    await (faded
+        ? currentProviderImplementation.addMapFade(_currentMapController)
+        : currentProviderImplementation.removeMapFade(_currentMapController));
+  }
+
   Future<void> clearPath() async {
     _annotationController.clearPath();
-    if(RenderingTheme.current.isZoo)await currentProviderImplementation.removeMapFade(_currentMapController);
+    // Lift the fade whenever one could be up. Deliberately NOT gated on the
+    // current toggle: a host that turns the toggle off while a faded path is
+    // drawn must still get the fade cleared, or the map stays dimmed forever.
+    await currentProviderImplementation.removeMapFade(_currentMapController);
     notifyListeners();
   }
 
   Future<void> annotatePath({required List<String> bids, required int sourceFloor, bool isTour = false}) async {
     deSelectLocation();
     _annotationController.isTourPath = isTour;
-    if(RenderingTheme.current.isZoo)await currentProviderImplementation.addMapFade(_currentMapController);
+    if (mapFadeOnPath) {
+      await currentProviderImplementation.addMapFade(_currentMapController);
+    }
     for (var bid in bids) {
       changeBuildingFloor(buildingID: bid, floor: sourceFloor);
     }

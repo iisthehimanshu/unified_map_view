@@ -22,6 +22,11 @@ export 'src/models/geojson_models.dart';
 export 'src/models/user.dart';
 export 'src/models/user_marker_style.dart';
 export 'src/models/CameraBound.dart';
+export 'src/models/map_layer.dart';
+export 'src/models/map_style_config.dart';
+export 'src/utils/LandmarkAssetType.dart';
+export 'src/models/marker_type_info.dart';
+export 'src/models/marker_types.dart';
 
 // Controllers
 export 'src/controllers/unified_map_controller.dart';
@@ -60,6 +65,21 @@ class UnifiedMapViewPackage {
   static Future<void> initialize({required String venueName,String? url}) {
     AppConfig.url = url;
     return _initFuture ??= _initializeOnce(venueName);
+  }
+
+  static Set<String>? _allowedBuildingIds;
+
+  /// The buildings the venue is restricted to, or null to render all of them.
+  static Set<String>? get allowedBuildingIds => _allowedBuildingIds;
+
+  /// Renders only [ids] out of the venue. The campus base map is filtered the
+  /// same way, so include its id to keep it. Null or empty renders everything. Takes effect the next time a map loads its
+  /// venue; the cached venue responses stay complete, so no re-fetch is needed.
+  static void setAllowedBuildingIds(Iterable<String>? ids) {
+    final normalized =
+        ids?.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+    _allowedBuildingIds =
+        (normalized == null || normalized.isEmpty) ? null : normalized;
   }
 
   static Future<void> _initializeOnce(String venueName) async {

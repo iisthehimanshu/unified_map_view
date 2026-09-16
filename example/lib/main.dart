@@ -3,6 +3,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/maplibre.dart';
 import 'package:unified_map_view/mappls.dart';
@@ -15,25 +16,55 @@ void main() async {
   MapplsAccountManager.setRestAPIKey("6889110931e58e2b999fb9131f78cc2e");
   MapplsAccountManager.setAtlasClientId("96dHZVzsAuuuN3sEWtPRTabth0A-fz0ZseWHjAq-2lqZV1-b6Tus_MG1v2j-R_o60cIYwVrzPH9ns6LmM1VKvQ==");
   MapplsAccountManager.setAtlasClientSecret("lrFxI-iSEg9he_iO5iRlieP4vy0VnS26w3KGnCTD8jVPei5dJTFX7EDYjrQN1xR-8nvS-qGOIN8DiuvdoAXe4FjMN6Sg_Nsi");
-  await UnifiedMapViewPackage.initialize(venueName: 'NationalZoologicalPark');
-  runApp(const GeoJsonExampleApp());
+  await UnifiedMapViewPackage.initialize(venueName: 'AIGHospital');
+
+  // Deliberately NOT loaded here. The map starts on the renderer's own
+  // defaults so the config's effect is a visible before/after: press 'reload
+  // config' in the harness to read $_kMapConfigAsset and apply it to the live
+  // map.
+  //
+  // Seeding it at construction is still the right thing for a real host app —
+  // it creates every layer already in the configured state instead of drawing
+  // the default first and restyling a frame later — so the load is kept here,
+  // commented, rather than deleted:
+  //
+  //   var styleConfig = MapStyleConfig.none;
+  //   try {
+  //     styleConfig = await MapStyleConfig.fromAsset(_kMapConfigAsset);
+  //   } catch (e) { /* fall back to renderer defaults */ }
+  //   runApp(GeoJsonExampleApp(styleConfig: styleConfig));
+  //
+  // The one key this costs is `immersive`: it reaches MapConfig.immersive at
+  // construction and applyStyleConfig deliberately cannot change it, so it now
+  // always takes its default. Testing `immersive` needs the seed above.
+  runApp(const GeoJsonExampleApp(styleConfig: MapStyleConfig.none));
 }
 
+/// The config file the developer maintains. Declared under `assets/` in
+/// example/pubspec.yaml.
+const String _kMapConfigAsset = 'assets/map_config.yaml';
+
 class GeoJsonExampleApp extends StatelessWidget {
-  const GeoJsonExampleApp({Key? key}) : super(key: key);
+  const GeoJsonExampleApp({Key? key, required this.styleConfig})
+      : super(key: key);
+
+  final MapStyleConfig styleConfig;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'GeoJSON Map Example',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
-      home: const GeoJsonMapScreen(),
+      home: GeoJsonMapScreen(styleConfig: styleConfig),
     );
   }
 }
 
 class GeoJsonMapScreen extends StatefulWidget {
-  const GeoJsonMapScreen({Key? key}) : super(key: key);
+  const GeoJsonMapScreen({Key? key, required this.styleConfig})
+      : super(key: key);
+
+  final MapStyleConfig styleConfig;
 
   @override
   State<GeoJsonMapScreen> createState() => _GeoJsonMapScreenState();
@@ -42,6 +73,33 @@ class GeoJsonMapScreen extends StatefulWidget {
 class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   late UnifiedMapController _unifiedMapController;
   bool _isLoading = false;
+
+  // ── layer-policy test harness ──────────────────────────────────────────────
+  String _lastTap = 'no tap yet';
+  int _tapCount = 0;
+  String _activePreset = 'all';
+  double _subSectionOpacity = 1.0;
+  bool _subSectionOverridden = false;
+  double _polygonOpacity = 1.0;
+  bool _polygonOverridden = false;
+
+  /// Mirrors controller.mapFadeOnPath so the switch shows the effective value,
+  /// including the theme default before the host overrides it.
+  bool _fadeOnPath = false;
+
+  bool _greyscale = false;
+
+  /// Mirrors controller.isFadeEnabled — the zoom fade ramp on markers and the
+  /// venue boundary.
+  bool _fadeEnabled = true;
+
+  /// What the loader could not make sense of in the config file, if anything.
+  /// Surfaced in the harness rather than only printed, since a silently ignored
+  /// key is the failure mode a config file invites.
+  List<String> _configWarnings = const [];
+
+  /// Whether a runtime re-apply of the config file is in flight.
+  bool _reloadingConfig = false;
 
   Timer? _moveUserTimer;
 
@@ -59,6 +117,47 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
   int _currentRouteIndex = 0;
 
+  /// Raw marker types currently allowed through; empty means "no filter".
+  final Set<String> _markerTypes = {};
+
+  /// What this venue actually contains. Populated from the map once markers
+  /// have loaded — deliberately NOT a hardcoded list, because the vocabulary is
+  /// per-venue (this one has Male/Female Washroom and no generic Washroom at
+  /// all, and no lifts whatsoever).
+  List<MarkerTypeInfo> _availableTypes = const [];
+
+  Future<void> _refreshAvailableTypes() async {
+    final types = _unifiedMapController.availableMarkerTypes;
+    setState(() => _availableTypes = types);
+    print('HARNESS available types -> '
+        '${types.map((t) => "${t.rawType}(${t.count})").join(", ")}');
+  }
+
+  Future<void> _toggleMarkerType(String rawType) async {
+    setState(() {
+      if (!_markerTypes.remove(rawType)) _markerTypes.add(rawType);
+    });
+    await _unifiedMapController
+        .showMarkerTypes(_markerTypes.isEmpty ? null : _markerTypes);
+    print('HARNESS marker types -> '
+        '${_markerTypes.isEmpty ? "ALL" : _markerTypes.join(",")}');
+  }
+
+  Widget _typeChip(MarkerTypeInfo info) {
+    final on = _markerTypes.contains(info.rawType);
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: FilterChip(
+        label: Text('${info.rawType} (${info.count})',
+            style: const TextStyle(fontSize: 11)),
+        selected: on,
+        onSelected: (_) => _toggleMarkerType(info.rawType),
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -71,17 +170,104 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           bearing: 0.0,
           tilt: 0.0
         ),
+      onPolygon: ({required String polygonId,
+          required List<MapLocation> coordinates}) {
+        setState(() {
+          _tapCount++;
+          _lastTap = 'POLYGON #$_tapCount  $polygonId';
+        });
+        print('HARNESS onPolygonTap -> $polygonId');
+      },
+      onMarker: ({required String markerId,
+          required MapLocation coordinates}) {
+        setState(() {
+          _tapCount++;
+          _lastTap = 'MARKER #$_tapCount  $markerId';
+        });
+        print('HARNESS onMarkerTap -> $markerId');
+      },
       url: "https://dev.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
-          MapProvider.mappls: MapplsMapProvider()}
+          MapProvider.mappls: MapplsMapProvider()},
+      // The whole config file in one argument: per-layer settings seed the
+      // layers as they are created, and the global immersive / greyscale /
+      // fade / symbol modes are pushed as soon as there is a map controller.
+      styleConfig: widget.styleConfig,
     );
-    
+
+    // Mirror the file's global modes into the harness switches, so they show
+    // the effective value rather than their own hardcoded default.
+    _greyscale = widget.styleConfig.greyscale ?? _greyscale;
+    _fadeEnabled = widget.styleConfig.fade ?? _fadeEnabled;
+    _configWarnings = widget.styleConfig.warnings;
+
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
     // TEST: drop a lone plain-asset icon marker to isolate icon rendering in maplibre 0.26
     // Future.delayed(const Duration(seconds: 6), () {
     //   _addTestMarker();
     // });
+  }
+
+  /// Re-read the config file and apply it to the live map.
+  ///
+  /// The runtime half of the same config: [MapStyleConfig.immersive] is fixed
+  /// when the map is built and is the one key this cannot change, so editing
+  /// `immersive` needs a hot restart. Everything else — per-layer settings, the
+  /// global modes — takes effect immediately.
+  ///
+  /// `applyStyleConfig` MERGES the file's layer settings over the live policy
+  /// rather than replacing it, so whatever the preset chips and sliders above
+  /// have set stays put unless the file names the same field. Press 'all' first
+  /// for a clean slate.
+  Future<void> _reloadConfig() async {
+    setState(() => _reloadingConfig = true);
+    try {
+      // rootBundle caches every string it has loaded, so without this the
+      // reload would re-apply the copy read at startup and edits to the file
+      // would look like they did nothing.
+      rootBundle.evict(_kMapConfigAsset);
+      final config = await MapStyleConfig.fromAsset(_kMapConfigAsset);
+      await _unifiedMapController.applyStyleConfig(config);
+      setState(() {
+        _greyscale = config.greyscale ?? _greyscale;
+        _fadeEnabled = config.fade ?? _fadeEnabled;
+        _configWarnings = config.warnings;
+      });
+      print('HARNESS config reloaded -> $config');
+    } catch (e) {
+      setState(() => _configWarnings = ['load failed: $e']);
+      print('HARNESS config reload failed: $e');
+    } finally {
+      setState(() => _reloadingConfig = false);
+    }
+  }
+
+  Future<void> _applyPreset(String name, MapLayerPolicy policy) async {
+    await _unifiedMapController.setLayers(policy);
+    // Re-apply any active opacity override on top of the preset.
+    if (_polygonOverridden) {
+      await _unifiedMapController
+          .setLayer(MapLayer.polygons, opacity: _polygonOpacity);
+    }
+    if (_subSectionOverridden) {
+      await _unifiedMapController
+          .setLayer(MapLayer.subSections, opacity: _subSectionOpacity);
+    }
+    setState(() => _activePreset = name);
+    print('HARNESS preset -> $name  policy=${_unifiedMapController.layerPolicy}');
+  }
+
+  Widget _presetChip(String name, MapLayerPolicy policy) {
+    final active = _activePreset == name;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: ChoiceChip(
+        label: Text(name, style: const TextStyle(fontSize: 11)),
+        selected: active,
+        onSelected: (_) => _applyPreset(name, policy),
+      ),
+    );
   }
 
   Future<void> _addTestMarker() async {
@@ -323,7 +509,166 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
               ],
             ),
           ),
-
+          // ── layer-policy test harness ──────────────────────────────────
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            color: Colors.amber.shade50,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // SingleChildScrollView(
+                //   scrollDirection: Axis.horizontal,
+                //   child: Row(children: [
+                //     const Text('grey: ',
+                //         style: TextStyle(
+                //             fontSize: 11, fontWeight: FontWeight.bold)),
+                //     Switch(
+                //       value: _greyscale,
+                //       onChanged: (v) {
+                //         setState(() => _greyscale = v);
+                //         _unifiedMapController.setGreyscale(v);
+                //         print('HARNESS greyscale -> $v');
+                //       },
+                //       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                //     ),
+                //     const SizedBox(width: 12),
+                //     TextButton(
+                //       onPressed: () => _unifiedMapController.setMapFade(true),
+                //       child: const Text('fade now',
+                //           style: TextStyle(fontSize: 11)),
+                //     ),
+                //     TextButton(
+                //       onPressed: () => _unifiedMapController.setMapFade(false),
+                //       child: const Text('unfade',
+                //           style: TextStyle(fontSize: 11)),
+                //     ),
+                //     const SizedBox(width: 12),
+                //     const Text('types: ',
+                //         style: TextStyle(
+                //             fontSize: 11, fontWeight: FontWeight.bold)),
+                //     if (_availableTypes.isEmpty)
+                //       TextButton(
+                //         onPressed: _refreshAvailableTypes,
+                //         child: const Text('load types',
+                //             style: TextStyle(fontSize: 11)),
+                //       ),
+                //     ..._availableTypes.map(_typeChip),
+                //     // Exercises the BROAD path: a compile-time constant that
+                //     // no venue spells exactly, matched by substring. Here it
+                //     // should catch Male/Female/Accessible Washroom together.
+                //     TextButton(
+                //       onPressed: () async {
+                //         setState(() {
+                //           _markerTypes
+                //             ..clear()
+                //             ..add(MarkerTypes.washroom);
+                //         });
+                //         await _unifiedMapController
+                //             .showMarkerTypes({MarkerTypes.washroom});
+                //         print('HARNESS marker types -> '
+                //             'MarkerTypes.washroom (broad)');
+                //       },
+                //       child: const Text('const: washroom',
+                //           style: TextStyle(fontSize: 11)),
+                //     ),
+                //     if (_availableTypes.isNotEmpty)
+                //       TextButton(
+                //         onPressed: () async {
+                //           setState(_markerTypes.clear);
+                //           await _unifiedMapController.clearMarkerTypeFilter();
+                //           print('HARNESS marker types -> ALL');
+                //         },
+                //         child: const Text('all types',
+                //             style: TextStyle(fontSize: 11)),
+                //       ),
+                //   ]),
+                // ),
+                // ── config file ──────────────────────────────────────
+                Row(children: [
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: _reloadingConfig ? null : _reloadConfig,
+                    icon: _reloadingConfig
+                        ? const SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.description, size: 14),
+                    label: const Text('reload config',
+                        style: TextStyle(fontSize: 11)),
+                  ),
+                ]),
+                if (_configWarnings.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      'config warnings:\n  ${_configWarnings.join("\n  ")}',
+                      style: TextStyle(
+                          fontSize: 10, color: Colors.orange.shade900),
+                    ),
+                  ),
+                // SingleChildScrollView(
+                //   scrollDirection: Axis.horizontal,
+                //   child: Row(children: [
+                //     _presetChip('all', MapLayerPolicy.all),
+                //     _presetChip('polygonsOnly', MapLayerPolicy.polygonsOnly),
+                //     _presetChip(
+                //         'polygonsOnlyNoTap', MapLayerPolicy.polygonsOnlyNoTap),
+                //     // Control for the tap gate: pixel-identical to `all`, but
+                //     // every group inert. Isolates tappability from visibility.
+                //     _presetChip(
+                //         'allNoTap',
+                //         const MapLayerPolicy({
+                //           MapLayer.markers: MapLayerState.untappable,
+                //           MapLayer.polygons: MapLayerState.untappable,
+                //           MapLayer.selection: MapLayerState.untappable,
+                //           MapLayer.userLocation: MapLayerState.untappable,
+                //           MapLayer.route: MapLayerState.untappable,
+                //         })),
+                //   ]),
+                // ),
+                Row(children: [
+                  const Text('polygons opacity  ',
+                      style: TextStyle(fontSize: 11)),
+                  Expanded(
+                    child: Slider(
+                      value: _polygonOpacity,
+                      min: 0.0,
+                      max: 1.0,
+                      divisions: 10,
+                      label: _polygonOpacity.toStringAsFixed(1),
+                      onChanged: (v) {
+                        setState(() {
+                          _polygonOpacity = v;
+                          _polygonOverridden = true;
+                        });
+                        _unifiedMapController.setLayer(MapLayer.polygons,
+                            opacity: v);
+                      },
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _polygonOpacity = 1.0;
+                        _polygonOverridden = false;
+                      });
+                      _unifiedMapController.setLayer(MapLayer.polygons,
+                          clearOpacity: true);
+                    },
+                    child: const Text('clear', style: TextStyle(fontSize: 11)),
+                  ),
+                ]),
+                Text('tap: $_lastTap',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: _tapCount == 0
+                            ? Colors.grey
+                            : Colors.green.shade800)),
+              ],
+            ),
+          ),
           // Map
           Expanded(
             child: Stack(
