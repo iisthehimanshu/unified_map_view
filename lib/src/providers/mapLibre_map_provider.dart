@@ -6592,6 +6592,33 @@ class MaplibreMapProvider extends BaseMapProvider {
     await selectLocation(controller, id);
   }
 
+  /// Resolves the polygon a selection id refers to.
+  ///
+  /// Matches the polygon's OWN id component first, and that exactness is the
+  /// whole point: this venue names a room's walls after the room, with no
+  /// separator. `point-7ypw8j7` is a room; `point-7ypw8j7wall0`,
+  /// `...wall1` and `...wall2` are its walls and beams. A `contains` test over
+  /// the composite key matches all four, so the `firstWhere` this replaces
+  /// returned whichever came first in the venue data — the room for
+  /// `point-frc9ipa`, but `point-7ypw8j7wall0` for `point-7ypw8j7`, whose
+  /// walls are serialised ahead of it. Tapping that room's marker selected and
+  /// highlighted its wall, while the identical tap one room over was correct.
+  /// 173 of this venue's 900 polygon ids are a substring of another's, so the
+  /// source ordering decided it silently, per room.
+  ///
+  /// The substring pass is kept as a fallback, for callers handing over a whole
+  /// composite key rather than a bare feature id.
+  GeoJsonPolygon? _findPolygonById(String polyID, String markerPolyID) {
+    for (final p in _polygons) {
+      final ownId = _extractPolygonIdFromTap(p.id);
+      if (ownId == polyID || ownId == markerPolyID) return p;
+    }
+    for (final p in _polygons) {
+      if (p.id.contains(polyID) || p.id.contains(markerPolyID)) return p;
+    }
+    return null;
+  }
+
   String? _extractPolygonIdFromTap(String key) {
     var keyMap = GeoJsonUtils.extractKeyValueMap(key);
     if (keyMap["polyId"] != null) return keyMap["polyId"];
@@ -6710,10 +6737,8 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       try {
         if (_polygons.isNotEmpty) {
-          polygon = _polygons.firstWhere(
-                (p) => p.id.contains(polyID) || p.id.contains(polyIDInsideMarker),
-            orElse: () => throw Exception('Polygon not found'),
-          );
+          polygon = _findPolygonById(polyID, polyIDInsideMarker);
+          if (polygon == null) throw Exception('Polygon not found');
           if (polygon.points.length < 3) {
             print('Warning: Polygon has fewer than 3 points: ${polygon.id}');
             polygon = null;
