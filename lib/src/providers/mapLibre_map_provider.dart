@@ -143,6 +143,9 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   final String _rotationSourceId = 'rotation-markers-source';
   final String _rotationMarkerLayerId = 'rotation-marker-layer';
+  // Sibling of the rotation layer for markers that must always face the viewer
+  // (screen/viewport-aligned) instead of rotating with the map or heading.
+  final String _faceUserMarkerLayerId = 'rotation-faceuser-layer';
 
   final String _circleSourceId = 'circle-source';
   final String _normalCircleLayerId = 'normal-circle-layer';
@@ -709,6 +712,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                   _customRenderingMarkerLayerId,
                   _priorityMarkerLayerId,
                   _rotationMarkerLayerId,
+                  _faceUserMarkerLayerId,
                   _dotMarkerLayerId,
                 ].where(_tapAllowedForLayer).toList();
 
@@ -1585,10 +1589,20 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> localizeUser(controller, GeoJsonMarker marker) async {
     if (controller is MapLibreMapController) {
-      if (_rotatingSymbols
-          .where((e) => e.id.toLowerCase().contains("user"))
-          .isNotEmpty) {
-        return;
+      final bool isUserPuck = marker.id.toLowerCase().contains("user");
+      if (isUserPuck) {
+        // Only ever one real user puck (its id changes each call — it always
+        // contains "user" — so dedupe by that, not by exact id).
+        if (_rotatingSymbols
+            .where((e) => e.id.toLowerCase().contains("user"))
+            .isNotEmpty) {
+          return;
+        }
+      } else {
+        // A non-puck rotation marker (e.g. a shared-location marker) must be
+        // able to coexist with the user puck — upsert it by exact id instead of
+        // being blocked by the puck's presence.
+        _rotatingSymbols.removeWhere((e) => e.id == marker.id);
       }
       // dart2js stack capture/format is expensive; native keeps the trace.
       if (!kIsWeb) print("localizeUser ${StackTrace.current}");
@@ -1596,7 +1610,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       await _loadMarkerIcon(controller, marker);
       try {
         await setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
-        _startCompassListening(controller, _rotationSourceId);
+        // Compass drives puck rotation only; a shared marker sets
+        // compassBasedRotation:false and stays upright, so it needs no listener.
+        if (isUserPuck) _startCompassListening(controller, _rotationSourceId);
       } catch (e) {
         print("error localizing user $e");
       }
@@ -1731,7 +1747,12 @@ class MaplibreMapProvider extends BaseMapProvider {
         if (marker.iconName != null || true) 'icon': marker.id,
         'isPriority': marker.priority ?? false,
         'intractable': marker.properties?["polyId"] != null,
-        if (_currentHeading != null) "bearing": _currentHeading!,
+        'faceUser': marker.properties?['faceUser'] == true,
+        // Only rotate markers that opt in (the real user puck). A shared-location
+        // marker sets compassBasedRotation:false so it stays upright / facing the
+        // viewer instead of spinning with the compass during the move animation.
+        if (_currentHeading != null && marker.compassBasedRotation)
+          "bearing": _currentHeading!,
       }
     })
         .toList();
@@ -1947,7 +1968,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// [_animalDisplayIconId], which falls back to the paw placeholder, so they
   /// are never icon-less even before their photo arrives.
   bool _hasUsableIcon(GeoJsonMarker marker) =>
-      marker.assetPath != null &&
+      // Host-supplied raw bytes are registered directly in _loadMarkerIcon, so
+      // they count as a usable icon even with no assetPath.
+      (marker.assetPath != null || marker.imageBytes != null) &&
       (_isAnimalMarker(marker) || !_iconRegistrationFailed.contains(marker.id));
 
   /// [_loadMarkerIcon] plus bookkeeping for [_iconRegistrationFailed].
@@ -2191,6 +2214,8 @@ class MaplibreMapProvider extends BaseMapProvider {
                 'smallIcon': _smallIconIds[marker.id],
               'isPriority': marker.priority ?? false,
               'intractable': marker.properties?["polyId"] != null,
+              // Screen-aligned marker flag (see the faceUser rotation layer).
+              'faceUser': marker.properties?['faceUser'] == true,
               'bearing': marker.compassBasedRotation
                   ? 0.0
                   : (marker.properties?["bearing"] ?? 0.0),
@@ -2549,6 +2574,10 @@ class MaplibreMapProvider extends BaseMapProvider {
                 if (marker.iconName != null || true) 'icon': marker.id,
                 'isPriority': marker.priority ?? false,
                 'intractable': marker.properties?["polyId"] != null,
+                // Keep screen-aligned markers on the faceUser (viewport) layer on
+                // every compass push too — otherwise they fall back onto the
+                // map-aligned layer and start rotating with the heading.
+                'faceUser': marker.properties?['faceUser'] == true,
                 if (marker.compassBasedRotation) "bearing": heading,
               }
             })
@@ -4574,6 +4603,21 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<bool> _loadMarkerIcon(MapLibreMapController controller, GeoJsonMarker marker) async {
+    // Host-supplied raw icon bytes (e.g. a runtime-generated initials + LIVE
+    // marker): register them directly under the marker id (and its '-small'
+    // zoom variant) and skip the asset/photo bake path entirely.
+    if (marker.imageBytes != null) {
+      try {
+        // Use the style-ready-safe wrapper (a raw addImage silently fails when
+        // the style is not ready yet, which left the marker invisible).
+        await _addImageSafe(controller, marker.id, marker.imageBytes!);
+        await _addImageSafe(controller, '${marker.id}-small', marker.imageBytes!);
+        return true;
+      } catch (e) {
+        print('_loadMarkerIcon(imageBytes) ' + e.toString());
+        return false;
+      }
+    }
     if (_isAnimalMarker(marker)) {
       // Only the label-less variant. The labelled composite is deferred to
       // _ensureLabelledAnimalIcons, which runs on camera idle at label zoom.
@@ -5521,6 +5565,45 @@ class MaplibreMapProvider extends BaseMapProvider {
           textAllowOverlap: true,
           textIgnorePlacement: true,
         )),
+        // The real puck (map-aligned / heading-rotated). Screen-aligned markers
+        // are drawn by Layer 8b below instead.
+        filter: ["!", ["to-boolean", ["get", "faceUser"]]],
+        enableInteraction: true,
+        belowLayerId: await _webSafeBelowLayerId(controller, _sectionMarkerLayerId),
+      );
+
+      // Layer 8b: Rotation markers that always FACE THE USER (viewport-aligned).
+      // Same source as Layer 8, but the icon ignores map rotation and heading —
+      // it stays upright on screen as the map moves. Used by shared-location
+      // markers (faceUser=true), never the puck.
+      await _addSymbolLayerSafe(
+        controller,
+        _rotationSourceId,
+        _faceUserMarkerLayerId,
+        SymbolLayerProperties(
+          symbolSortKey: ["+", 9000, _kSortKeyExpression],
+          iconImage: ["get", "icon"],
+          iconSize: kIsWeb
+              ? [
+                  "interpolate",
+                  ["linear"],
+                  ["zoom"],
+                  14.0, 0.15,
+                  18.0, 0.7082,
+                  18.3, 0.75,
+                  22.0, 0.75,
+                ]
+              : 1.5 * _kIconScale,
+          // No data-driven rotation, and viewport alignment => always faces the
+          // viewer regardless of map rotation.
+          iconRotate: 0.0,
+          iconRotationAlignment: "viewport",
+          iconAllowOverlap: true,
+          iconIgnorePlacement: true,
+          textAllowOverlap: true,
+          textIgnorePlacement: true,
+        ),
+        filter: ["to-boolean", ["get", "faceUser"]],
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _sectionMarkerLayerId),
       );

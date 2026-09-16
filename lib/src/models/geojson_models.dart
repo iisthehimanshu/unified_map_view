@@ -251,6 +251,11 @@ class GeoJsonMarker {
   Offset? anchor;
   Offset? renderAnchor;
 
+  /// Raw PNG bytes to use as this marker's icon, registered directly with the
+  /// map (addImage) under [id] — bypasses the asset/photo bake path. Lets a host
+  /// supply a fully custom, runtime-generated marker (e.g. initials + a badge).
+  final Uint8List? imageBytes;
+
   GeoJsonMarker({
     required this.id,
     required this.position,
@@ -269,6 +274,7 @@ class GeoJsonMarker {
     this.bearing,
     this.anchor,
     this.renderAnchor,
+    this.imageBytes,
   });
 
   GeoJsonMarker copyWith({
@@ -288,6 +294,7 @@ class GeoJsonMarker {
     double? bearing,
     Offset? anchor,
     Offset? renderAnchor,
+    Uint8List? imageBytes,
   }) {
     return GeoJsonMarker(
       id: id ?? this.id,
@@ -309,6 +316,7 @@ class GeoJsonMarker {
       bearing: bearing ?? this.bearing,
       anchor: anchor ?? this.anchor,
       renderAnchor: renderAnchor ?? this.renderAnchor,
+      imageBytes: imageBytes ?? this.imageBytes,
     );
   }
 
