@@ -29,15 +29,24 @@ dependencies:
   hive_flutter: ^1.1.0
   path_provider: ^2.1.5
 
+  # Parses the layer/render config file (docs/map_config.example.yaml) that
+  # MapStyleConfig loads. YAML is a superset of JSON, so the same loader accepts
+  # a .json config with no extra code path.
+  yaml: ^3.1.2
+
 dev_dependencies:
   google_maps_flutter:
   hive_generator: ^2.0.0
   build_runner: ^2.3.2
   mapbox_maps_flutter:
   mappls_gl: ^1.2.0
-  # 0.26+ is required: the web binding only handles a raw style-JSON string
-  # from 0.26, and onFeatureTapped uses the 5-arg signature from that version.
-  maplibre_gl: ^0.26.2
+  # 0.26+ required. Two things depend on it:
+  #  • onFeatureTapped uses this line's OnFeatureInteractionCallback — the
+  #    callback in mapLibre_map_provider.dart must move in lockstep with any
+  #    change to this constraint.
+  #  • the web binding only accepts a raw style-JSON string (rather than
+  #    treating it as a URL) from 0.26, which `osmRasterStyle` relies on.
+  maplibre_gl: ^0.26.1
 
   flutter_test:
     sdk: flutter
