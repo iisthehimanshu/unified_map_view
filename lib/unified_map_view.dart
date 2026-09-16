@@ -46,6 +46,9 @@ export 'src/utils/geoJson/geojson_loader.dart';
 export 'src/utils/geoJson/geoJsonUtils.dart';
 export 'src/utils/geoJson/predefined_markers.dart';
 
+// Heading. Hosts only need HostHeading — the map resolves HeadingSource itself.
+export 'src/heading/host_heading.dart';
+
 class UnifiedMapViewPackage {
   static bool _initialized = false;
   static Future<void>? _initFuture;
@@ -62,6 +65,21 @@ class UnifiedMapViewPackage {
   static Future<void> initialize({required String venueName,String? url}) {
     AppConfig.url = url;
     return _initFuture ??= _initializeOnce(venueName);
+  }
+
+  static Set<String>? _allowedBuildingIds;
+
+  /// The buildings the venue is restricted to, or null to render all of them.
+  static Set<String>? get allowedBuildingIds => _allowedBuildingIds;
+
+  /// Renders only [ids] out of the venue. The campus base map is filtered the
+  /// same way, so include its id to keep it. Null or empty renders everything. Takes effect the next time a map loads its
+  /// venue; the cached venue responses stay complete, so no re-fetch is needed.
+  static void setAllowedBuildingIds(Iterable<String>? ids) {
+    final normalized =
+        ids?.map((id) => id.trim()).where((id) => id.isNotEmpty).toSet();
+    _allowedBuildingIds =
+        (normalized == null || normalized.isEmpty) ? null : normalized;
   }
 
   static Future<void> _initializeOnce(String venueName) async {

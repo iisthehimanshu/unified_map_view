@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+
+import '../heading/heading_source.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:unified_map_view/src/models/CameraBound.dart';
 import 'package:unified_map_view/src/utils/UnifiedMarkerCreator.dart';
@@ -708,7 +710,7 @@ class GoogleMapProvider extends BaseMapProvider {
     // Cancel existing subscription if any
     _compassSub?.cancel();
 
-    _compassSub = FlutterCompass.events?.listen((event) async {
+    _compassSub = HeadingSource.events?.listen((event) async {
       if (event.heading == null) return;
 
       try {

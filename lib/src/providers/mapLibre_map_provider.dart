@@ -25,6 +25,8 @@ import '../models/map_location.dart';
 import '../models/geojson_models.dart';
 import '../models/map_layer.dart';
 import 'package:flutter_compass/flutter_compass.dart';
+
+import '../heading/heading_source.dart';
 import 'package:http/http.dart' as http;
 import '../utils/LandmarkAssetType.dart';
 import '../models/marker_type_info.dart';
@@ -64,6 +66,12 @@ class _BakedMarkerIcon {
 
 /// MapLibre GL implementation of BaseMapProvider
 /// Supports MapLibre — an open-source vector map rendering engine
+/// How a marker reacts when it is tapped / selected.
+///
+/// [none] is the default — the marker just gets highlighted, with no motion.
+/// Set [MaplibreMapProvider.markerSelectionAnimationStyle] to one of the other
+/// values when you actually want the tap animation.
+enum MarkerSelectionAnimationStyle { none, growShrink, shakeVertical }
 class MaplibreMapProvider extends BaseMapProvider {
   MapLibreMapController? _controller;
   final List<GeoJsonMarker> _symbols = [];
@@ -88,6 +96,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _fixedMarkerLayerId = 'fixed-markers-layer';
   final String _priorityMarkerLayerId = 'priority-marker-layer';
   final String _selectedMarkerLayerId = 'selected-marker-layer';
+  final String _animatedMarkerSourceId = 'animated-marker-source';
+  final String _animatedMarkerLayerId = 'animated-marker-layer';
   final String _sectionMarkerLayerId = 'section-markers-layer';
   final String _patchAboveMarkerLayerId = 'patch-above-markers-layer';
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
@@ -103,6 +113,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const String _kDotImageId = '__collision_dot__';
   static const String _kDotAssetPath =
       'packages/unified_map_view/assets/markers/room_dot.png';
+
+  /// Map image id for the path direction arrow.
+  static const String _kPathArrowImageId = '__path_arrow__'; 
+  static const String _kPathBigArrowImageId = '__path_big_arrow__';
 
   /// Marker ids for which icon/text overlap is temporarily forced on. These
   /// markers are routed into a dedicated always-visible layer (and excluded
@@ -162,9 +176,35 @@ class MaplibreMapProvider extends BaseMapProvider {
   static const double _furnitureMinZoom = 17.5;
 
   final String _polylineSourceId = 'polylines-source';
+  final String _pathCornerSourceId = 'path-corners-source';
+  final String _pathBigArrowLayerId = 'path-big-arrow-layer';
+  final String _pathShineSourceId = 'path-shine-source';
+  final String _pathShineLayerId = 'path-shine-layer';
+  static const String _kShineImageId = '__path_shine__';
+  Timer? _pathShineTimer;
+  double _pathShineProgress = 0.0;
+  List<Map<String, dynamic>> _allCornerFeatures = [];
+
+  /// Wall-clock time of the last `onCameraMove` from the native map. Used to
+  /// pause cosmetic per-frame source rewrites (the travelling path "shine")
+  /// while the camera is actually moving — those rewrites force a native
+  /// GeoJSON re-parse + relayout on the render thread and were competing with
+  /// the camera during guided navigation, which is when it pans continuously.
+  DateTime _lastCameraMove = DateTime.fromMillisecondsSinceEpoch(0);
+  bool get _cameraMovingNow =>
+      DateTime.now().difference(_lastCameraMove).inMilliseconds < 180;
+
+  /// Signature (`id:pointCount|…`) of the route-path lines the corner
+  /// arrows/bubbles in [_allCornerFeatures] were last computed from. The corner
+  /// pass walks every segment of every path line and awaits an image bake per
+  /// bend, so it is skipped entirely when the route geometry is unchanged —
+  /// which is the case on every grey-overlay add/remove during navigation.
+  String? _cornerFeaturesSignature;
+  final String _turnBubbleLayerId = 'turn-bubble-layer';
   final String _pathSolidLayerId = 'path-solid-polyline-layer';
   final String _pathOutlineLayerId = 'path-solid-outline-polyline-layer';
   final String _pathDashedLayerId = 'path-dashed-polyline-layer';
+  final String _pathArrowLayerId = 'path-arrow-layer';
   final String _polylineLayerId = 'normal-polyline-layer';
   final String _greyOverlayLayerId = 'grey-overlay-polyline-layer';
 
@@ -514,6 +554,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   bool _isCircleLayersEnabled = false;
   bool _isFurnitureLayerEnabled = false;
 
+  /// Pending self-heal retry timers per GeoJSON source id — see the comment
+  /// in [setGeoJsonSource].
+  final Map<String, List<Timer>> _settleTimers = {};
+
   /// Whether [_clusterSourceId]/[_rotationSourceId] currently exist natively.
   /// A style reload wipes every source, so anything pushing GeoJSON from a
   /// timer/stream (compass ticks, marker animation) must check this first —
@@ -540,18 +584,30 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// MapLibre expression: negate priority so higher number → lower sort key → wins.
   static const List<dynamic> _kSortKeyExpression = [
-    "*",
-    ["get", _kPriorityKey],
-    -1,
+    "+",
+    // Priority dominates: negated so a HIGHER priority number sorts lower and
+    // therefore places first and wins collision.
+    // coalesce because the rotation source builds its own features and writes
+    // neither key; a bare `get` there yields null and taints the arithmetic.
+    ["*", ["coalesce", ["get", _kPriorityKey], 0], -1],
+    // Stable tiebreaker, < 0.5. See 'sortBias' in setGeoJsonSource for why an
+    // all-equal sort key makes a whole layer vanish as one block. coalesce
+    // because the rotation source builds its own features and has no bias.
+    ["coalesce", ["get", "sortBias"], 0],
   ];
 
-  /// Markers whose full marker only appears from zoom 18 (text markers with
-  /// collisionBase 0 and icon-with-sectionId markers with collisionBase 3000).
-  /// Used to pick the dot's opacity ramp; see [enableMarkerLayers].
+  /// Markers whose full marker only appears from zoom 18 — text markers
+  /// (collisionBase 0), whose layer still carries `minzoom: 18`. Their dot is
+  /// held at 0 until 18 so nothing is drawn where the full marker cannot be.
+  ///
+  /// icon-with-sectionId (base 3000) used to be in here too. Its layer's z18
+  /// gate was removed, so it now fades in 12→14 like every other icon marker
+  /// and its dot follows the ordinary ramp; leaving it listed here would hide
+  /// the dot below 18 and break the fallback. Used to pick the dot's opacity
+  /// ramp; see [enableMarkerLayers].
   static const List<dynamic> _kDotStepGroupExpression = [
     "any",
     ["==", ["get", "collisionBase"], 0],
-    ["==", ["get", "collisionBase"], 3000],
   ];
 
   // ---------------------------------------------------------------------------
@@ -572,6 +628,25 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Widget buildMap({required MapConfig config, required BuildContext context, Function(UnifiedCameraPosition position)? onCameraMove}) {
     _onVenueRenderedCb = config.onVenueRendered;
+    // ── Android platform-view composition mode ─────────────────────────────
+    //
+    // maplibre_gl 0.26.2 offers exactly two modes on Android (see
+    // maplibre_gl_platform_interface `buildView`):
+    //   • false → `AndroidView` = Virtual Display. The GL SurfaceView renders
+    //     into an offscreen buffer that Flutter copies through an ImageReader
+    //     and re-uploads as a texture every frame.
+    //   • true → `PlatformViewLink` + `initAndroidView` = Hybrid Composition.
+    //     The SurfaceView is embedded directly; no per-frame copy.
+    //
+    // Measured on a moto g64 (120Hz), aggressive synthetic panning of the
+    // zoo venue:
+    //   Virtual Display : median 16.6ms, p90 58ms, 31% of frames dropped, 124ms freezes
+    //   Hybrid Comp.    : median  8.3ms, p90 25ms,  2% of frames dropped,  33ms worst
+    // The native MapLibre SurfaceView itself renders a rock-steady 120fps in
+    // both cases — the Virtual Display copy/upload is the entire cost. HC also
+    // fixes the extruded-furniture transparency flicker during camera rotate.
+    // So: HC, decisively. Do not switch to Virtual Display.
+    MapLibreMap.useHybridComposition = true;
     // Seeded on every rebuild, not just the first: this is the only path by
     // which the policy reaches the provider before onMapCreated and the
     // enableXxxLayers calls run, so the layers are created in the state the host
@@ -733,6 +808,13 @@ class MaplibreMapProvider extends BaseMapProvider {
               _isPolylineLayersEnabled = false;
               // Registered dot images are wiped too; allow re-registration.
               _registeredDotImageIds.clear();
+              _registeredCornerArrowAngles.clear();
+              // Corner arrow/bubble images are wiped with the style, so the next
+              // _updatePolylineSource must re-run the full corner pass (which
+              // re-registers them) instead of taking the "route unchanged" skip.
+              _cornerFeaturesSignature = null;
+              // Registered path arrow is wiped too.
+              await _loadPathArrowImage(_controller!);
               // Same for the shared label-less icons. The baked bytes in
               // _bakedIconCache stay valid — only the addImage() registration
               // is gone — so the rebake pass below is upload-only.
@@ -741,6 +823,9 @@ class MaplibreMapProvider extends BaseMapProvider {
               // _animalIconCache are still valid and get reused, only the
               // addImage() registration needs to happen again).
               _loadedAnimalIcons.clear();
+              // Same reset for regular/customRendering marker icons — the loop
+              // below re-registers every current marker's icon from scratch.
+              _registeredMarkerIconIds.clear();
               // Re-arm the deferred labelled bake: its addImage() calls are
               // gone with the style, so the next camera idle at label zoom has
               // to re-register them. The bytes survive in _animalIconCache, so
@@ -804,20 +889,14 @@ class MaplibreMapProvider extends BaseMapProvider {
                   // the URL-icon fetches overlap, which reads as noticeably
                   // faster. Sequencing is preserved: every icon is registered
                   // before enable*Layers below.
-                  await Future.wait(iconMarkers.map((marker) async {
-                    try {
-                      await _loadMarkerIcon(_controller!, marker);
-                    } catch (e) {
-                      print('Warning: failed to reload icon for ${marker.id}: $e');
-                    }
-                  }));
+                  // Tracked, so an icon that fails to re-register after a
+                  // style reload demotes its marker to a text marker instead
+                  // of leaving it pointing at a wiped image.
+                  await Future.wait(iconMarkers.map(
+                      (marker) => _loadAndTrackMarkerIcon(_controller!, marker)));
                 } else {
                   for (final marker in iconMarkers) {
-                    try {
-                      await _loadMarkerIcon(_controller!, marker);
-                    } catch (e) {
-                      print('Warning: failed to reload icon for ${marker.id}: $e');
-                    }
+                    await _loadAndTrackMarkerIcon(_controller!, marker);
                   }
                 }
               });
@@ -898,6 +977,15 @@ class MaplibreMapProvider extends BaseMapProvider {
           onCameraIdle: () async {
             if (_controller != null) {
               try {
+                if (_allCornerFeatures.isNotEmpty && _controller != null) {
+                  _refreshCornerVisibility(_controller!);
+                }
+                // The puck glide defers its source pushes while the camera moves
+                // (see _animateMarkerToPosition). The camera just settled, so land
+                // the puck on its current position now that a push is free.
+                if (_rotatingSymbols.isNotEmpty) {
+                  unawaited(_updateUserLocation(_controller!));
+                }
                 final cameraPos = _controller!.cameraPosition;
                 if(cameraPos == null) return;
                 final target = cameraPos.target;
@@ -907,6 +995,9 @@ class MaplibreMapProvider extends BaseMapProvider {
                 print("tilt $tilt");
                 print("zoom $zoom");
                 print("bearing $bearing");
+                if (_kDebugLayerCensus) {
+                  unawaited(_debugLayerCensus(_controller!, zoom));
+                }
                 // The labelled animal composites are only drawn from
                 // _kLabelZoomThreshold up, so they are baked the first time the
                 // camera actually settles there instead of during load. Not
@@ -933,6 +1024,11 @@ class MaplibreMapProvider extends BaseMapProvider {
               }
             }
           },
+          // Fires every frame the camera is moving (gesture or animated follow).
+          // Kept trivial — just a timestamp — so cosmetic per-frame work elsewhere
+          // can back off while the map is in motion. `trackCameraPosition: true`
+          // already streams these events, so handling them adds no channel traffic.
+          onCameraMove: (_) => _lastCameraMove = DateTime.now(),
           myLocationEnabled: config.showUserLocation,
           myLocationTrackingMode: MyLocationTrackingMode.none,
           compassEnabled: false,
@@ -940,7 +1036,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           scrollGesturesEnabled: config.scrollGesturesEnabled,
           tiltGesturesEnabled: config.tiltGesturesEnabled,
           zoomGesturesEnabled: config.zoomControlsEnabled,
-          minMaxZoomPreference: const MinMaxZoomPreference(12.0, 23.0),
+          minMaxZoomPreference: const MinMaxZoomPreference(0.0, 23.0),
           logoViewMargins: const Point(50, 5),
         ),
       ],
@@ -973,32 +1069,41 @@ class MaplibreMapProvider extends BaseMapProvider {
         double? tilt,
         Duration? duration
       }) async {
-    if (controller is MapLibreMapController) {
-      if (bearing != null && tilt != null) {
-        await controller.animateCamera(
-            CameraUpdate.newCameraPosition(
-              CameraPosition(
-                target: LatLng(location.latitude, location.longitude),
-                zoom: zoom,
-                bearing: bearing,
-                tilt: tilt,
-              ),
-            ),
-            duration: duration
-        );
-      } else {
-        await controller.animateCamera(
-          CameraUpdate.newLatLngZoom(
-            LatLng(location.latitude, location.longitude),
-            zoom,
+    if (controller is! MapLibreMapController) return;
+
+    // Heading-up navigation drives this on every location fix. With the
+    // plugin's ~300ms default, each call eases for 300ms then sits frozen
+    // until the next fix (~1s later) — the camera "freezes then jumps". A ~1s
+    // glide is still running when the next fix lands, so the plugin restarts
+    // it from the current pose and the follow stays continuous. One-shot
+    // moves (no bearing supplied) keep the snappy default.
+    final effectiveDuration = duration ??
+        (bearing != null ? const Duration(milliseconds: 1000) : null);
+
+    if (bearing != null || tilt != null) {
+      final current = controller.cameraPosition;
+      // Single animation. The old code, when given only a bearing, ran a
+      // newLatLngZoom animation and THEN a separate bearingTo animation —
+      // two chained camera eases back to back, which always hitched.
+      await controller.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target: LatLng(location.latitude, location.longitude),
+            zoom: zoom,
+            bearing: bearing ?? current?.bearing ?? 0.0,
+            tilt: tilt ?? current?.tilt ?? 0.0,
           ),
-        );
-        if (bearing != null && tilt == null) {
-          await controller.animateCamera(CameraUpdate.bearingTo(bearing));
-        } else if (tilt != null && bearing == null) {
-          await controller.animateCamera(CameraUpdate.tiltTo(tilt));
-        }
-      }
+        ),
+        duration: effectiveDuration,
+      );
+    } else {
+      await controller.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(location.latitude, location.longitude),
+          zoom,
+        ),
+        duration: effectiveDuration,
+      );
     }
   }
 
@@ -1063,6 +1168,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         await _removeFurnitureExtrusionLayer(controller);
       }
       try {
+        // Full property set, not just `visibility`: setLayerProperties
+        // *replaces* the layer's whole paint property set rather than
+        // merging into it (see _customRenderingLayerProps/_fixedMarkerLayerProps
+        // for the same gotcha elsewhere in this file). A visibility-only call
+        // here wiped `fill-color`/`fill-outline-color`, and the style-spec
+        // default fill-color when unset is black — which is exactly why every
+        // piece of furniture rendered solid black the moment 2D mode was
+        // entered, regardless of its actual per-part color.
         await controller.setLayerProperties(
           _furnitureFillLayerId,
           _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
@@ -1179,8 +1292,83 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Upper zoom edge for the flat "section" fill (the coloured campus patches
+  /// that sit on top of the buildings). At this zoom the patches are gone and
+  /// the buildings show unobstructed; they ramp out over the 0.2 levels below
+  /// it. The *lower* edge is not fixed — the patches stay visible all the way
+  /// down until the "<venue name>" boundary layer fades in, then hand off to
+  /// it. Tune per venue via `_maplibreProvider.sectionLayerMaxZoom = ...`
+  /// before the map is built.
+  double sectionLayerMaxZoom = 18.0;
+
+  /// Fallback lower edge used only before the venue's real fit zoom is known
+  /// (i.e. for the section layer's initial creation, before
+  /// [_refreshPatchAboveOpacity] runs).
+  double sectionLayerMinZoom = 15.0;
+
+  /// Zoom at which plain building-name labels (text-only markers, and the
+  /// icon+text markers grouped under a sectionId) start to appear. Was a hard
+  /// 18.0; lowered so the building name is already readable while the coloured
+  /// section patch is still up (the patch spans up to [sectionLayerMaxZoom]).
+  double buildingLabelMinZoom = 17.0;
+
+  /// Opacity `interpolate` expression for the section fill / labels.
+  ///
+  /// Visible from [lowEdge] (where the boundary layer hands off) up to
+  /// [sectionLayerMaxZoom] (where the buildings take over), fading in/out over
+  /// a short ramp at each end. [lowEdge] defaults to [sectionLayerMinZoom]; the
+  /// runtime refresh passes the venue's boundary fade-out zoom so the patches
+  /// only disappear on zoom-out once the "<venue name>" layer appears.
+  List<dynamic> _sectionZoomWindowOpacity({double? lowEdge}) {
+    final hi = sectionLayerMaxZoom;
+    final loFull = lowEdge ?? sectionLayerMinZoom;
+    // Keep the four zoom stops strictly increasing regardless of tuning.
+    final a = loFull - 0.2;
+    final b = max(loFull, a + 0.01);
+    final c = max(hi - 0.2, b + 0.01);
+    final d = max(hi, c + 0.01);
+    return [
+      "interpolate", ["linear"], ["zoom"],
+      a, 0.0,
+      b, 1.0,
+      c, 1.0,
+      d, 0.0,
+    ];
+  }
+
+  /// Animation played when a marker is tapped / selected. Defaults to
+  /// [MarkerSelectionAnimationStyle.none] (highlight only, no motion) — set
+  /// it to [MarkerSelectionAnimationStyle.growShrink] or
+  /// [MarkerSelectionAnimationStyle.shakeVertical] when the tap animation is
+  /// wanted.
+  MarkerSelectionAnimationStyle markerSelectionAnimationStyle =
+      MarkerSelectionAnimationStyle.none;
+
+  /// Whether tapping a plain marker glides the camera in to it (zoom ~19).
+  /// Default `false`: a marker tap just selects + enlarges it in place, with no
+  /// camera movement. Pure-polygon taps still fit the polygon, and animal
+  /// markers with an enclosure still do their focus-then-pull-back sequence.
+  bool zoomToMarkerOnSelect = false;
+
   Timer? _circleAnimationTimer;
   bool _circleExpanding = true;
+
+  Timer? _iconAnimationTimer;
+  final Map<String, double> _markerIconScale = {};
+  final Map<String, double> _markerIconShakeDeg = {};
+  String? _animatingMarkerId;
+
+  /// How much larger than its resting size a marker renders while it is the
+  /// tapped/selected one. Applied as the per-feature `iconScaleFactor` that the
+  /// selected-marker layer multiplies into `icon-size`, so it scales every
+  /// marker type proportionally. Only used when [markerSelectionAnimationStyle]
+  /// is `none` — the animated styles manage `iconScaleFactor` themselves.
+  /// Tune here: 1.0 = same size as unselected, 2.0 = double size.
+  static const double _kSelectedMarkerRestScale = 1.5;
+
+  /// The marker id currently carrying [_kSelectedMarkerRestScale] in
+  /// [_markerIconScale], so it can be reset when the selection changes.
+  String? _restScaledMarkerId;
 
   void _startCircleAnimation(
       MapLibreMapController controller, GeoJsonCircle circle) {
@@ -1252,6 +1440,143 @@ class MaplibreMapProvider extends BaseMapProvider {
     _circleAnimationTimer?.cancel();
     _circleAnimationTimer = null;
   }
+  ///
+  Future<void> animateMarkerSelection(
+      MapLibreMapController controller,
+      String markerId, {
+        MarkerSelectionAnimationStyle style = MarkerSelectionAnimationStyle.none,
+      }) async {
+    // `none` means "no tap animation" — nothing to run.
+    if (style == MarkerSelectionAnimationStyle.none) return;
+    if (_animatingMarkerId != null && _animatingMarkerId != markerId) {
+      _markerIconScale[_animatingMarkerId!] = 1.0;
+      _markerIconShakeDeg[_animatingMarkerId!] = 0.0;
+    }
+    _iconAnimationTimer?.cancel();
+    _animatingMarkerId = markerId;
+
+    final matches = _symbols.where((m) => m.id == markerId);
+    if (matches.isEmpty) return;
+    final marker = matches.first;
+    if (marker.assetPath == null) return;
+
+    // Awaited: static icon must be confirmed hidden before the animated
+    // layer starts drawing, otherwise both are visible for a frame or two.
+    // Selection push: skip the settle re-pushes (see setGeoJsonSource) so the
+    // tap doesn't drag three more full-collection rebuilds behind it.
+    await setGeoJsonSource(controller, _symbols, _clusterSourceId,
+        selectedMarkerId: markerId, scheduleSettleRepushes: false);
+    await Future.delayed(const Duration(milliseconds: 200)); // let native finish hiding it
+
+    const growShrinkDuration = Duration(milliseconds: 2400);
+    const shakeDuration = Duration(milliseconds: 1400);
+    final totalDuration = style == MarkerSelectionAnimationStyle.growShrink
+        ? growShrinkDuration
+        : shakeDuration;
+
+    final startTime = DateTime.now();
+    bool pushBusy = false;
+    // These scale the *unselected* baseline icon/text size (see
+    // _normalIconLayerProps etc.), which was retuned down after previously
+    // being halved. peakLabelScale in particular was left at 1.6 through that
+    // retune, so tapping a marker grew its label 60% off an already-larger
+    // baseline than before — reading as the label "becoming too big" on
+    // selection. Trimmed both peaks down to keep the pop noticeable without
+    // overshooting.
+    const double peakScale = 1.8;
+    const double peakLabelScale = 1.3;
+
+    Future<void> pushAnimatedFeature(double scale, double shakeDeg, double labelScale) async {
+      if (pushBusy) return;
+      pushBusy = true;
+      try {
+        await controller.setGeoJsonSource(_animatedMarkerSourceId, {
+          'type': 'FeatureCollection',
+          'features': [
+            {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [marker.position.longitude, marker.position.latitude],
+              },
+              'properties': {
+                // Animal/POI photo markers are registered under a
+                // content-derived id (see _animalDisplayIconId), not
+                // marker.id — using marker.id here for them referenced an
+                // image that was never registered, so the animated layer
+                // had nothing to draw and the marker visually vanished for
+                // the whole tap animation instead of growing/shrinking.
+                'icon': _isAnimalMarker(marker)
+                    ? _animalDisplayIconId(marker)
+                    : marker.id,
+                'iconScaleFactor': scale,
+                'iconShake': shakeDeg,
+                'labelScale': labelScale,
+                // Custom-rendering markers bake their label into the icon, so
+                // the animated layer must not draw ["get","title"] on top of
+                // it — same duplicate-label glitch as the selected layer.
+                'title': (marker.textVisibility && !marker.customRendering)
+                    ? creator.formatText(marker.title ?? "", TextFormat.smartWrap)
+                    : '',
+              },
+            }
+          ],
+        });
+      } finally {
+        pushBusy = false;
+      }
+    }
+
+    // First animated frame pushed and awaited BEFORE starting the timer, so
+    // there's no gap where neither the static nor animated icon is on screen.
+    await pushAnimatedFeature(1.0, 0.0, 1.0);
+
+    _iconAnimationTimer = Timer.periodic(const Duration(milliseconds: 33), (timer) async {
+      final elapsedMs = DateTime.now().difference(startTime).inMilliseconds;
+      final t = (elapsedMs / totalDuration.inMilliseconds).clamp(0.0, 1.0);
+
+      const double growPhaseEnd = 0.45;
+      const double shakeStart = 0.55;
+      double scale;
+      double shakeDeg = 0.0;
+
+      if (style == MarkerSelectionAnimationStyle.growShrink) {
+        const p1 = 0.25, p2 = 0.5, p3 = 0.75;
+        if (t < p1) {
+          scale = 1.0 + (peakScale - 1.0) * (t / p1);
+        } else if (t < p2) {
+          scale = peakScale + (1.0 - peakScale) * ((t - p1) / (p2 - p1));
+        } else if (t < p3) {
+          scale = 1.0 + (peakScale - 1.0) * ((t - p2) / (p3 - p2));
+        } else {
+          scale = peakScale;
+        }
+      } else {
+        if (t < growPhaseEnd) {
+          scale = 1.0 + (peakScale - 1.0) * (t / growPhaseEnd);
+        } else {
+          scale = peakScale;
+          if (t >= shakeStart) {
+            final settleT = ((t - shakeStart) / (1.0 - shakeStart)).clamp(0.0, 1.0);
+            final decay = (1.0 - settleT).clamp(0.0, 1.0);
+            shakeDeg = sin(settleT * pi * 6) * 14.0 * decay;
+          }
+        }
+      }
+
+      final growthFraction = ((scale - 1.0) / (peakScale - 1.0)).clamp(0.0, 1.0);
+      final labelScale = 1.0 + (peakLabelScale - 1.0) * growthFraction;
+
+      await pushAnimatedFeature(scale, shakeDeg, labelScale);
+
+      if (t >= 1.0) {
+        timer.cancel();
+        _markerIconScale[markerId] = peakScale;
+        _markerIconShakeDeg[markerId] = 0.0;
+        await pushAnimatedFeature(peakScale, 0.0, peakLabelScale);
+      }
+    });
+  }
 
   // ---------------------------------------------------------------------------
   // Markers
@@ -1281,7 +1606,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> addMarker(dynamic controller, GeoJsonMarker marker, {String? selectedMarkerId}) async {
     if (controller is MapLibreMapController) {
-      await _loadMarkerIcon(controller, marker);
+      await _loadAndTrackMarkerIcon(controller, marker);
+      // Upsert by id — re-adding an existing marker replaces it rather than
+      // stacking a duplicate.
+      _symbols.removeWhere((m) => m.id == marker.id);
       _symbols.add(marker);
       try {
         setGeoJsonSource(controller, _symbols, _clusterSourceId, selectedMarkerId: selectedMarkerId);
@@ -1326,6 +1654,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         } else {
           otherMarkers.add(marker);
         }
+        // Upsert by id (same as addPolyline does for `_lines`): re-adding a
+        // marker that's already present — a re-render, or two overlapping add
+        // paths — must replace it, not stack a duplicate that then can't be
+        // fully cleared and shows as a doubled icon/label.
+        _symbols.removeWhere((m) => m.id == marker.id);
         _symbols.add(marker);
       }
       // Load every non-animal marker's icon concurrently instead of one at a
@@ -1352,13 +1685,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       // label is painted into its own PNG (UnifiedMarkerCreator keys its cache
       // on the text), so the images are genuinely unique — neither dedup nor
       // concurrency can help, since web is single-threaded.
-      await Future.wait(otherMarkers.map((marker) async {
-        try {
-          await _loadMarkerIcon(controller, marker);
-        } catch (e) {
-          print("error in addMarkers $e");
-        }
-      }));
+      // The result is recorded, not discarded: a marker whose image did not
+      // register must not be built claiming an icon. See
+      // [_iconRegistrationFailed].
+      await Future.wait(otherMarkers.map(
+          (marker) => _loadAndTrackMarkerIcon(controller, marker)));
       try {
         // Pushed immediately: animal markers reference their paw placeholder
         // (or the shared icon, if it's already loaded from an earlier call)
@@ -1417,17 +1748,63 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// marker object, fighting each other and doubling the channel traffic.
   int _markerAnimationToken = 0;
 
+  /// True while [_animateMarkerToPosition] is running its interpolation loop.
+  /// The loop already re-pushes the rotation source every frame with the
+  /// latest [_currentHeading] baked in, so the compass throttle
+  /// ([_requestRotationPush]) stands down for the duration rather than writing
+  /// the *same* source a second time — that duplicate native re-parse +
+  /// symbol relayout on the render thread is what makes a concurrent camera
+  /// pan stutter during guided navigation.
+  bool _userMarkerAnimating = false;
+
+  /// Wall-clock time the puck's GeoJSON source was last pushed to the map.
+  /// While the camera is moving (a pinch/pan gesture or the nav follow
+  /// animation) the glide below defers its per-frame pushes and leans on this
+  /// for a low-rate keepalive, so a manual zoom isn't fighting a full symbol
+  /// relayout every frame.
+  DateTime _lastPuckSourcePush = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Longest the puck may go without a real source push while the camera is in
+  /// motion. Its on-screen spot is carried by the camera transform meanwhile,
+  /// so this only bounds map-coordinate drift, not visible smoothness.
+  static const int _kPuckMovingKeepaliveMs = 500;
+
   Future<void> _animateMarkerToPosition(
       MapLibreMapController controller,
       String id,
       MapLocation targetLocation,
       Duration duration
       ) async {
-    // Each step costs two `setGeoJsonSource` round trips, which alone overrun a
-    // 60fps budget — the loop could never hold that rate. 30 is the honest
-    // number and halves the traffic competing with map gestures.
-    const fps = 30;
-    final steps = (duration.inMilliseconds / (1000 / fps)).round();
+    // Wall-clock frame pacing at this target rate. Each frame costs a
+    // `setGeoJsonSource` round trip (native source re-parse + symbol relayout
+    // on the render thread), so the loop is deliberately kept well under 60fps.
+    //
+    // The old loop ran a fixed `steps` count and slept a flat 33ms *after*
+    // already awaiting the two pushes, so a "300ms" glide actually took
+    // 400–800ms on a real device. The next fix then arrived mid-glide, bumped
+    // the token, and cut the loop off before it reached the target — the puck
+    // was permanently chasing and never settled, which reads as lag + jitter.
+    // Pacing off a Stopwatch instead: the glide always finishes in real
+    // `duration`, and a device that can't keep up drops frames rather than
+    // overrunning.
+    //
+    // 14fps, not 20: during guided navigation the follow-camera keeps the puck
+    // near screen-centre, so its frame-to-frame *screen* travel is small and a
+    // slightly lower interpolation rate is invisible — while every frame saved
+    // is one fewer full rotation-source push (and render-thread symbol
+    // placement pass) fighting the camera pan. The puck layer is also
+    // ignore-placement now (see enableMarkerLayers Layer 8) so each of these
+    // pushes is far cheaper than before, but fewer still is better.
+    const fps = 14;
+    const frameMs = 1000 ~/ fps;
+    // The accuracy halo barely moves at walking speed; refreshing it at ~10Hz
+    // instead of every frame drops a second per-frame source write.
+    const circleIntervalMs = 100;
+    // Below this total displacement the move is GPS noise, not a step. Snap
+    // once instead of spinning a full interpolation loop (25+ source pushes)
+    // to crawl the puck a few centimetres — that idle churn was a big part of
+    // the "jitter while standing still / walking slowly" report.
+    const double minGlideMeters = 0.30;
 
     final markers =
     _rotatingSymbols.where((s) => s.id.toLowerCase().contains(id));
@@ -1435,8 +1812,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     _circles.where((c) => c.id.toLowerCase().contains(id));
 
     if (markers.isEmpty) return;
-
-    final token = ++_markerAnimationToken;
 
     final marker = markers.first;
     GeoJsonCircle? circle;
@@ -1449,27 +1824,235 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     if (startLat == endLat && startLng == endLng) return;
 
-    for (int i = 1; i <= steps; i++) {
-      if (token != _markerAnimationToken) return;
-      final progress = i / steps;
-      final currentLat = startLat + (endLat - startLat) * progress;
-      final currentLng = startLng + (endLng - startLng) * progress;
+    final token = ++_markerAnimationToken;
+    _userMarkerAnimating = true;
 
-      marker.position = MapLocation(latitude: currentLat, longitude: currentLng);
-      if (circle != null) {
-        circle.position =
-            MapLocation(latitude: currentLat, longitude: currentLng);
+    // Tiny hop: skip the loop, place the puck (and halo) on the target once.
+    if (_haversineMeters(
+            MapLocation(latitude: startLat, longitude: startLng),
+            targetLocation) <
+        minGlideMeters) {
+      try {
+        marker.position = targetLocation;
+        if (circle != null) circle.position = targetLocation;
+        await Future.wait([
+          _updateUserLocation(controller),
+          if (circle != null) _setGeoJsonCircle(controller),
+        ]);
+      } finally {
+        _releaseUserMarkerAnimation(controller, token);
       }
-      await _updateUserLocation(controller);
-      await _setGeoJsonCircle(controller);
-      await Future.delayed(Duration(milliseconds: 1000 ~/ fps));
+      return;
     }
 
+    final totalMs = duration.inMilliseconds;
+    final stopwatch = Stopwatch()..start();
+    int lastCircleMs = -circleIntervalMs;
+    bool didFirstPush = false;
+
+    try {
+      while (true) {
+        if (token != _markerAnimationToken) return;
+
+        final elapsed = stopwatch.elapsedMilliseconds;
+        final progress =
+            totalMs <= 0 ? 1.0 : (elapsed / totalMs).clamp(0.0, 1.0);
+        final currentLat = startLat + (endLat - startLat) * progress;
+        final currentLng = startLng + (endLng - startLng) * progress;
+
+        marker.position =
+            MapLocation(latitude: currentLat, longitude: currentLng);
+
+        final pushCircle = circle != null &&
+            (progress >= 1.0 || elapsed - lastCircleMs >= circleIntervalMs);
+        if (pushCircle) {
+          circle!.position =
+              MapLocation(latitude: currentLat, longitude: currentLng);
+          lastCircleMs = elapsed;
+        }
+
+        // While the camera is moving — a user pinch/pan, or the guided-nav
+        // follow animation — the puck's on-screen position is driven by the
+        // camera transform, not by this source. Pushing the source (and paying
+        // a render-thread symbol-placement pass) every frame in that window is
+        // exactly what makes a hand gesture feel like it lags the fingers.
+        // Skip the push while moving; a keepalive still bounds drift, and both
+        // the final frame and onCameraIdle land the puck exactly.
+        final now = DateTime.now();
+        // Always land the first and last frame of a glide, plus a keepalive
+        // while the camera keeps moving; everything in between yields to the
+        // gesture / follow animation.
+        final mustPush = !didFirstPush ||
+            progress >= 1.0 ||
+            now.difference(_lastPuckSourcePush).inMilliseconds >=
+                _kPuckMovingKeepaliveMs;
+        if (mustPush || !_cameraMovingNow) {
+          didFirstPush = true;
+          _lastPuckSourcePush = now;
+          // Independent sources — push them concurrently so a frame costs one
+          // round trip's worth of wall time, not two chained ones.
+          await Future.wait([
+            _updateUserLocation(controller),
+            if (pushCircle) _setGeoJsonCircle(controller),
+          ]);
+        }
+
+        if (token != _markerAnimationToken) return;
+        // progress == 1.0 means the frame just pushed sits exactly on
+        // `targetLocation` (and the circle went with it) — nothing left to do.
+        if (progress >= 1.0) break;
+
+        final nextFrame =
+            ((stopwatch.elapsedMilliseconds ~/ frameMs) + 1) * frameMs;
+        final wait = nextFrame - stopwatch.elapsedMilliseconds;
+        if (wait > 0) await Future.delayed(Duration(milliseconds: wait));
+      }
+    } finally {
+      _releaseUserMarkerAnimation(controller, token);
+    }
+  }
+
+  /// Clears [_userMarkerAnimating] when [token] still owns the animation (a
+  /// newer glide that superseded this one keeps the flag and releases it
+  /// itself), and flushes any compass heading that arrived while the throttle
+  /// was standing down for the glide.
+  void _releaseUserMarkerAnimation(
+      MapLibreMapController controller, int token) {
     if (token != _markerAnimationToken) return;
-    marker.position = targetLocation;
-    if (circle != null) circle.position = targetLocation;
-    await _updateUserLocation(controller);
-    await _setGeoJsonCircle(controller);
+    _userMarkerAnimating = false;
+    if (_pendingCompassHeading != null &&
+        _compassThrottleTimer == null &&
+        !_compassPushInFlight) {
+      _armCompassTimer(controller, _rotationSourceId);
+    }
+  }
+
+  /// Marker ids whose icon image could not be registered with the style.
+  ///
+  /// [_loadMarkerIcon] answers this already, but every caller used to discard
+  /// its return value, so a marker whose image never uploaded was still built
+  /// claiming `icon`. It then sat in an icon layer referencing an image that
+  /// does not exist, and MapLibre drew its label with the icon silently
+  /// omitted — a marker that renders as a bare floating label.
+  ///
+  /// Membership is what [_hasUsableIcon] consults, so a failure routes the
+  /// marker to the text layer instead. Entries are removed on a later success:
+  /// a style reload re-runs registration, and an asset that was broken server
+  /// side may have been re-uploaded since.
+  final Set<String> _iconRegistrationFailed = {};
+
+  /// Whether [marker] has an icon that is actually drawable right now.
+  ///
+  /// Animal markers are exempt: they always resolve through
+  /// [_animalDisplayIconId], which falls back to the paw placeholder, so they
+  /// are never icon-less even before their photo arrives.
+  bool _hasUsableIcon(GeoJsonMarker marker) =>
+      marker.assetPath != null &&
+      (_isAnimalMarker(marker) || !_iconRegistrationFailed.contains(marker.id));
+
+  /// [_loadMarkerIcon] plus bookkeeping for [_iconRegistrationFailed].
+  ///
+  /// Use this rather than calling [_loadMarkerIcon] directly anywhere the
+  /// result feeds a source push, so the feature and the registered images
+  /// cannot disagree.
+  Future<bool> _loadAndTrackMarkerIcon(
+      MapLibreMapController controller, GeoJsonMarker marker) async {
+    bool ok = false;
+    try {
+      ok = await _loadMarkerIcon(controller, marker);
+    } catch (e) {
+      print('icon registration threw for ${marker.id}: $e');
+      ok = false;
+    }
+    if (ok) {
+      _iconRegistrationFailed.remove(marker.id);
+    } else if (!_isAnimalMarker(marker)) {
+      if (_iconRegistrationFailed.add(marker.id)) {
+        // Title first: the id is a composite blob, and the only question worth
+        // answering from a log is WHICH landmark on screen has no icon.
+        print('NOICON "${marker.title}" asset=${marker.assetPath}');
+      }
+    }
+    return ok;
+  }
+
+  /// Set true to log, on every camera idle, what each marker layer is actually
+  /// DRAWING and whether any rendered feature references an unregistered image.
+  ///
+  /// This is what identified the empty-200 icon bug: it distinguishes a feature
+  /// filtered out of a layer, one that lost its collision, and one drawn without
+  /// its icon — three states that look identical on screen. Off by default: it
+  /// runs eight full-viewport queryRenderedFeatures calls per idle.
+  static const bool _kDebugLayerCensus = false;
+
+  /// Every image id successfully handed to addImage(). Read by the census.
+  /// Compared against the `icon` of each rendered feature to prove whether a
+  /// missing icon is an unregistered image or a placement loss.
+  final Set<String> _dbgRegisteredImages = {};
+
+  /// TEMPORARY DIAGNOSTIC — remove once the marker-persistence work is closed.
+  ///
+  /// Counts what each marker layer is actually DRAWING at the current zoom, by
+  /// querying rendered features over the whole viewport. Rendered means it
+  /// survived collision, so this distinguishes the three things that look
+  /// identical on screen: a feature filtered out of a layer, a feature in the
+  /// layer that lost its collision, and a feature drawn as a dot instead.
+  ///
+  /// Also reports which layer is drawing the currently selected marker, which
+  /// is the question the source alone cannot answer.
+  String _dbgReg(String id) { _dbgRegisteredImages.add(id); return id; }
+
+  Future<void> _debugLayerCensus(
+      MapLibreMapController controller, double zoom) async {
+    final layerIds = <String>[
+      _dotMarkerLayerId,
+      _normalTextMarkerLayerId,
+      "$_normalIconMarkerLayerId-withSectionId",
+      "$_normalIconMarkerLayerId-withoutSectionId",
+      _customRenderingMarkerLayerId,
+      _fixedMarkerLayerId,
+      _priorityMarkerLayerId,
+      _selectedMarkerLayerId,
+    ];
+    // Deliberately far larger than any viewport: queryRenderedFeaturesInRect
+    // takes screen coordinates whose scale (logical vs device pixels) differs
+    // per platform, and a rect built from _screenSize returned 0 everywhere
+    // while markers were plainly drawn. Oversizing removes the unit question.
+    final rect = const Rect.fromLTWH(-5000, -5000, 20000, 20000);
+    final selectedId = selectedLocation?.marker?.id;
+    final counts = <String, int>{};
+    String selectedDrawnIn = 'NONE';
+    final missingIcons = <String>{};
+    for (final id in layerIds) {
+      try {
+        final feats = await controller.queryRenderedFeaturesInRect(
+            rect, <String>[id], null);
+        counts[id] = feats.length;
+        for (final f in feats) {
+          final props = (f is Map) ? f['properties'] : null;
+          if (props is! Map) continue;
+          if (selectedId != null && props['id'] == selectedId) {
+            selectedDrawnIn = id;
+          }
+          // The question this whole diagnostic exists to answer: is the icon
+          // image this feature asks for actually registered right now?
+          final iconId = props['icon'];
+          if (iconId is String && !_dbgRegisteredImages.contains(iconId)) {
+            missingIcons.add(iconId);
+          }
+        }
+      } catch (e) {
+        counts[id] = -1; // layer absent right now
+      }
+    }
+    final summary = counts.entries
+        .map((e) =>
+            '${e.key.replaceAll("-markers-layer", "").replaceAll("-marker-layer", "")}=${e.value}')
+        .join(' ');
+    print('CENSUS z=${zoom.toStringAsFixed(2)} $summary '
+        'selected=${selectedId ?? "-"} drawnIn=$selectedDrawnIn '
+        'registeredImages=${_dbgRegisteredImages.length} '
+        'MISSING=${missingIcons.length}${missingIcons.isEmpty ? "" : " ${missingIcons.take(4).toList()}"}');
   }
 
   /// Reads the numeric priority from a marker's properties.
@@ -1483,9 +2066,16 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// The per-layer base offset of the full marker's [symbolSortKey] for a
   /// collision-participating marker. Mirrors the layer filters/bases in
-  /// [enableMarkerLayers] (text=0, fixed/bearing=1000, icon-withoutSectionId=
-  /// 2000, icon-withSectionId=3000, customRendering=4000). Used by the dot layer
-  /// so a feature's dot sorts right after its own full marker.
+  /// [enableMarkerLayers] (text=0, fixed/bearing=1000, customRendering=1500,
+  /// icon-withoutSectionId=2000, icon-withSectionId=3000). Used by the dot
+  /// layer so a feature's dot sorts right after its own full marker.
+  ///
+  /// customRendering sits ahead of the plain icon layers (see the "Zoo fix"
+  /// in [_refreshMarkerLayerMinZooms]) so a zoo's animal photo composites —
+  /// the content the map actually exists to show — don't routinely lose
+  /// collisions to incidental amenity icons and fall back to their paw dot.
+  /// It still loses to text/fixed, which are wayfinding furniture rather
+  /// than content.
   int _collisionBase({
     required bool hasIcon,
     required double bearing,
@@ -1494,7 +2084,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }) {
     if (bearing != 0.0) return 1000; // Layer 4: fixed/bearing
     if (!hasIcon) return 0; // Layer 1: text-only
-    if (customRendering) return 4000; // Layer 3: custom rendering
+    if (customRendering) return 1500; // Layer 3: custom rendering
     return sectionId ? 3000 : 2000; // Layer 2 / 2b: icon markers
   }
 
@@ -1502,7 +2092,16 @@ class MaplibreMapProvider extends BaseMapProvider {
       dynamic controller,
       List<GeoJsonMarker> symbols,
       String sourceID,
-      {String? selectedMarkerId}
+      {String? selectedMarkerId,
+      // The 500ms/2s/5s "settle" re-pushes below exist purely to recover
+      // markers that fail to draw during heavy *startup* load. A marker tap
+      // (selectLocation / animateMarkerSelection / deSelectLocation) flips one
+      // feature's `isSelected` and re-pushes the whole collection — by then
+      // every marker is already on screen, so scheduling three more full
+      // rebuilds just janks the map for ~5s and makes the tap feel slow to
+      // register. Pass false from the selection paths to push once and skip
+      // the settle machinery (any startup timers already pending keep running).
+      bool scheduleSettleRepushes = true}
       ) async {
     if (controller is MapLibreMapController) {
       if (!_isClusteringEnabled) {
@@ -1526,89 +2125,145 @@ class MaplibreMapProvider extends BaseMapProvider {
             ' types=${_markerTypeFilter!.join(",")}');
       }
 
-      final features = visible.map((marker) {
-        final anchor = (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
-            ? "center"
-            : "bottom";
-        bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
-        double? entryDirection;
-        if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null){
-          entryDirection = (marker.properties?['entryDirection'] as num).toDouble();
-        }
+      // Named rather than inlined into the push below: the settle re-pushes
+      // rebuild features from live marker/icon state instead of resending a
+      // stale snapshot, so they need the same builder.
+      List<Map<String, dynamic>> buildFeatures(List<GeoJsonMarker> list) {
+        // Denominator for the per-feature sort bias below. Guarded so a single
+        // marker cannot divide by zero.
+        final biasDenominator = list.isEmpty ? 1 : list.length;
 
-        // Effective bearing matches the 'bearing' property written below, after
-        // the entryDirection override. A truthy (non-zero) bearing routes a
-        // marker into the fixed/bearing layer.
-        final double effectiveBearing = entryDirection ??
-            (marker.compassBasedRotation
-                ? 0.0
-                : ((marker.properties?["bearing"] ?? 0.0) as num).toDouble());
-
-        return {
-          'type': 'Feature',
-          'geometry': {
-            'type': 'Point',
-            'coordinates': [
-              marker.position.longitude,
-              marker.position.latitude
-            ],
-          },
-          'properties': {
-            'title': marker.textVisibility
-                ? creator.formatText(
-                marker.title ?? "", TextFormat.smartWrap)
-                : '',
-            'id': marker.id,
-            if (marker.assetPath != null)
-              'icon': _isAnimalMarker(marker)
-                  ? _animalDisplayIconId(marker)
-                  : marker.id,
-            // Image id for the zoomed-out (label-less) variant. Shared between
-            // every marker with the same photo and pill geometry, so ~190
-            // byte-identical uploads collapse to one per distinct photo.
-            // Animals are absent from the map and fall through to the
-            // '<icon>-small' branch of the layer expression — their ids are
-            // already content-keyed.
-            if (marker.assetPath != null && _smallIconIds[marker.id] != null)
-              'smallIcon': _smallIconIds[marker.id],
-            'isPriority': marker.priority ?? false,
-            'intractable': marker.properties?["polyId"] != null,
-            'bearing': marker.compassBasedRotation
-                ? 0.0
-                : (marker.properties?["bearing"] ?? 0.0),
-            'iconAnchor': anchor,
-            'section': marker.properties?['type'] == "Section",
-            'subSection': marker.properties?['type'] == "Sub Section",
-            'sectionId': hasSectionId,
-            'boundary':marker.properties?["type"]=="Boundary",
-            'isSelected': marker.id == selectedMarkerId,
-            'customRendering':marker.customRendering,
-            // POI markers bake a separate '<id>-selected' highlight image; this
-            // flag tells the selected-marker layer to use it.
-            'hasSelectedIcon': RenderingTheme.current.isMuseum &&
-                marker.properties?['poiRef'] != null,
-            'overlapOverride': _overlapOverrideIds.any((id) => marker.id.contains(id)),
-            // Numeric priority used by symbolSortKey: higher value → higher sort
-            // precedence (wins collision). Negated inside the layer expression.
-            _kPriorityKey: _markerPriority(marker),
-            // Per-feature base of the full marker's symbolSortKey. The dot layer
-            // reuses this (+ a fractional offset) so each feature's dot is
-            // placed right after its own full marker in the global collision
-            // pass, yielding the marker → dot → hidden fallback cascade.
-            'collisionBase': _collisionBase(
-              hasIcon: marker.assetPath != null,
-              bearing: effectiveBearing,
-              customRendering: marker.customRendering,
-              sectionId: hasSectionId,
-            ),
-            // Image id for this marker's collision-fallback dot. Per-marker dots
-            // are registered under their asset path; null falls back to the
-            // shared default room dot.
-            'dotIcon': marker.dotAssetPath ?? _kDotImageId,
-            if(entryDirection != null)'bearing':entryDirection
+        return list.indexed.map((entry) {
+          final (index, marker) = entry;
+          // The tap animation scales and rotates about the icon centre, so the
+          // marker being animated is anchored centrally for its duration.
+          final bool isAnimatingThisMarker = marker.id == _animatingMarkerId;
+          final anchor = isAnimatingThisMarker
+              ? "center"
+              : (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
+                  ? "center"
+                  : "bottom";
+          bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
+          double? entryDirection;
+          if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null){
+            entryDirection = (marker.properties?['entryDirection'] as num).toDouble();
           }
-        };
-      }).toList();
+
+          // Effective bearing matches the 'bearing' property written below, after
+          // the entryDirection override. A truthy (non-zero) bearing routes a
+          // marker into the fixed/bearing layer.
+          final double effectiveBearing = entryDirection ??
+              (marker.compassBasedRotation
+                  ? 0.0
+                  : ((marker.properties?["bearing"] ?? 0.0) as num).toDouble());
+
+          return {
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [
+                marker.position.longitude,
+                marker.position.latitude
+              ],
+            },
+            'properties': {
+              'title': marker.textVisibility
+                  ? creator.formatText(
+                  marker.title ?? "", TextFormat.smartWrap)
+                  : '',
+              'id': marker.id,
+              // _hasUsableIcon, not `assetPath != null`: an asset path the server
+              // never served leaves the image unregistered, and claiming `icon`
+              // anyway puts the feature in an icon layer pointing at nothing —
+              // MapLibre then draws the label with no icon. Dropping the property
+              // routes it to the text layer, which is what it actually is.
+              if (_hasUsableIcon(marker))
+                'icon': _isAnimalMarker(marker)
+                    ? _animalDisplayIconId(marker)
+                    : marker.id,
+              // Image id for the zoomed-out (label-less) variant. Shared between
+              // every marker with the same photo and pill geometry, so ~190
+              // byte-identical uploads collapse to one per distinct photo.
+              // Animals are absent from the map and fall through to the
+              // '<icon>-small' branch of the layer expression — their ids are
+              // already content-keyed.
+              if (marker.assetPath != null && _smallIconIds[marker.id] != null)
+                'smallIcon': _smallIconIds[marker.id],
+              'isPriority': marker.priority ?? false,
+              'intractable': marker.properties?["polyId"] != null,
+              'bearing': marker.compassBasedRotation
+                  ? 0.0
+                  : (marker.properties?["bearing"] ?? 0.0),
+              'iconAnchor': anchor,
+              'section': marker.properties?['type'] == "Section",
+              'subSection': marker.properties?['type'] == "Sub Section",
+              'sectionId': hasSectionId,
+              'boundary':marker.properties?["type"]=="Boundary",
+              'isSelected': marker.id == selectedMarkerId,
+              'customRendering':marker.customRendering,
+              // POI markers bake a separate '<id>-selected' highlight image; this
+              // flag tells the selected-marker layer to use it.
+              'hasSelectedIcon': RenderingTheme.current.isMuseum &&
+                  marker.properties?['poiRef'] != null,
+              'overlapOverride': _overlapOverrideIds.any((id) => marker.id.contains(id)),
+              // Numeric priority used by symbolSortKey: higher value → higher sort
+              // precedence (wins collision). Negated inside the layer expression.
+              _kPriorityKey: _markerPriority(marker),
+              'iconScaleFactor': _markerIconScale[marker.id] ?? 1.0,
+              'iconShake': _markerIconShakeDeg[marker.id] ?? 0.0,
+              'isAnimating': marker.id == _animatingMarkerId,
+              // Stable per-feature tiebreaker for symbolSortKey.
+              //
+              // Without it the sort key is the priority term alone, and this
+              // venue's data sets priority to 0 on every marker — so every
+              // feature in a layer ties on the exact same key. MapLibre then
+              // places tied symbols in tile-arrival order, which is not stable
+              // across the tile regeneration a zoom causes, so a collision never
+              // resolves as "this marker loses": the whole tied layer is one
+              // undifferentiated block and its outcome flips together. That is
+              // the markers vanishing and reappearing as a group.
+              //
+              // Normalised by the feature count so the bias stays under 0.5 at
+              // any venue size. That bound is load-bearing: the dot layer sorts
+              // at `collisionBase + 0.6`, so keeping every bias below 0.6 means
+              // each full marker still sorts ahead of every dot and the
+              // marker → dot cascade is untouched.
+              //
+              // Index order is arbitrary but STABLE, which is the property that
+              // matters here. To make the winner meaningful rather than merely
+              // deterministic, set real `priority` values in the venue data —
+              // the priority term already outranks this bias.
+              'sortBias': index / biasDenominator * 0.5,
+              // Per-feature base of the full marker's symbolSortKey. The dot layer
+              // reuses this (+ a fractional offset) so each feature's dot is
+              // placed right after its own full marker in the global collision
+              // pass, yielding the marker → dot → hidden fallback cascade.
+              'collisionBase': _collisionBase(
+                // Must use the same predicate as the `icon` property above, or a
+                // marker lands in the text layer while its collisionBase claims
+                // it is an icon marker — the dot would then sort against a base
+                // no layer is using and the marker → dot cascade breaks for it.
+                hasIcon: _hasUsableIcon(marker),
+                bearing: effectiveBearing,
+                customRendering: marker.customRendering,
+                sectionId: hasSectionId,
+              ),
+              // Image id for this marker's collision-fallback dot. Per-marker dots
+              // are registered under their asset path; null falls back to the
+              // shared default room dot.
+              'dotIcon': marker.dotAssetPath ?? _kDotImageId,
+              if(entryDirection != null)'bearing':entryDirection,
+              // Bumped on every push, including retries that repeat otherwise
+              // identical data (see the self-heal comment below) — without
+              // this, a byte-identical resend risks being deduplicated by the
+              // native GeoJsonSource before it ever reaches layout.
+              '_rev': DateTime.now().microsecondsSinceEpoch,
+            }
+          };
+        }).toList();
+      }
+
+      final features = buildFeatures(visible);
 
 
       await controller.setGeoJsonSource(
@@ -1618,6 +2273,106 @@ class MaplibreMapProvider extends BaseMapProvider {
           "features": features,
         },
       );
+
+      // Self-heal: a fresh setGeoJson call is what makes MapLibre 0.26.2
+      // redo symbol layout/placement for a source — it's what tapping a
+      // marker triggers today via selectLocation (it flips 'isSelected' on
+      // one feature), and it's why that "fixes" markers that failed to draw
+      // on their first push. A single re-push shortly after landed wasn't
+      // enough on real devices doing heavy startup work (venue GeoJSON
+      // parsing, furniture extrusion, pattern generation, marker-icon
+      // compositing all run synchronously on the UI isolate and have been
+      // observed dropping 200+ frames), which can delay when the native
+      // side actually catches up to process queued addImage()/setGeoJson()
+      // calls well past a few hundred milliseconds. Retry at several
+      // increasing delays so at least one both lands after that backlog
+      // clears and is guaranteed to force a real relayout.
+      //
+      // Rebuilt from scratch each tick (not a resend of the features pushed
+      // above) rather than just bumping '_rev' on stale features:
+      // animal markers push their paw-dot placeholder immediately and load
+      // the real photo icon asynchronously afterwards (registration is a
+      // network fetch + decode + addImage, which can itself outlast
+      // addImage's own STYLE_NOT_READY retry budget under the same startup
+      // load). A resend of the stale snapshot would just keep re-affirming
+      // the placeholder forever. Re-attempting any still-unloaded animal
+      // icon here, then rebuilding features from live marker/icon state,
+      // means a slow or once-failed photo load still gets picked up and
+      // rendered instead of being stuck on the placeholder permanently.
+      if (scheduleSettleRepushes) {
+        for (final timer in _settleTimers[sourceID] ?? const <Timer>[]) {
+          timer.cancel();
+        }
+        _settleTimers[sourceID] = [
+          for (final delay in const [
+            Duration(milliseconds: 500),
+            Duration(seconds: 2),
+            Duration(seconds: 5),
+          ])
+            Timer(delay, () async {
+              if (!_isClusteringEnabled) return;
+              print(
+                  "settle re-push firing for $sourceID after ${delay.inMilliseconds}ms");
+              try {
+                // Snapshot before the loop: `symbols` is usually the live
+                // `_symbols` field, and this loop awaits per-marker icon
+                // loads across several event-loop turns — if another
+                // addMarkers()/removeMarker() call mutates `_symbols` while
+                // this is in flight, iterating the live list throws
+                // "Concurrent modification during iteration". A frozen copy
+                // reflects the state at fire time and stays safe to iterate.
+                final snapshot = List<GeoJsonMarker>.of(symbols);
+                for (final marker in snapshot) {
+                  if (_isAnimalMarker(marker) &&
+                      !_registeredSmallIconIds.contains(
+                          _animalSmallImageId(marker))) {
+                    try {
+                      // Load-path variant only (the label-less bake). The
+                      // labelled composite is deferred to camera idle at label
+                      // zoom via _ensureLabelledAnimalIcons.
+                      await _loadAnimalSmallIcon(controller, marker);
+                    } catch (e) {
+                      print(
+                          "settle re-push animal icon retry failed for ${marker.id}: $e");
+                    }
+                  }
+                  // Labelled (Phase B) composite: only retry once the camera
+                  // has actually reached label zoom at least once — baking it
+                  // any earlier just spends network/CPU on a composite the
+                  // layer won't reference yet (see _kLabelZoomThreshold).
+                  // _ensureLabelledAnimalIcons itself only ever fires once
+                  // per style (_labelledAnimalsStarted guard) and does not
+                  // retry markers whose fetch/bake failed on that one pass —
+                  // this is their only other chance to pick the photo up.
+                  if (_isAnimalMarker(marker) &&
+                      _labelledAnimalsStarted &&
+                      !_loadedAnimalIcons.contains(_animalIconKey(marker))) {
+                    try {
+                      await _loadAnimalLabelledIcon(controller, marker);
+                    } catch (e) {
+                      print("settle re-push labelled animal icon retry "
+                          "failed for ${marker.id}: $e");
+                    }
+                  }
+                }
+                // Re-filtered, not just rebuilt: the type filter may have
+                // changed since this timer was armed, and a re-push must not
+                // resurrect a marker the host has since hidden.
+                final refreshed = sourceID == _clusterSourceId
+                    ? snapshot
+                        .where(_passesMarkerTypeFilter)
+                        .toList(growable: false)
+                    : snapshot;
+                await controller.setGeoJsonSource(sourceID, {
+                  "type": "FeatureCollection",
+                  "features": buildFeatures(refreshed),
+                });
+              } catch (e) {
+                print("settle re-push for $sourceID failed: $e");
+              }
+            }),
+        ];
+      }
     }
   }
 
@@ -1632,18 +2387,39 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> setHeadingOverride(dynamic controller, double? heading) async {
     _headingOverride = heading;
     // Written through to _currentHeading so the *position* repaint
-    // (_updateUserLocation, which runs on every move) carries the same value
-    // the compass path would have written. Without this a move would push a
-    // feature bearing the last live heading and undo the override.
+    // (_updateUserLocation, which runs on every glide frame) carries the same
+    // value the compass path would have written. Without this a move would push
+    // a feature bearing the last live heading and undo the override.
     if (heading != null) _currentHeading = heading;
     if (controller is! MapLibreMapController) return;
-    await _updateUserLocation(controller);
+
+    if (heading == null) {
+      // Override cleared — drop any heading still queued from the override and
+      // repaint once so control hands straight back to the live compass
+      // without waiting for its next event.
+      _compassThrottleTimer?.cancel();
+      _compassThrottleTimer = null;
+      _pendingCompassHeading = null;
+      await _updateUserLocation(controller);
+      return;
+    }
+
+    // The navigation SDK feeds a fused GPS/sensor heading here, typically on
+    // every location fix (~1Hz) and faster mid-turn. Pushing the rotation
+    // source synchronously on every call re-parses it and relayouts symbols on
+    // the render thread while the follow-camera is also animating — that
+    // contention is the lag/jitter seen only during guided navigation (this
+    // app drives heading from the throttled compass listener instead, which is
+    // why it doesn't show there). Route through the same coalescing throttle
+    // the live compass uses: caps at ~10Hz, drops sub-2° changes, and stands
+    // down entirely while a user-marker glide is repainting the source itself.
+    _requestRotationPush(controller, _rotationSourceId, heading);
   }
 
   void _startCompassListening(
       MapLibreMapController controller, String sourceID) {
     if (_compassSub != null) return;
-    _compassSub = FlutterCompass.events?.listen((event) {
+    _compassSub = HeadingSource.events?.listen((event) {
       final heading = event.heading;
       if (heading == null) return;
       // Ignore the sensor rather than cancelling the subscription. There *is*
@@ -1690,6 +2466,13 @@ class MaplibreMapProvider extends BaseMapProvider {
   void _requestRotationPush(
       MapLibreMapController controller, String sourceID, double heading) {
     _pendingCompassHeading = heading;
+    // A user-marker glide is running. It already re-pushes this exact source
+    // every frame with `_currentHeading` (updated above by the compass
+    // listener) baked in, so a second writer here just doubles the native
+    // relayout load — and the glide only runs during navigation, which is
+    // exactly when the camera is also panning. Stand down; the glide's
+    // finally-block flushes whatever heading is pending when it ends.
+    if (_userMarkerAnimating) return;
     // A flush is already scheduled or running; it will pick up the value above.
     if (_compassThrottleTimer != null || _compassPushInFlight) return;
     _armCompassTimer(controller, sourceID);
@@ -1713,6 +2496,25 @@ class MaplibreMapProvider extends BaseMapProvider {
       MapLibreMapController controller, String sourceID) async {
     final heading = _pendingCompassHeading;
     if (heading == null) return;
+
+    // A glide started after this flush was armed. Leave `_pendingCompassHeading`
+    // set and bail: the glide is repainting the source itself, and its
+    // finally-block re-arms this flush once it releases.
+    if (_userMarkerAnimating) return;
+
+    // The camera is mid-gesture / mid-follow-animation. A rotation-only source
+    // rewrite (with its render-thread symbol placement pass) here competes with
+    // the pan for frames. Hold the heading and retry after a fixed delay — the
+    // puck's visible orientation doesn't meaningfully change over the hold, and
+    // the fixed delay avoids a 0ms re-arm loop while the camera keeps moving.
+    if (_cameraMovingNow) {
+      _compassThrottleTimer?.cancel();
+      _compassThrottleTimer = Timer(const Duration(milliseconds: 150), () {
+        _compassThrottleTimer = null;
+        _flushRotationPush(controller, sourceID);
+      });
+      return;
+    }
 
     // Sub-threshold jitter: not worth a full source rewrite.
     final last = _lastPushedHeading;
@@ -2005,8 +2807,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         // by the next render, which is the whole point of keying by content.
         _smallIconIds.clear();
         _bakedIconCache.clear();
-        setGeoJsonSource(controller, [], _clusterSourceId);
-        setGeoJsonSource(controller, [], _rotationSourceId);
+        await setGeoJsonSource(controller, [], _clusterSourceId);
+        await setGeoJsonSource(controller, [], _rotationSourceId);
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -2189,6 +2991,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _refreshPatchFadeIfStale(
       MapLibreMapController controller) async {
     if (!_isPolygonLayersEnabled) return;
+    // The marker layers have to exist first. This runs off a polygon push,
+    // which lands between enablePolygonLayers() (sets _isPolygonLayersEnabled)
+    // and enableMarkerLayers() (sets _isClusteringEnabled) — so on the polygon
+    // flag alone it fires into a style that has no marker layers yet, and
+    // _refreshPatchAboveOpacity below then *creates* _patchAboveMarkerLayerId
+    // out of order. enableMarkerLayers hits "Layer patch-above-markers-layer
+    // already exists", and because its whole body is one try/catch that throw
+    // skips every remaining layer, _isClusteringEnabled, and the _symbols
+    // re-push — i.e. the venue renders with no markers at all.
+    // Nothing is lost by waiting: enableMarkerLayers calls back in when done.
+    if (!_isClusteringEnabled) return;
     final boundaryPolygons = _polygons.where((p) =>
         p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
     final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
@@ -2242,6 +3055,37 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Points used to approximate a cylinder/sphere footprint circle.
   static const int _circleSegments = 16;
 
+  /// Parts of the same furniture item (seat/back/legs, top/legs...) are
+  /// built as independent, unwelded extrusion polygons. Where two parts
+  /// are only meant to *touch*, floating-point rounding and the circle
+  /// approximation above leave a sub-millimetre gap at the seam; at an
+  /// oblique pitch, fill-extrusion's per-feature edge anti-aliasing lets
+  /// whatever is underneath (floor layer, basemap) show through exactly
+  /// there, which reads as "transparent furniture". Outsetting every part
+  /// by this much forces neighbouring parts to overlap instead of merely
+  /// touch, closing the seam. It's well under furniture scale (chairs are
+  /// tens of centimetres), so it isn't visible as size inflation.
+  static const double _partSeamOverlap = 0.01;
+
+  /// Parts meant to sit flush against each other (a cushion directly on a
+  /// seat base, a tabletop layer on its frame) frequently share the exact
+  /// same footprint in the source data. Padding every part by the same
+  /// fixed amount (above) keeps those side walls perfectly coplanar —
+  /// which is exactly the condition that makes a GPU depth buffer flicker
+  /// between two features as the camera moves: it can't consistently
+  /// decide which coincident surface is nearer, so the "loser" shows
+  /// whatever is behind it (another part, or the floor), and the loser
+  /// flips as the view/projection matrix changes with tilt/rotation. This
+  /// is a property of any standard depth buffer (WebGL, GLES, Metal), not
+  /// a misconfigured render flag — MapLibre's native renderer already runs
+  /// depth test/write correctly for fill-extrusion. The fix has to be on
+  /// our side: never hand the renderer two bit-identical surfaces. Varying
+  /// the pad per part index guarantees no two parts of the same item can
+  /// ever end up with identical padded geometry, without needing to know
+  /// which part is meant to sit "inside" which.
+  static const int _seamJitterSteps = 6;
+  static const double _seamJitterStep = 0.0015;
+
   /// "3dRef" may arrive as a Map or as a JSON-encoded string depending on
   /// how the API serialized the property — accept both.
   Map<String, dynamic>? _furnitureRefOf(Map<String, dynamic> props) {
@@ -2277,6 +3121,17 @@ class MaplibreMapProvider extends BaseMapProvider {
       }).toList();
       if (furnitureItems.isEmpty) return;
 
+      // Upsert by id: the same building's furniture can be pushed more than
+      // once — a floor switch, or the deferred furniture-model load re-rendering
+      // the current floors — and a blind addAll would stack duplicate extruded
+      // parts that removeFurniture(buildingId) then only partly clears.
+      final incomingIds = furnitureItems
+          .map((it) => it['id'])
+          .where((id) => id != null)
+          .toSet();
+      if (incomingIds.isNotEmpty) {
+        _furnitureItems.removeWhere((it) => incomingIds.contains(it['id']));
+      }
       _furnitureItems.addAll(furnitureItems);
       await _enableFurnitureLayer(controller);
       await _updateFurnitureSource(controller);
@@ -2430,7 +3285,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillExtrusionColor: ['get', 'color'],
         fillExtrusionBase: ['get', 'base'],
         fillExtrusionHeight: ['get', 'height'],
-        fillExtrusionOpacity: op(null),
+        // Every other extrusion layer in this file pins this explicitly;
+        // leaving it unset here was the one inconsistency letting the
+        // renderer fall back to an implicit default instead of a
+        // guaranteed-opaque layer.
+        fillExtrusionOpacity: op(1.0),
       )),
       minzoom: _furnitureMinZoom,
     );
@@ -2447,7 +3306,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               fillExtrusionColor: ['get', 'color'],
               fillExtrusionBase: ['get', 'base'],
               fillExtrusionHeight: ['get', 'height'],
-              fillExtrusionOpacity: op(null),
+              fillExtrusionOpacity: op(1.0),
             )),
         minzoom: _furnitureMinZoom,
       );
@@ -2522,7 +3381,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     final parts = (ref['3d'] as List?) ?? const [];
     final result = <Map<String, dynamic>>[];
 
-    for (final raw in parts) {
+    for (var partIndex = 0; partIndex < parts.length; partIndex++) {
+      final raw = parts[partIndex];
       if (raw is! Map) continue;
       final p = Map<String, dynamic>.from(raw);
       final shape = p['shape'] as String? ?? 'box';
@@ -2533,7 +3393,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           : (double.tryParse('${p['h'] ?? 0}') ?? 0.0);
       final oy = double.tryParse('${p['oy'] ?? 0}') ?? 0.0;
 
-      final localCorners = _footprintFor(p);
+      final eps = _partSeamOverlap +
+          (partIndex % _seamJitterSteps) * _seamJitterStep;
+
+      final localCorners = _footprintFor(p, eps);
       if (localCorners.isEmpty) continue;
 
       final ring = localCorners.map((c) {
@@ -2558,8 +3421,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         },
         'properties': {
           'color': p['color'] ?? '#888888',
-          'base': oy - h / 2,
-          'height': oy + h / 2,
+          'base': oy - h / 2 - eps,
+          'height': oy + h / 2 + eps,
         },
       });
     }
@@ -2575,7 +3438,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// columns, so a "sphere" renders as a cylinder of the same radius
   /// spanning its full diameter — not a true dome. That's a hard
   /// limit of this technique, not a bug.
-  List<List<double>> _footprintFor(Map<String, dynamic> p) {
+  List<List<double>> _footprintFor(Map<String, dynamic> p, double eps) {
     final shape = p['shape'] as String? ?? 'box';
     final ox = double.tryParse('${p['ox'] ?? 0}') ?? 0.0;
     final oz = double.tryParse('${p['oz'] ?? 0}') ?? 0.0;
@@ -2596,7 +3459,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     if (shape == 'cylinder' || shape == 'sphere') {
-      final r = double.tryParse('${p['r'] ?? 0}') ?? 0.0;
+      final r = (double.tryParse('${p['r'] ?? 0}') ?? 0.0) + eps;
       return List.generate(_circleSegments, (i) {
         final angle = 2 * pi * i / _circleSegments;
         return [ox + r * cos(angle), oz + r * sin(angle)];
@@ -2606,8 +3469,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     // default: box — w/d taken exactly as given in the JSON, no
     // unit scaling or minimum-size flooring. The footprint is the
     // horizontal w x d rectangle only; h feeds base/height later.
-    final w = double.tryParse('${p['w'] ?? 0}') ?? 0.0;
-    final d = double.tryParse('${p['d'] ?? 0}') ?? 0.0;
+    // Half-extents grow by eps on every side so this part overlaps its
+    // neighbours instead of merely touching (or exactly coinciding
+    // with) them.
+    final halfW = (double.tryParse('${p['w'] ?? 0}') ?? 0.0) / 2 + eps;
+    final halfD = (double.tryParse('${p['d'] ?? 0}') ?? 0.0) / 2 + eps;
 
     // Optional per-part "ry": the part's own yaw around its center
     // (e.g. wall niches at ry 90/270, amalaka lobes at ry 30/60...),
@@ -2615,20 +3481,20 @@ class MaplibreMapProvider extends BaseMapProvider {
     final ryDeg = double.tryParse('${p['ry'] ?? 0}') ?? 0.0;
     if (ryDeg == 0) {
       return [
-        [ox - w / 2, oz - d / 2],
-        [ox + w / 2, oz - d / 2],
-        [ox + w / 2, oz + d / 2],
-        [ox - w / 2, oz + d / 2],
+        [ox - halfW, oz - halfD],
+        [ox + halfW, oz - halfD],
+        [ox + halfW, oz + halfD],
+        [ox - halfW, oz + halfD],
       ];
     }
     final ryRad = ryDeg * pi / 180.0;
     final cosR = cos(ryRad);
     final sinR = sin(ryRad);
     return [
-      [-w / 2, -d / 2],
-      [w / 2, -d / 2],
-      [w / 2, d / 2],
-      [-w / 2, d / 2],
+      [-halfW, -halfD],
+      [halfW, -halfD],
+      [halfW, halfD],
+      [-halfW, halfD],
     ].map((c) {
       final x = c[0];
       final z = c[1];
@@ -2731,6 +3597,322 @@ class MaplibreMapProvider extends BaseMapProvider {
         "features": features,
       },
     );
+
+    // The corner pass below only reads solid, non-grey path lines. Build a
+    // cheap signature of exactly those and skip the whole pass (segment walk +
+    // per-bend image bakes) when it hasn't changed since the last build — e.g.
+    // every time navigation adds/removes the grey traversed overlay, which
+    // never touches the route geometry.
+    final routeSignature = _lines
+        .where((line) {
+          final isPath = line.properties?['path'] ??
+              line.id.toLowerCase().contains("path");
+          return isPath &&
+              line.properties?['style'] == "solid" &&
+              !(line.properties?['isGreyOverlay'] ?? false);
+        })
+        .map((line) => "${line.id}:${line.points.length}")
+        .join("|");
+
+    if (routeSignature == _cornerFeaturesSignature) {
+      await _refreshCornerVisibility(controller);
+      return;
+    }
+
+    final cornerFeatures = <Map<String, dynamic>>[];
+    for (var line in _lines) {
+      final bool isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
+      final String? style = line.properties?['style'];
+      final bool isGreyOverlay = line.properties?['isGreyOverlay'] ?? false;
+
+      if (isPath && style == "solid" && !isGreyOverlay && line.points.length >= 3) {
+        // Detect significant corners (bends)
+        for (int i = 1; i < line.points.length - 1; i++) {
+          final b1 = _calculateBearing(line.points[i - 1], line.points[i]);
+          final b2 = _calculateBearing(line.points[i], line.points[i + 1]);
+
+          double diff = b2 - b1;
+          if (diff > 180) diff -= 360;
+          if (diff < -180) diff += 360;
+
+          // Threshold for a "bend"
+          if (diff.abs() > 20) {
+            // Exact-angle icon (rounded to 5° purely to cap distinct
+            // textures) instead of the old 6-way bucket — the baked bend now
+            // matches the real geometry of the turn instead of snapping to
+            // the nearest of [-135, -90, -45, 45, 90, 135].
+            final String iconId = await _ensureCornerArrowImage(controller, diff);
+            final String turnLabel = _turnLabel(diff);
+            final String bubbleIconId = await _ensureTurnBubbleImage(controller, turnLabel);
+
+            // Shorter of the two path segments meeting at this bend. Used by
+            // _refreshCornerVisibility to drop the arrow when that segment is
+            // too short on screen for the fixed-size sprite to sit on.
+            final double segIn = _haversineMeters(line.points[i - 1], line.points[i]);
+            final double segOut = _haversineMeters(line.points[i], line.points[i + 1]);
+
+            cornerFeatures.add({
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [line.points[i].longitude, line.points[i].latitude],
+              },
+              'properties': {
+                'path': true,
+                'style': 'solid',
+                'isGreyOverlay': false,
+                'bearing': b1, // Rotate icon by incoming bearing so tail aligns
+                'icon': iconId,
+                'turnBubbleIcon': bubbleIconId,
+                'turnSharpness': diff.abs(),
+                'minSegMeters': segIn < segOut ? segIn : segOut,
+              }
+            });
+          }
+        }
+      }
+    }
+
+    _allCornerFeatures = cornerFeatures;
+    _cornerFeaturesSignature = routeSignature;
+    await _refreshCornerVisibility(controller);
+  }
+
+  String _turnLabel(double diffDeg) {
+    final d = diffDeg.abs();
+    if (d < 20) return "Continue straight";
+    if (d < 45) return diffDeg > 0 ? "Turn Slight right" : "Turn Slight left";
+    if (d < 150) return diffDeg > 0 ? "Turn right" : "Turn left";
+    return "U-turn";
+  }
+
+  IconData _turnIcon(double diffDeg) {
+    if (diffDeg.abs() < 20) return Icons.straight;
+    return diffDeg > 0 ? Icons.turn_right : Icons.turn_left;
+  }
+
+  double _calculateBearing(MapLocation start, MapLocation end) {
+    double lat1 = start.latitude * pi / 180;
+    double lon1 = start.longitude * pi / 180;
+    double lat2 = end.latitude * pi / 180;
+    double lon2 = end.longitude * pi / 180;
+
+    double dLon = lon2 - lon1;
+
+    double y = sin(dLon) * cos(lat2);
+    double x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon);
+    double brng = atan2(y, x);
+
+    return (brng * 180 / pi + 360) % 360;
+  }
+
+  double _haversineMeters(MapLocation a, MapLocation b) {
+    const R = 6371000.0;
+    final dLat = (b.latitude - a.latitude) * pi / 180;
+    final dLng = (b.longitude - a.longitude) * pi / 180;
+    final lat1 = a.latitude * pi / 180;
+    final lat2 = b.latitude * pi / 180;
+    final h = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1) * cos(lat2) * sin(dLng / 2) * sin(dLng / 2);
+    return 2 * R * atan2(sqrt(h), sqrt(1 - h));
+  }
+
+  MapLocation _pointAlongPath(List<MapLocation> points, double t) {
+    if (points.length < 2) return points.first;
+    double total = 0;
+    final segLengths = <double>[];
+    for (int i = 0; i < points.length - 1; i++) {
+      final d = _haversineMeters(points[i], points[i + 1]);
+      segLengths.add(d);
+      total += d;
+    }
+    if (total == 0) return points.first;
+    double target = t.clamp(0.0, 1.0) * total;
+    double accum = 0;
+    for (int i = 0; i < segLengths.length; i++) {
+      if (accum + segLengths[i] >= target) {
+        final segT = segLengths[i] == 0 ? 0.0 : (target - accum) / segLengths[i];
+        final a = points[i];
+        final b = points[i + 1];
+        return MapLocation(
+          latitude: a.latitude + (b.latitude - a.latitude) * segT,
+          longitude: a.longitude + (b.longitude - a.longitude) * segT,
+        );
+      }
+      accum += segLengths[i];
+    }
+    return points.last;
+  }
+
+  Future<void> _refreshCornerVisibility(MapLibreMapController controller) async {
+    if (_allCornerFeatures.isEmpty) {
+      await controller.setGeoJsonSource(_pathCornerSourceId, {
+        "type": "FeatureCollection",
+        "features": [],
+      });
+      return;
+    }
+
+    final cameraPos = controller.cameraPosition;
+    final zoom = cameraPos?.zoom ?? 16.0;
+    final lat = cameraPos?.target.latitude ?? 0.0;
+
+    // Below this zoom, hide corner arrows/bubbles entirely — even the
+    // sharpest turn shouldn't survive once the view is zoomed out this far.
+    const double hardCutoffZoom = 19;
+    if (zoom < hardCutoffZoom) {
+      await controller.setGeoJsonSource(_pathCornerSourceId, {
+        "type": "FeatureCollection",
+        "features": [],
+      });
+      return;
+    }
+
+    final metersPerPixel = 156543.03392 * cos(lat * pi / 180) / pow(2, zoom);
+    const double pixelThreshold = 80.0;
+    final double meterThreshold = pixelThreshold * metersPerPixel;
+
+    // The big corner arrow is a fixed ~48px sprite pivoted on the bend. When a
+    // path segment meeting the bend is shorter than that on screen — a tight
+    // route near the destination, or the view zoomed out — the arrow overruns
+    // the turn and reads as floating free of the path. Flag those per corner so
+    // the arrow layer can drop just the arrow (the turn bubble still shows).
+    const double arrowFitMinSegPixels = 55.0;
+
+    final sorted = [..._allCornerFeatures]
+      ..sort((a, b) => (b['properties']['turnSharpness'] as double)
+          .compareTo(a['properties']['turnSharpness'] as double));
+
+    final kept = <Map<String, dynamic>>[];
+    for (final feature in sorted) {
+      final coords = feature['geometry']['coordinates'] as List;
+      final point = MapLocation(latitude: coords[1], longitude: coords[0]);
+      bool tooClose = false;
+      for (final k in kept) {
+        final kCoords = k['geometry']['coordinates'] as List;
+        final kPoint = MapLocation(latitude: kCoords[1], longitude: kCoords[0]);
+        if (_haversineMeters(point, kPoint) < meterThreshold) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (tooClose) continue;
+
+      final segMeters =
+          (feature['properties']['minSegMeters'] as num?)?.toDouble();
+      feature['properties']['arrowFits'] = segMeters == null ||
+          segMeters / metersPerPixel >= arrowFitMinSegPixels;
+      kept.add(feature);
+    }
+
+    await controller.setGeoJsonSource(_pathCornerSourceId, {
+      "type": "FeatureCollection",
+      "features": kept,
+    });
+  }
+
+  Future<Uint8List> _createShineIconBytes() async {
+    const double size = 44;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final center = const Offset(size / 2, size / 2);
+    final paint = Paint()
+      ..shader = RadialGradient(
+        colors: [Colors.white, Colors.white.withOpacity(0.0)],
+        stops: const [0.0, 1.0],
+      ).createShader(Rect.fromCircle(center: center, radius: size / 2));
+    canvas.drawCircle(center, size / 2, paint);
+    final img = await recorder.endRecording().toImage(size.toInt(), size.toInt());
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  Future<void> _loadShineImage(MapLibreMapController controller) async {
+    try {
+      final bytes = await _createShineIconBytes();
+      await _addImageSafe(controller, _kShineImageId, bytes);
+    } catch (e) {
+      print("_loadShineImage $e");
+    }
+  }
+
+  static const int _pathShineCount = 1;
+
+  /// Decorative "energy pulse" that travels along the drawn route. Each tick
+  /// rewrites a GeoJSON source, which makes MapLibre repaint the whole map —
+  /// so while it runs the map never goes idle. Measured on a moto g64: on its
+  /// own it holds a static navigation screen at ~25fps instead of letting it
+  /// rest. Kept ON (it's a wanted effect), but throttled: it runs at ~8fps and
+  /// stands completely down while the camera is moving (pan / nav follow), so
+  /// it never competes with the interaction that actually needs the frames.
+  /// Set false to drop it entirely.
+  bool pathShineEnabled = true;
+
+  // ~8fps: a soft glow reads as smooth motion well below 60fps, and every
+  // tick costs a full-map repaint, so this is as slow as it can look right.
+  static const Duration _kPathShineTick = Duration(milliseconds: 125);
+
+  void _ensurePathShineAnimation(MapLibreMapController controller) {
+    if (!pathShineEnabled) return;
+    if (_pathShineTimer != null) return;
+    _pathShineProgress = 0.0;
+    _pathShineTimer = Timer.periodic(_kPathShineTick, (timer) async {
+      if (!_isPolylineLayersEnabled) return;
+
+      // Purely cosmetic. While the camera is moving (guided-navigation follow,
+      // or a gesture) skip the source rewrite entirely — a native GeoJSON
+      // re-parse + relayout on the render thread every tick is exactly what
+      // makes the pan stutter. It resumes the moment the camera settles.
+      if (_cameraMovingNow) return;
+
+      // Per-tick advance, sized so the pulse covers the route in ~1.25s at the
+      // 125ms tick (0.1 * ~10 ticks/loop). Bump this to speed the pulse up.
+      _pathShineProgress += 0.10;
+      if (_pathShineProgress > 1.0) _pathShineProgress -= 1.0;
+
+      final activeLines = _lines.where((line) {
+        final isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
+        final style = line.properties?['style'];
+        final isGrey = line.properties?['isGreyOverlay'] ?? false;
+        return isPath && style == "solid" && !isGrey && line.points.length >= 2;
+      }).toList();
+
+      if (activeLines.isEmpty) {
+        timer.cancel();
+        _pathShineTimer = null;
+        return;
+      }
+
+      final features = <Map<String, dynamic>>[];
+      for (final line in activeLines) {
+        for (int i = 0; i < _pathShineCount; i++) {
+          final t = (_pathShineProgress + i / _pathShineCount) % 1.0;
+          final pos = _pointAlongPath(line.points, t);
+          features.add({
+            'type': 'Feature',
+            'geometry': {
+              'type': 'Point',
+              'coordinates': [pos.longitude, pos.latitude],
+            },
+            'properties': {},
+          });
+        }
+      }
+
+      try {
+        await controller.setGeoJsonSource(_pathShineSourceId, {
+          'type': 'FeatureCollection',
+          'features': features,
+        });
+      } catch (e) {
+        // Source may not exist yet mid style-reload; next tick retries.
+      }
+    });
+  }
+
+  void _stopPathShineAnimation() {
+    _pathShineTimer?.cancel();
+    _pathShineTimer = null;
   }
 
   @override
@@ -2770,6 +3952,93 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// reload, which wipes addImage()). Avoids re-decoding shared dot assets.
   final Set<String> _registeredDotImageIds = {};
 
+  /// Corner-arrow angles (rounded to the nearest 5°) already registered with
+  /// the current style. Cleared on style reload same as the dot images.
+  final Set<int> _registeredCornerArrowAngles = {};
+
+  String _cornerArrowImageId(int roundedAngle) =>
+      '${_kPathBigArrowImageId}_exact_$roundedAngle';
+
+  /// Registers (once, cached by 5°-rounded angle) a bent-arrow icon whose bend
+  /// matches the real turn angle, and returns its image id. Rounding to 5° is
+  /// purely to cap the number of distinct textures (~72 max) — it is NOT a
+  /// visual bucket like the old 6-way [-135, -90, -45, 45, 90, 135] scheme;
+  /// a 5° step is visually indistinguishable from the exact angle.
+  Future<String> _ensureCornerArrowImage(
+      MapLibreMapController controller, double diff) async {
+    final int rounded = (diff / 5).round() * 5;
+    final String id = _cornerArrowImageId(rounded);
+    if (!_registeredCornerArrowAngles.contains(rounded)) {
+      final bytes = await creator.createBentArrow(angle: rounded.toDouble());
+      await _addImageSafe(controller, id, bytes);
+      _registeredCornerArrowAngles.add(rounded);
+    }
+    return id;
+  }
+
+  final Map<String, String> _registeredTurnBubbleIds = {};
+
+  Future<String> _ensureTurnBubbleImage(
+      MapLibreMapController controller, String label) async {
+    if (_registeredTurnBubbleIds.containsKey(label)) {
+      return _registeredTurnBubbleIds[label]!;
+    }
+    final bytes = await _createTurnBubbleBytes(label);
+    final id = 'turn_bubble_${label.hashCode}';
+    await _addImageSafe(controller, id, bytes);
+    _registeredTurnBubbleIds[label] = id;
+    return id;
+  }
+
+  Future<Uint8List> _createTurnBubbleBytes(String label) async {
+    const double ratio = 2.0;
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontSize: 14 * ratio,
+          fontWeight: FontWeight.w600,
+          color: Colors.white,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    const paddingH = 16.0, paddingV = 10.0, tailH = 10.0;
+    final w = textPainter.width + paddingH * 2 * ratio;
+    final bubbleH = textPainter.height + paddingV * 2 * ratio;
+    final h = bubbleH + tailH * ratio;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    final bubbleRect = Rect.fromLTWH(0, 0, w, bubbleH);
+    final rrect = RRect.fromRectAndRadius(bubbleRect, Radius.circular(10 * ratio));
+
+    canvas.drawRRect(
+      rrect.shift(Offset(0, 2 * ratio)),
+      Paint()
+        ..color = const Color(0x33000000)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 3 * ratio),
+    );
+
+    final bgPaint = Paint()..color = const Color(0xFF1A73E8);
+    canvas.drawRRect(rrect, bgPaint);
+
+    final tailPath = Path()
+      ..moveTo(w / 2 - 6 * ratio, bubbleH - 1)
+      ..lineTo(w / 2 + 6 * ratio, bubbleH - 1)
+      ..lineTo(w / 2, h)
+      ..close();
+    canvas.drawPath(tailPath, bgPaint);
+
+    textPainter.paint(canvas, Offset(paddingH * ratio, paddingV * ratio));
+
+    final img = await recorder.endRecording().toImage(w.ceil(), h.ceil());
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
   /// Longest-edge cap (px) an animal photo is downscaled to before its icon
   /// is registered with the map style, regardless of the source photo's
   /// native resolution.
@@ -2803,6 +4072,26 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// key is already in here reuse the shared image id instead of triggering
   /// another decode/addImage round trip.
   final Set<String> _loadedAnimalIcons = {};
+
+  /// Marker ids whose icon has already been fetched/composited/registered via
+  /// addImage() in the current style session (mirrors [_loadedAnimalIcons] for
+  /// non-animal markers). A floor switch removes a marker from `_symbols`/the
+  /// GeoJSON source but never un-registers its native image — so without this,
+  /// switching away from a floor and back re-fetched the source asset/network
+  /// image and re-ran the Canvas compositing for every one of its markers
+  /// every single time, even though the exact same image was already sitting
+  /// in the native style. This is what made floor switching visibly slower
+  /// the more floors/markers a venue had and the more a user bounced between
+  /// them. Cleared on style reload (which wipes addImage()) alongside
+  /// _loadedAnimalIcons.
+  final Set<String> _registeredMarkerIconIds = {};
+
+  /// Anchor computed by compositing, for a marker id already covered by
+  /// [_registeredMarkerIconIds]. A floor revisit gets a freshly-parsed
+  /// [GeoJsonMarker] instance (same id, new object) that never itself ran
+  /// through compositing, so the anchor has to be restored from here rather
+  /// than recomputed.
+  final Map<String, Offset> _markerIconAnchorCache = {};
 
   /// Shared "no label" icon ids already registered with the current style.
   ///
@@ -2996,7 +4285,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         marker.anchor = baked.anchor;
         _smallIconBytes[smallId] = bytes;
       }
-      await controller.addImage(smallId, bytes);
+      await _addImageSafe(controller, _dbgReg(smallId), bytes);
       _registeredSmallIconIds.add(smallId);
       return true;
     } catch (e) {
@@ -3030,7 +4319,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         marker.anchor = baked.anchor;
         _animalIconCache[contentKey] = composite;
       }
-      await controller.addImage(imageId, composite);
+      await _addImageSafe(controller, _dbgReg(imageId), composite);
       _loadedAnimalIcons.add(contentKey);
       return true;
     } catch (e) {
@@ -3170,10 +4459,23 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _loadDotImage(MapLibreMapController controller) async {
     try {
       final bd = await rootBundle.load(_kDotAssetPath);
-      await controller.addImage(_kDotImageId, bd.buffer.asUint8List());
+      await controller.addImage(_dbgReg(_kDotImageId), bd.buffer.asUint8List());
       _registeredDotImageIds.add(_kDotImageId);
     } catch (e) {
       print("_loadDotImage $e");
+    }
+  }
+
+  /// Registers the path direction arrow images.
+  Future<void> _loadPathArrowImage(MapLibreMapController controller) async {
+    try {
+      final bytes = await creator.createDirectionArrow();
+      await _addImageSafe(controller, _kPathArrowImageId, bytes);
+
+      final bigBytes = await creator.createBigCornerArrow();
+      await _addImageSafe(controller, _kPathBigArrowImageId, bigBytes);
+    } catch (e) {
+      print("_loadPathArrowImage $e");
     }
   }
 
@@ -3192,12 +4494,50 @@ class MaplibreMapProvider extends BaseMapProvider {
         bytes = bd.buffer.asUint8List();
       }
       if (bytes != null) {
-        await controller.addImage(path, bytes);
+        await controller.addImage(_dbgReg(path), bytes);
         _registeredDotImageIds.add(path);
       }
     } catch (e) {
       print("_loadMarkerDotIcon $e");
     }
+  }
+
+  /// Wraps [MapLibreMapController.addImage] with a retry against the native
+  /// "STYLE_NOT_READY" race (see [RenderingUtilities.retryOnStyleNotReady]).
+  Future<void> _addImageSafe(
+    MapLibreMapController controller,
+    String name,
+    Uint8List bytes, [
+    bool sdf = false,
+  ]) {
+    return RenderingUtilities.retryOnStyleNotReady(
+        () => controller.addImage(name, bytes, sdf));
+  }
+
+  /// Wraps [MapLibreMapController.addSymbolLayer] with the same retry.
+  Future<void> _addSymbolLayerSafe(
+    MapLibreMapController controller,
+    String sourceId,
+    String layerId,
+    SymbolLayerProperties properties, {
+    String? belowLayerId,
+    String? sourceLayer,
+    double? minzoom,
+    double? maxzoom,
+    dynamic filter,
+    bool enableInteraction = true,
+  }) {
+    return RenderingUtilities.retryOnStyleNotReady(() => controller.addSymbolLayer(
+          sourceId,
+          layerId,
+          properties,
+          belowLayerId: belowLayerId,
+          sourceLayer: sourceLayer,
+          minzoom: minzoom,
+          maxzoom: maxzoom,
+          filter: filter,
+          enableInteraction: enableInteraction,
+        ));
   }
 
   /// Uploads a baked marker's images to the current style and records what it
@@ -3220,10 +4560,12 @@ class MaplibreMapProvider extends BaseMapProvider {
             ? null
             : _smallIconBytes[baked.smallIconId]);
     await Future.wait([
-      controller.addImage(marker.id, baked.main),
-      if (smallBytes != null) controller.addImage(baked.smallIconId, smallBytes),
+      _addImageSafe(controller, _dbgReg(marker.id), baked.main),
+      if (smallBytes != null)
+        _addImageSafe(controller, _dbgReg(baked.smallIconId), smallBytes),
       if (baked.selected != null)
-        controller.addImage("${marker.id}-selected", baked.selected!),
+        _addImageSafe(
+            controller, _dbgReg("${marker.id}-selected"), baked.selected!),
     ]);
     if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
     _smallIconIds[marker.id] = baked.smallIconId;
@@ -3250,6 +4592,14 @@ class MaplibreMapProvider extends BaseMapProvider {
       } catch (e) {
         print("_loadMarkerIcon (cached) $e");
       }
+    }
+    // Marker types that don't populate _bakedIconCache (pathStop, plain
+    // icon+text markers) track their registration here instead. Cleared on
+    // style reload alongside _loadedAnimalIcons.
+    if (_registeredMarkerIconIds.contains(marker.id)) {
+      final cachedAnchor = _markerIconAnchorCache[marker.id];
+      if (cachedAnchor != null) marker.anchor = cachedAnchor;
+      return true;
     }
     try {
       if (marker.customRendering) {
@@ -3306,7 +4656,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             museum: RenderingTheme.current.isMuseum,
             stopName: marker.properties?['stopName'] ?? "",
           );
-          await controller.addImage(marker.id, iconBytes);
+          await _addImageSafe(controller, _dbgReg(marker.id), iconBytes);
+          _registeredMarkerIconIds.add(marker.id);
           return true;
         }else{
           double fontSize = marker.properties?["fontSize"]??14.5;
@@ -3405,8 +4756,26 @@ class MaplibreMapProvider extends BaseMapProvider {
           final bd = await rootBundle.load(marker.assetPath!);
           iconBytes = bd.buffer.asUint8List();
         }
-        if (iconBytes != null) {
-          await controller.addImage(marker.id, iconBytes);
+        // A server upload that is missing or truncated must not cost the marker
+        // its icon. `imageFile` wins the assetPath slot outright during parsing
+        // (`assetPath ??= asset.assetPath`), so the bundled artwork the landmark
+        // type already matched — cafeteria, waiting area, counter … — is carried
+        // on the marker as fallbackAssetPath purely for this moment.
+        if ((iconBytes == null || iconBytes.isEmpty) &&
+            marker.fallbackAssetPath != null &&
+            marker.fallbackAssetPath != marker.assetPath) {
+          try {
+            final bd = await rootBundle.load(marker.fallbackAssetPath!);
+            iconBytes = bd.buffer.asUint8List();
+            print('icon fallback: "${marker.title}" -> '
+                '${marker.fallbackAssetPath} (remote asset unavailable)');
+          } catch (e) {
+            print('icon fallback failed for "${marker.title}": $e');
+          }
+        }
+        if (iconBytes != null && iconBytes.isNotEmpty) {
+          await _addImageSafe(controller, _dbgReg(marker.id), iconBytes);
+          _registeredMarkerIconIds.add(marker.id);
           return true;
         }
       }
@@ -3466,6 +4835,17 @@ class MaplibreMapProvider extends BaseMapProvider {
   ///
   /// Not applied to the custom-rendering layer (layer 3, the animal/POI
   /// composites): its ramp was never rescaled and both platforms share it.
+  /// Global multiplier on every marker `iconSize`: 0.5 on web, full size on
+  /// native.
+  ///
+  /// Native is deliberately back at 1.0 — the sizes shipped before the web work
+  /// and the ones this venue is tuned for. Dropping it to 0.5 does make the
+  /// collision fights milder, but that is a side effect, not the fix: dots are
+  /// cleared by the marker→dot cascade in [_refreshMarkerLayerMinZooms], which
+  /// works at any size. Do not shrink icons to solve a collision problem.
+  ///
+  /// Call sites stay written as `<value> * _kIconScale` so the native number in
+  /// the source is the real one.
   static final double _kIconScale = kIsWeb ? 0.5 : 1.0;
 
   /// Default zoom fade used when the layers are first created; replaced at
@@ -3534,6 +4914,23 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
         textAllowOverlap: false,
         iconAllowOverlap: false,
+        // Icon-led placement. Both of these default to false, and that default
+        // is what produced the reported bug: an icon that loses its quad — an
+        // image not in the style at that moment, or a placement the icon loses
+        // while the label wins — leaves the LABEL drawn on its own. The
+        // landmark then reads as a bare floating word, and it flips back as you
+        // zoom because placement is recomputed on every pass.
+        //
+        //   icon-optional: false  -> no icon, no symbol. Never a naked label.
+        //   text-optional: true   -> a label that cannot fit is dropped while
+        //                            the icon stays.
+        //
+        // So the marker has exactly one behaviour: it draws its icon (with the
+        // label when there is room), or it is not drawn at all and its dot
+        // takes over through the cascade. That is what reads as stable when you
+        // zoom, and it is why a marker never half-renders.
+        iconOptional: false,
+        textOptional: true,
         iconOpacity: opacity,
         textOpacity: opacity,
       );
@@ -3635,8 +5032,11 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// [UnifiedMarkerCreator] rather than referenced as a plain icon.
   ///
   /// Used at creation on every platform, and by the **web** branch of
-  /// [_refreshMarkerLayerMinZooms]. The load-bearing line is `symbolSortKey`'s
-  /// 4000 base, which the refresh's partial call used to overwrite: without it every full marker flattens to ~0, they collide with
+  /// [_refreshMarkerLayerMinZooms]. `icon-image` here is not what was broken —
+  /// setLayerProperties merges, so it was never dropped. The load-bearing line
+  /// is `symbolSortKey`'s 1500 base (see [_collisionBase] for why it sits
+  /// ahead of the plain icon layers), which the refresh's partial call used to
+  /// overwrite: without it every full marker flattens to ~0, they collide with
   /// each other as one block under `iconAllowOverlap: false`, and each loser
   /// falls back to the layer-0 dot — for an animal, the paw. That is the "every
   /// animal is a paw at every zoom" defect, and it is a collision-ordering bug,
@@ -3645,7 +5045,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           {String visibility = "visible", dynamic sortKey}) =>
       SymbolLayerProperties(
         visibility: visibility,
-        symbolSortKey: sortKey ?? ["+", 4000, _kSortKeyExpression],
+        symbolSortKey: sortKey ?? ["+", 1500, _kSortKeyExpression],
         // The zoom step is a LABEL toggle, not a placeholder→photo swap:
         // `icon` is the composite with the title baked in, the low-zoom id the
         // same photo with text: "". Custom-rendering markers carry that id in
@@ -3735,16 +5135,38 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (controller is! MapLibreMapController) return;
 
     try {
-      await controller.addGeoJsonSource(_clusterSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
-
-      await controller.addGeoJsonSource(_rotationSourceId, {
-        'type': 'FeatureCollection',
-        'features': [],
-      });
-
+      // addGeoJsonSource() cannot set maxzoom and silently defaults to 18 —
+      // geojson-vt then only tiles marker data up to z18, and every marker
+      // vanishes once the camera zooms past that (over-zoomed tiles for a
+      // point source lose their symbols instead of just looking coarser).
+      // Furniture already learned this lesson (see its own maxzoom: 22
+      // comment); apply the same fix here via the richer addSource() API.
+      // Wrapped per-call because, unlike addGeoJsonSource(), addSource()
+      // has no "already exists" guard on the native side and throws on a
+      // style-reload re-add — which would otherwise abort every layer setup
+      // after it in this function.
+      try {
+        await controller.addSource(
+          _clusterSourceId,
+          const GeojsonSourceProperties(
+            data: {'type': 'FeatureCollection', 'features': []},
+            maxzoom: 22,
+          ),
+        );
+      } catch (_) {
+        // Source already exists on the native side — fine, carry on.
+      }
+      try {
+        await controller.addSource(
+          _rotationSourceId,
+          const GeojsonSourceProperties(
+            data: {'type': 'FeatureCollection', 'features': []},
+            maxzoom: 22,
+          ),
+        );
+      } catch (_) {
+        // Source already exists on the native side — fine, carry on.
+      }
       // Both sources exist again — async pushes (compass, animation) may resume.
       _markerSourcesReady = true;
 
@@ -3810,6 +5232,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "section"]]],
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
+          // A selected feature is never a dot. Its full marker is now forced
+          // visible by the selected layer regardless of collision, so the dot
+          // is no longer a fallback for it — it would just sit behind the
+          // highlighted icon.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
         ],
         enableInteraction: true,
         belowLayerId: null,
@@ -3832,6 +5259,9 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["!", ["to-boolean", ["get", "boundary"]]],
             ["!", ["to-boolean", ["get", "bearing"]]],
             ["!", ["to-boolean", ["get", "icon"]]],
+            // The selected marker's label is drawn (enlarged) by Layer 10 —
+            // don't also draw it here at rest size underneath.
+            ["!", ["to-boolean", ["get", "isSelected"]]],
           ],
           enableInteraction: true,
           belowLayerId: null,
@@ -3857,13 +5287,31 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          // A selected marker is drawn by the selected layer instead. Without
+          // this, the SAME feature is rendered twice — here at base 3000 and
+          // again at 8000 — and because both layers have iconAllowOverlap
+          // false, the two copies collide with each other. Which one wins is
+          // re-decided on every placement pass, so the icon flickers between
+          // its plain and highlighted form. Layer 3 has carried this exclusion
+          // all along; these two layers were missed.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["to-boolean", ["get", "sectionId"]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
         ],
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _normalTextMarkerLayerId),
-        minzoom: 18.0,
+        // No minzoom. This layer used to be gated at z18, so an icon+label
+        // landmark drew nothing below 18 and popped in at 18 — the swap that
+        // reads as the marker "refreshing" on a zoom in/out. The gate is not
+        // needed to keep the map uncluttered: these markers participate in the
+        // same collision pass as every other icon layer, so a crowded plan
+        // thins itself out and each loser falls back to its own dot via the
+        // cascade in [_refreshMarkerLayerMinZooms].
+        //
+        // Paired with dropping base 3000 from [_kDotStepGroupExpression] — the
+        // dot ramp has to stop special-casing these or the dot stays hidden
+        // below 18 and the fallback has nothing to draw.
       );
 
       // Layer 2b: Normal icon markers — without sectionId
@@ -3885,6 +5333,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["!", ["to-boolean", ["get", "subSection"]]],
           ["!", ["to-boolean", ["get", "boundary"]]],
           ["!", ["to-boolean", ["get", "bearing"]]],
+          // Same double-draw exclusion as the withSectionId layer above.
+          ["!", ["to-boolean", ["get", "isSelected"]]],
           ["!", ["to-boolean", ["get", "sectionId"]]],
           ["!", ["to-boolean", ["get", "customRendering"]]],
           ["to-boolean", ["get", "icon"]],
@@ -4035,9 +5485,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           // null when no override is set, which serialises the same as before.
           iconOpacity: op(null),
           iconImage: ["get", "icon"],
-          // Halved (was 1.5) to match the collision dots — the user arrow was
-          // dominating the floor plan it is meant to sit on.
-          //
           // Web only: scale with zoom like every other marker layer, rather
           // than holding one size while the floor plan grows and shrinks under
           // it. Same 14 → 18.3 ramp the other custom-rendering markers use,
@@ -4056,10 +5503,23 @@ class MaplibreMapProvider extends BaseMapProvider {
                   18.3, 0.75,
                   22.0, 0.75,
                 ]
-              : 1.5,
+              // The one call site 6f387c5 left as a bare number. Written with
+              // the multiplier like every other layer so it tracks _kIconScale
+              // instead of silently staying at double the reference size.
+              : 1.5 * _kIconScale,
           iconRotate: ["get", "bearing"],
           iconRotationAlignment: "map",
           iconAllowOverlap: true,
+          // Keep the puck OUT of the collision index. During guided navigation
+          // its source is re-pushed many times a second (the glide in
+          // _animateMarkerToPosition); if the puck is a collision obstacle,
+          // every one of those pushes forces MapLibre to re-run symbol
+          // placement for every nearby venue marker/label — the "location
+          // update makes the whole map lag/jitter" symptom. With
+          // ignore-placement it moves freely and perturbs nothing.
+          iconIgnorePlacement: true,
+          textAllowOverlap: true,
+          textIgnorePlacement: true,
         )),
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _sectionMarkerLayerId),
@@ -4137,28 +5597,120 @@ class MaplibreMapProvider extends BaseMapProvider {
         _layerProps(_selectedMarkerLayerId, (op) => SymbolLayerProperties(
           visibility: _visibility(_selectedMarkerLayerId,
               internalVisible: _anyMarkerGroupVisible),
-          symbolSortKey: ["+", 8000, _kSortKeyExpression],
+          // Placed first in MapLibre's single global collision pass (lowest
+          // sort key) so the selected marker's label wins against every
+          // neighbour. Paired with textIgnorePlacement:false below, a
+          // neighbouring label that would overlap the selected label yields
+          // and hides instead of drawing through it.
+          symbolSortKey: ["+", -100000, _kSortKeyExpression],
           iconImage: [
             "case",
+            // Text-only marker (a selected room/polygon label): no icon image.
+            ["!", ["to-boolean", ["get", "icon"]]],
+            "",
             ["to-boolean", ["get", "hasSelectedIcon"]],
             ["concat", ["get", "icon"], "-selected"],
             ["get", "icon"],
           ],
-          // Both stops scale together so the destination pin keeps the shape
-          // of its ramp at every zoom.
+          // Flat (no zoom ramp): the selected marker should read the same size
+          // at every zoom, so the size ONLY comes from the per-feature
+          // `iconScaleFactor` (1.0 normally, _kSelectedMarkerRestScale while
+          // selected, or the tap-animation curve when a style is set). A
+          // per-type base keeps a selected animal photo / POI at its full
+          // on-map size and a plain landmark icon just above its 0.8 resting
+          // size, before that multiplier is applied.
           iconSize: [
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            13,  0.2 * _kIconScale,
-            18,  1.5 * _kIconScale,
+            "*",
+            [
+              "case",
+              ["to-boolean", ["get", "customRendering"]],
+              1.0 * _kAnimalWebIconScale,
+              0.9 * _kIconScale,
+            ],
+            ["get", "iconScaleFactor"],
           ],
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
+          iconRotate: ["get", "iconShake"],
+          iconRotationAlignment: "viewport",
+          // Custom-rendering markers (animal photos, museum POIs) bake their
+          // name straight into the icon image — see _customRenderingLayerProps,
+          // which has no textField. Drawing ["get","title"] here too gave the
+          // selected animal marker a second, raw label that the unselected
+          // marker never shows (e.g. the Sangai deer's parenthetical species
+          // name wrapping into stray "(" / ")" lines). Suppress the duplicate.
+          textField: [
+            "case",
+            ["to-boolean", ["get", "customRendering"]],
+            "",
+            ["get", "title"],
+          ],
+          textSize: ["*", 14, 1.3], // keep this number equal to peakLabelScale above
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          // With an icon the label sits below it; a text-only marker keeps the
+          // centred, unoffset placement its resting (Layer 1) version uses so
+          // the label doesn't jump position on selection.
+          textAnchor: ["case", ["to-boolean", ["get", "icon"]], "top", "center"],
+          textOffset: [
+            "case",
+            ["to-boolean", ["get", "icon"]],
+            ["literal", [0, 1.2]],
+            ["literal", [0, 0]],
+          ],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+          // Both the (enlarged) selected icon and its label are added to the
+          // collision index, and this layer is placed first (lowest sort key
+          // above), so a neighbouring marker's icon or label that would overlap
+          // the selected pin gives way and hides instead of drawing across it.
+          // The selected marker itself is still always shown via
+          // icon/textAllowOverlap.
+          iconIgnorePlacement: false,
+          textIgnorePlacement: false,
           iconOpacity: op(null),
         )),
-        filter: ["to-boolean", ["get", "isSelected"]],
+        filter: [
+          "all",
+          ["to-boolean", ["get", "isSelected"]],
+          ["!", ["to-boolean", ["get", "isAnimating"]]],
+          // Render the selected marker if it has an icon OR just a label — a
+          // room/polygon whose marker is text-only (shown as the green
+          // collision dot at rest) still gets its label enlarged on tap.
+          ["any", ["to-boolean", ["get", "icon"]], ["to-boolean", ["get", "title"]]],
+        ],
         enableInteraction: true,
+        belowLayerId: null,
+      );
+
+      // Layer 11: Animated marker — a separate, tiny source that only ever
+      // holds the single marker currently being tap-animated. Updating this
+      // every tick is cheap; updating the whole clusterSource every tick is not.
+      await controller.addGeoJsonSource(_animatedMarkerSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+      await _addSymbolLayerSafe(controller,
+        _animatedMarkerSourceId,
+        _animatedMarkerLayerId,
+        SymbolLayerProperties(
+          iconImage: ["get", "icon"],
+          iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
+          iconRotate: ["get", "iconShake"],
+          iconRotationAlignment: "viewport",
+          iconAnchor: "center",
+          textField: ["get", "title"],
+          textSize: ["*", 14, ["get", "labelScale"]],
+          textColor: "#000000",
+          textHaloColor: "#f8f9fa",
+          textHaloWidth: 1.5,
+          textAnchor: "top",
+          textOffset: ["literal", [0, 1.2]],
+          iconAllowOverlap: true,
+          textAllowOverlap: true,
+          iconIgnorePlacement: true,
+          textIgnorePlacement: true,
+        ),
+        enableInteraction: false,
         belowLayerId: null,
       );
 
@@ -4169,6 +5721,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         final symbols = [..._symbols];
         setGeoJsonSource(controller, symbols, _clusterSourceId);
       }
+
+      // The marker layers are up now, so any fade recompute that was skipped
+      // by the guard in _refreshPatchFadeIfStale can safely run. No-ops when
+      // the polygons have not landed yet — that push calls back in itself.
+      await _refreshPatchFadeIfStale(controller);
     } catch (e, stack) {
       print('Error enabling marker layers: $e');
       print('Stack trace: $stack');
@@ -4632,178 +6189,83 @@ class MaplibreMapProvider extends BaseMapProvider {
           ]
         : 1.0;
 
-    // ── WEB ONLY ────────────────────────────────────────────────────────────
+    // ── BOTH PLATFORMS ──────────────────────────────────────────────────────
     //
-    // These calls push each layer's FULL property set instead of just the two
-    // opacity/sort keys. The part that actually matters is `symbol-sort-key`:
-    // `setLayerProperties` MERGES on both platforms (Android routes
-    // `layer#setProperties` into `Layer.setProperties`, which applies only the
-    // keys present; the web binding loops setPaintProperty/setLayoutProperty
-    // per key), so nothing was ever dropped — but a partial call that names
-    // `symbolSortKey` still OVERWRITES it, and the bare `_kSortKeyExpression`
-    // discards the per-layer base from [_collisionBase] (text 0, fixed 1000,
-    // icon 2000/3000, customRendering 4000).
+    // Pushes each layer's FULL property set rather than the two opacity/sort
+    // keys. The load-bearing line is `symbol-sort-key`: a partial call that
+    // names it OVERWRITES it, and the bare `_kSortKeyExpression` discards the
+    // per-layer base from [_collisionBase] (text 0, fixed 1000, icon 2000/3000,
+    // customRendering 1500).
     //
-    // That base is the whole marker→dot cascade: a feature's dot sorts at
-    // `collisionBase + 0.6`, i.e. immediately after its own full marker, so the
-    // full marker wins and suppresses its own dot. Flatten every full marker to
-    // ~0 and they instead all place first as one undifferentiated block, knock
-    // each other out under `iconAllowOverlap: false`, and each loser's dot then
-    // places into the gap. For an animal that dot is the paw — which is the
-    // "paw at every zoom" defect this fixes on web.
+    // That base is the whole marker→dot cascade. A feature's dot sorts at
+    // `collisionBase + 0.6` — immediately behind ITS OWN full marker — so the
+    // marker places first, wins, and suppresses its own dot. Flatten every full
+    // marker to ~0 and that pairing is gone: markers all tie while dots keep
+    // their per-feature bases, so a dot is no longer suppressed by the marker it
+    // belongs to and lingers beside it as you zoom in.
     //
-    // NOT applied on native. Restoring the bases re-sorts customRendering to
-    // 4000, i.e. *after* text/fixed/icon markers, so the large labelled animal
-    // composites start losing collisions to them as you zoom in and drop back
-    // to paws. Mobile shipped for a long time with the flattened sort key and
-    // that is the accepted look there, so native keeps the original partial
-    // calls verbatim. Re-unify only with a deliberate mobile design pass.
-    if (kIsWeb) {
-      await controller.setLayerProperties(
-        _normalTextMarkerLayerId,
-        _layerProps(
-            _normalTextMarkerLayerId,
-            (op) => _normalTextLayerProps(op(opacityExpression),
-                visibility: _visibility(_normalTextMarkerLayerId))),
-      );
-
-      await controller.setLayerProperties(
-        "$_normalIconMarkerLayerId-withSectionId",
-        _layerProps(
-            "$_normalIconMarkerLayerId-withSectionId",
-            (op) => _normalIconLayerProps(
-                sortBase: 3000,
-                opacity: op(opacityExpression),
-                visibility:
-                    _visibility("$_normalIconMarkerLayerId-withSectionId"))),
-      );
-
-      await controller.setLayerProperties(
-        "$_normalIconMarkerLayerId-withoutSectionId",
-        _layerProps(
-            "$_normalIconMarkerLayerId-withoutSectionId",
-            (op) => _normalIconLayerProps(
-                sortBase: 2000,
-                opacity: op(opacityExpression),
-                visibility: _visibility(
-                    "$_normalIconMarkerLayerId-withoutSectionId"))),
-      );
-
-      await controller.setLayerProperties(
-        _customRenderingMarkerLayerId,
-        _layerProps(
-            _customRenderingMarkerLayerId,
-            (op) => _customRenderingLayerProps(op(opacityExpression),
-                visibility: _visibility(_customRenderingMarkerLayerId))),
-      );
-
-      // icon-opacity keeps the layer's own creation ramp: the partial call this
-      // stands in for only ever retuned text-opacity for the fixed markers.
-      // Both are wrapped, so a host override collapses them to the same value.
-      await controller.setLayerProperties(
-        _fixedMarkerLayerId,
-        _layerProps(
-            _fixedMarkerLayerId,
-            (op) => _fixedMarkerLayerProps(
-                  iconOpacity: op(_kDefaultMarkerOpacity),
-                  textOpacity: op(opacityExpression),
-                  visibility: _visibility(_fixedMarkerLayerId,
-                      internalVisible: !_config.immersive),
-                )),
-      );
-      return;
-    }
-
-    // Native: unchanged from before the web work — partial sets that retune the
-    // fade ramp and flatten symbol-sort-key. Deliberately kept as-is; the only
-    // change here is that each opacity value passes through the layer's opacity
-    // resolver, so a host override substitutes for it.
+    // Zoo fix (2026-09-11): customRendering used to re-sort to 4000, i.e. after
+    // every other layer including the plain amenity icons, so animal photo
+    // composites routinely lost collisions and fell back to paws — even
+    // against unrelated icons nowhere near as important as the photo itself.
+    // [_collisionBase] now gives customRendering its own base (1500), ahead of
+    // the icon layers, so it only loses to text/fixed wayfinding furniture.
     //
-    // Each layer also re-registers its full property set carrying THIS branch's
-    // flattened sort key rather than the creation-time per-layer base, so that
-    // if a policy is later applied the state it regenerates is the one native
-    // actually wants. (Registering is not pushing: a host that never uses the
-    // layer API triggers no extra write, and native behaviour is unchanged.)
-    final textOp = _opFor(_normalTextMarkerLayerId);
-    _registerLayerProps(
-        _normalTextMarkerLayerId,
-        (op) => _normalTextLayerProps(op(opacityExpression),
-            visibility: _visibility(_normalTextMarkerLayerId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
+    // Was web-only; native ran the partial branch below, as ea627c6 does. So
+    // this is the one place the reference build is NOT the behaviour we want —
+    // its flattened key is why the collision dots never clear. Restoring the
+    // bases on native is a deliberate divergence from ea627c6.
+    await controller.setLayerProperties(
       _normalTextMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        textOpacity: textOp(opacityExpression),
-      ),
+      _layerProps(
+          _normalTextMarkerLayerId,
+          (op) => _normalTextLayerProps(op(opacityExpression),
+              visibility: _visibility(_normalTextMarkerLayerId))),
     );
 
-    final withSecId = "$_normalIconMarkerLayerId-withSectionId";
-    final withSecOp = _opFor(withSecId);
-    _registerLayerProps(
-        withSecId,
-        (op) => _normalIconLayerProps(
-            sortBase: 3000,
-            opacity: op(opacityExpression),
-            visibility: _visibility(withSecId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
-      withSecId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: withSecOp(opacityExpression),
-        textOpacity: withSecOp(opacityExpression),
-      ),
+    await controller.setLayerProperties(
+      "$_normalIconMarkerLayerId-withSectionId",
+      _layerProps(
+          "$_normalIconMarkerLayerId-withSectionId",
+          (op) => _normalIconLayerProps(
+              sortBase: 3000,
+              opacity: op(opacityExpression),
+              visibility:
+                  _visibility("$_normalIconMarkerLayerId-withSectionId"))),
     );
 
-    final withoutSecId = "$_normalIconMarkerLayerId-withoutSectionId";
-    final withoutSecOp = _opFor(withoutSecId);
-    _registerLayerProps(
-        withoutSecId,
-        (op) => _normalIconLayerProps(
-            sortBase: 2000,
-            opacity: op(opacityExpression),
-            visibility: _visibility(withoutSecId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
-      withoutSecId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: withoutSecOp(opacityExpression),
-        textOpacity: withoutSecOp(opacityExpression),
-      ),
+    await controller.setLayerProperties(
+      "$_normalIconMarkerLayerId-withoutSectionId",
+      _layerProps(
+          "$_normalIconMarkerLayerId-withoutSectionId",
+          (op) => _normalIconLayerProps(
+              sortBase: 2000,
+              opacity: op(opacityExpression),
+              visibility: _visibility(
+                  "$_normalIconMarkerLayerId-withoutSectionId"))),
     );
 
-    final customOp = _opFor(_customRenderingMarkerLayerId);
-    _registerLayerProps(
-        _customRenderingMarkerLayerId,
-        (op) => _customRenderingLayerProps(op(opacityExpression),
-            visibility: _visibility(_customRenderingMarkerLayerId),
-            sortKey: _kSortKeyExpression));
-    await _pushLayerProperties(controller,
+    await controller.setLayerProperties(
       _customRenderingMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        iconOpacity: customOp(opacityExpression),
-      ),
+      _layerProps(
+          _customRenderingMarkerLayerId,
+          (op) => _customRenderingLayerProps(op(opacityExpression),
+              visibility: _visibility(_customRenderingMarkerLayerId))),
     );
 
-    final fixedOp = _opFor(_fixedMarkerLayerId);
-    _registerLayerProps(
-        _fixedMarkerLayerId,
-        (op) => _fixedMarkerLayerProps(
-              iconOpacity: op(_kDefaultMarkerOpacity),
-              textOpacity: op(opacityExpression),
-              visibility: _visibility(_fixedMarkerLayerId,
-                  internalVisible: !_config.immersive),
-              sortKey: _kSortKeyExpression,
-            ));
-    await _pushLayerProperties(controller,
+    // icon-opacity keeps the layer's own creation ramp: the partial call this
+    // stands in for only ever retuned text-opacity for the fixed markers.
+    // Both are wrapped, so a host override collapses them to the same value.
+    await controller.setLayerProperties(
       _fixedMarkerLayerId,
-      SymbolLayerProperties(
-        symbolSortKey: _kSortKeyExpression,
-        textOpacity: fixedOp(opacityExpression),
-      ),
+      _layerProps(
+          _fixedMarkerLayerId,
+          (op) => _fixedMarkerLayerProps(
+                iconOpacity: op(_kDefaultMarkerOpacity),
+                textOpacity: op(opacityExpression),
+                visibility: _visibility(_fixedMarkerLayerId,
+                    internalVisible: !_config.immersive),
+              )),
     );
   }
 
@@ -4855,6 +6317,17 @@ class MaplibreMapProvider extends BaseMapProvider {
         'type': 'FeatureCollection',
         'features': [],
       });
+
+      await controller.addGeoJsonSource(_pathCornerSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      await controller.addGeoJsonSource(_pathShineSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+      await _loadShineImage(controller);
 
       // Normal polylines (NOT path) — bottom-most
       await controller.addLineLayer(
@@ -4909,6 +6382,105 @@ class MaplibreMapProvider extends BaseMapProvider {
         ],
         enableInteraction: true,
         belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
+      );
+
+      // Repetitive small arrows
+      await _addSymbolLayerSafe(controller,
+        _polylineSourceId,
+        _pathArrowLayerId,
+        const SymbolLayerProperties(
+          iconImage: _kPathArrowImageId,
+          symbolPlacement: 'line',
+          symbolSpacing: [
+            "interpolate", ["linear"], ["zoom"],
+            0, 2.0,   // Ultra-dense spacing for world-level view
+            10, 10.0,  // Very dense for city-level view
+            14, 40.0,
+            19, 100.0
+          ],
+          iconSize: [
+            "interpolate", ["linear"], ["zoom"],
+            0, 0.4,   // Scale down at extreme distance but keep visible
+            10, 0.6,
+            18, 0.8
+          ],
+          iconRotationAlignment: 'map',
+          iconAllowOverlap: true,
+          iconIgnorePlacement: true,
+          iconPadding: 0,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"],
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+        ],
+      );
+
+      // Big corner arrows
+      await _addSymbolLayerSafe(controller,
+        _pathCornerSourceId,
+        _pathBigArrowLayerId,
+        const SymbolLayerProperties(
+          symbolSortKey: -999999,
+          iconImage: ["coalesce", ["get", "icon"], _kPathBigArrowImageId],
+          iconSize: 1.2,
+          iconRotationAlignment: 'map',
+          iconRotate: ["get", "bearing"],
+          iconAnchor: 'center', // Pivot at the bend
+          iconAllowOverlap: true,
+          iconIgnorePlacement: false,
+          iconPadding: 0,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"],
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+          // Set per corner by _refreshCornerVisibility: false when the bend's
+          // path segments are too short on screen for the fixed-size arrow, so
+          // it doesn't float free of the route. (The turn bubble has no such
+          // filter and still shows.)
+          ["to-boolean", ["get", "arrowFits"]],
+        ],
+        // Only once the route is clearly zoomed in — below this the fixed-size
+        // arrow dwarfs the thinned path and stops reading as "on" it.
+        minzoom: 20.0,
+      );
+
+      // Moving shine that travels along the active path.
+      await _addSymbolLayerSafe(controller,
+        _pathShineSourceId,
+        _pathShineLayerId,
+        const SymbolLayerProperties(
+          iconImage: _kShineImageId,
+          iconSize: 2.5,
+          iconAllowOverlap: true,
+          iconIgnorePlacement: true,
+        ),
+      );
+
+      // Turn bubble (floating callout with the turn label), anchored to the
+      // corner point. minzoom hides it when zoomed out too far.
+      await _addSymbolLayerSafe(controller,
+        _pathCornerSourceId,
+        _turnBubbleLayerId,
+        const SymbolLayerProperties(
+          symbolSortKey: ["*", ["get", "turnSharpness"], -1],
+          iconImage: ["get", "turnBubbleIcon"],
+          iconAnchor: "bottom",
+          iconOffset: [0, -24],
+          iconAllowOverlap: false,
+          iconIgnorePlacement: false,
+          iconPadding: 8,
+        ),
+        filter: [
+          "all",
+          ["to-boolean", ["get", "path"]],
+          ["==", ["get", "style"], "solid"],
+          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+        ],
+        minzoom: 19.0,
       );
 
       // Dashed path lines
@@ -5168,12 +6740,51 @@ class MaplibreMapProvider extends BaseMapProvider {
         _updatePolygonSource(controller, selectPolygonId: polygon.id);
       }
       if (marker != null) {
+        // Clear any leftover frozen animation from the previous selection
+        // BEFORE handling this new one. Needed because the animated layer
+        // now freezes in place instead of resetting itself — if this new
+        // marker has no icon, animateMarkerSelection never runs to
+        // overwrite it, so without this it would just sit there forever.
+        if (_animatingMarkerId != null && _animatingMarkerId != marker.id) {
+          _iconAnimationTimer?.cancel();
+          _markerIconScale.remove(_animatingMarkerId);
+          _markerIconShakeDeg.remove(_animatingMarkerId);
+          _animatingMarkerId = null;
+          await controller.setGeoJsonSource(_animatedMarkerSourceId, {
+            'type': 'FeatureCollection',
+            'features': [],
+          });
+        }
+
+        // Make the tapped marker sit a little larger than its resting size.
+        // The animated selection styles drive `iconScaleFactor` themselves, so
+        // only apply the static bump when no animation style is set.
+        if (markerSelectionAnimationStyle == MarkerSelectionAnimationStyle.none) {
+          if (_restScaledMarkerId != null && _restScaledMarkerId != marker.id) {
+            _markerIconScale.remove(_restScaledMarkerId);
+          }
+          _markerIconScale[marker.id] = _kSelectedMarkerRestScale;
+          _restScaledMarkerId = marker.id;
+        }
+
+        // Selection push: one rebuild to flip `isSelected`, no settle
+        // re-pushes (see setGeoJsonSource) — every marker is already drawn, so
+        // the extra 500ms/2s/5s full rebuilds only jank the map and make the
+        // tap feel unresponsive.
         setGeoJsonSource(
           controller,
           _symbols,
           _clusterSourceId,
           selectedMarkerId: marker.id,
+          scheduleSettleRepushes: false,
         );
+      }
+
+      if (marker != null &&
+          marker.assetPath != null &&
+          markerSelectionAnimationStyle != MarkerSelectionAnimationStyle.none) {
+        animateMarkerSelection(controller, marker.id,
+            style: markerSelectionAnimationStyle);
       }
 
       // 2. Notify listeners before the camera moves so panels open on tap
@@ -5249,6 +6860,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           await Future.delayed(const Duration(milliseconds: 450));
           // Phase 2: slow, eased pull-back that fits the whole enclosure.
           await fitCameraToBounds(controller, bounds!);
+        } else if (marker != null && !zoomToMarkerOnSelect) {
+          // Plain marker tap: select + enlarge in place, no camera move.
         } else if (bounds != null) {
           await fitCameraToBounds(controller, bounds);
         } else if (center != null && targetZoom != null) {
@@ -5289,11 +6902,32 @@ class MaplibreMapProvider extends BaseMapProvider {
     try {
       await _updatePolygonSource(controller, selectPolygonId: null);
 
+      // Undo whatever the animation left behind before the normal layers
+      // take back over showing this marker at rest.
+      _iconAnimationTimer?.cancel();
+      if (_animatingMarkerId != null) {
+        _markerIconScale.remove(_animatingMarkerId);
+        _markerIconShakeDeg.remove(_animatingMarkerId);
+        _animatingMarkerId = null;
+      }
+      // Drop the static selected-size bump so the marker returns to rest.
+      if (_restScaledMarkerId != null) {
+        _markerIconScale.remove(_restScaledMarkerId);
+        _restScaledMarkerId = null;
+      }
+      await controller.setGeoJsonSource(_animatedMarkerSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+
+      // Deselection push: same as selection — one rebuild to clear
+      // `isSelected`, no settle re-pushes (see setGeoJsonSource).
       await setGeoJsonSource(
         controller,
         _symbols,
         _clusterSourceId,
         selectedMarkerId: null,
+        scheduleSettleRepushes: false,
       );
 
       selectedLocation = null;

@@ -18,6 +18,16 @@ import '../utils/geoJson/predefined_markers.dart';
 class AnnotationController{
   final UnifiedMapController _unifiedMapController;
   late VenueData _venueData;
+  // `_venueData` is `late` and assigned only once `_setVenue`'s API fetches
+  // resolve. `renderVenue` is also called directly from
+  // `UnifiedMapController.onMapCreated` (a platform-view lifecycle callback,
+  // not gated on the fetch), so a map view created/recreated before that
+  // fetch finishes calls `renderVenue` while `_venueData` is still
+  // unassigned — a `LateInitializationError` that aborts the render with no
+  // recovery until something else calls `renderVenue` again. Tracked
+  // separately because Dart gives no way to test a `late` field for
+  // "assigned yet" without risking the same throw.
+  bool _venueDataReady = false;
 
   String? _focusedBuilding;
   List<int>? _focusedBuildingAvailableFloors;
@@ -36,6 +46,13 @@ class AnnotationController{
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
   List<MapLocation> _pathPoints = [];
   String? _greyPathPolylineId;
+
+  /// Shape of the grey "traversed" overlay as last pushed to the map — vertex
+  /// count and tail point. [_updateGreyTraversedPath] compares against these to
+  /// skip a redraw (a full polyline-source rebuild) when the overlay hasn't
+  /// meaningfully changed since the previous location fix.
+  int _lastGreyPointCount = 0;
+  MapLocation? _lastGreyTail;
 
   /// The floor most recently drawn by [annotatePath]. Reused by
   /// [recolorPathUpToStop] so a recolor redraws the same floor without the
@@ -77,21 +94,54 @@ class AnnotationController{
         'await buildingData', () => buildingDataFuture);
     final apiData = await PerfTrace.timeAsync(
         'await venue geojson', () => apiDataFuture);
-    final furnitureData = await PerfTrace.timeAsync(
-        'await furniture', () => furnitureDataFuture);
 
     if (apiData == null || apiData.isEmpty) {
       throw Exception('No GeoJSON data received from API');
     }
     print("apiD Data recieved at ${DateTime.now()}");
+    // Furniture (the extruded 3D objects) is decorative and its endpoint is
+    // typically the slowest of the three fetches. It used to be awaited here,
+    // before VenueData was even built, so a slow furniture response held the
+    // ENTIRE venue — base map, polygons, everything — off screen. Build and
+    // render without it, then fold the models in and render just the furniture
+    // once they arrive.
     _venueData = PerfTrace.time('VenueData parse',
-        () => VenueData(venueName, apiData, buildingData, furnitureData: furnitureData));
+        () => VenueData(venueName, apiData, buildingData));
+    _venueDataReady = true;
     await PerfTrace.timeAsync('renderVenue', () => renderVenue());
     if (PerfTrace.enabled) print(PerfTrace.report());
+
+    furnitureDataFuture.then((furnitureData) async {
+      if (furnitureData.isEmpty) return;
+      _venueData.furnitureData = furnitureData;
+      await _renderFurnitureForCurrentFloors();
+    }).catchError((e) {
+      print('furniture load failed, skipping 3D objects: $e');
+    });
+  }
+
+  /// Re-derives each building's currently-selected floor and pushes only its
+  /// furniture. Called once the deferred furniture-model fetch resolves, since
+  /// the first render drew everything else without waiting for it.
+  Future<void> _renderFurnitureForCurrentFloors() async {
+    final features = <GeoJsonFeature>[];
+    _venueData.availableFloors.forEach((buildingId, _) {
+      final floor = _venueData.selectedFloor[buildingId] ?? 0;
+      features.addAll(
+          _venueData.setBuildingFloor(buildingId: buildingId, floor: floor));
+    });
+    if (features.isEmpty) return;
+    await _unifiedMapController
+        .renderFurnitureFrom(GeoJsonFeatureCollection(features: features));
   }
 
   Future<void> renderVenue() async {
     if(!_unifiedMapController.controllerIsInitialized) return;
+    // See _venueDataReady's doc comment: onMapCreated can call this before
+    // _setVenue's fetch has assigned _venueData. _setVenue calls renderVenue
+    // itself right after the assignment, so skipping here just waits for
+    // that call instead of losing the render.
+    if(!_venueDataReady) return;
     try{
       List<GeoJsonFeature> venueRenderData = [];
       _venueData.availableFloors.forEach((buildingId,floors){
@@ -100,7 +150,10 @@ class AnnotationController{
       });
       double orientation = _venueData.getFloorOrientation(0);
       // await _unifiedMapController.animateCamera(_venueData.venueLatLng, zoom: 15);
-      await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: venueRenderData));
+      // Initial render: stream the marker bake in after the geometry paints.
+      await _unifiedMapController.addGeoJsonFeatures(
+          GeoJsonFeatureCollection(features: venueRenderData),
+          deferMarkers: true);
       await _unifiedMapController.fitBoundsToGeoJson();
       // List<MapLocation> circlePoints = RenderingUtilities.generateCirclePoints(center: _venueData.venueLatLng, radiusInMeters: 5000);
       // _unifiedMapController.addPolygon(GeoJsonPolygon(id: "venue patch", points: circlePoints, properties: {"type":"Boundary"}));
@@ -127,11 +180,19 @@ class AnnotationController{
     _focusBuildingSelectedFloor = floor;
     var floorData = _venueData.setBuildingFloor(buildingId: buildingID, floor: floor);
     if(floorData.isNotEmpty){
-      _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
-      _unifiedMapController.removePolyline(buildingID);
-      _unifiedMapController.removeMarker(buildingID);
-      _unifiedMapController.removeCircle(buildingID);
-      _unifiedMapController.removeFurniture(buildingID);
+      // Await the removals before adding the new floor. Fire-and-forget here
+      // let a stale removal land *after* the new floor's markers/furniture were
+      // added — and since removeMarker/removeFurniture match by buildingID
+      // (which the new floor shares), that either wiped the just-added content
+      // or, if it lost the race entirely, left the previous floor's markers and
+      // furniture on the map stacked under the new ones.
+      await Future.wait([
+        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
+        _unifiedMapController.removePolyline(buildingID),
+        _unifiedMapController.removeMarker(buildingID),
+        _unifiedMapController.removeCircle(buildingID),
+        _unifiedMapController.removeFurniture(buildingID),
+      ]);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
     }
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
@@ -176,11 +237,17 @@ class AnnotationController{
       // keeps the persistent campus footprint so the campus is never cleared.
       // The floor-fallback outline below is *not* a 'boundary' id, so it is
       // removed here too and never stacks across switches.
-      _unifiedMapController.removePolygon(buildingID, exclude: 'boundary');
-      _unifiedMapController.removePolyline(buildingID);
-      _unifiedMapController.removeMarker(buildingID);
-      _unifiedMapController.removeCircle(buildingID);
-      _unifiedMapController.removeFurniture(buildingID);
+      //
+      // Awaited (see changeBuildingFloor): an unawaited removal can land after
+      // the new floor was added and, matching by buildingID, wipe the new
+      // content or leave the old floor stacked underneath.
+      await Future.wait([
+        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
+        _unifiedMapController.removePolyline(buildingID),
+        _unifiedMapController.removeMarker(buildingID),
+        _unifiedMapController.removeCircle(buildingID),
+        _unifiedMapController.removeFurniture(buildingID),
+      ]);
 
       final featuresToRender =
           floorData.isNotEmpty ? floorData : _floorFallbackBoundary(buildingID);
@@ -274,13 +341,16 @@ class AnnotationController{
 
   bool clearPath(){
     _unifiedMapController.removePolyline('path');
-    _unifiedMapController.removePolyline('greyTraversed_');
+    _unifiedMapController.removePolyline('greyTraversed');
     _unifiedMapController.removeMarker('path');
     _path = null;
     _multiPath = null;
     _pathPoints.clear();
     _lastProjectionIndex = 0;
     _projectionHistory.clear();
+    _greyPathPolylineId = null;
+    _lastGreyPointCount = 0;
+    _lastGreyTail = null;
     return true;
   }
 
@@ -358,7 +428,10 @@ class AnnotationController{
     if (resetProjection) {
       _lastProjectionIndex = 0;
       _projectionHistory.clear();
-      _unifiedMapController.removePolyline('greyTraversed_');
+      _unifiedMapController.removePolyline('greyTraversed');
+      _greyPathPolylineId = null;
+      _lastGreyPointCount = 0;
+      _lastGreyTail = null;
     }
     _unifiedMapController.removePolyline("path");
 
@@ -859,12 +932,6 @@ class AnnotationController{
 
     _lastProjectionIndex = projected.segmentIndex;
 
-    // Remove the previous grey overlay (if any).
-    if (_greyPathPolylineId != null) {
-      await _unifiedMapController.removePolyline(_greyPathPolylineId!);
-      _greyPathPolylineId = null;
-    }
-
     // Stitch the grey path through every recorded projection, following the
     // path geometry between them. The grey "traversed" line always begins at the
     // real route start (_pathPoints.first): seed it with the vertices from the
@@ -901,8 +968,29 @@ class AnnotationController{
 
     if (greyPoints.length < 2) return;
 
-    _greyPathPolylineId =
-    'greyTraversed_${DateTime.now().microsecondsSinceEpoch}';
+    // This runs on every location fix during navigation, and each redraw is a
+    // full polyline-source rebuild + relayout on the native map — a big part of
+    // the navigation-mode jank. The grey line just trails behind the puck as a
+    // cosmetic "already walked" marker, so it doesn't need sub-metre accuracy:
+    // skip the redraw unless the shape actually changed (a different vertex
+    // count means the user turned onto a new segment) or its tail advanced
+    // more than 2 m. That drops a walking user from ~2 rebuilds/s to ~1 every
+    // 1.5 s with no visible difference in the overlay.
+    const double greyRedrawMinAdvanceMeters = 2.0;
+    final tail = greyPoints.last;
+    if (_greyPathPolylineId != null &&
+        greyPoints.length == _lastGreyPointCount &&
+        _lastGreyTail != null &&
+        MapCalculations.distanceInMeters(tail, _lastGreyTail!) <
+            greyRedrawMinAdvanceMeters) {
+      return;
+    }
+    _lastGreyPointCount = greyPoints.length;
+    _lastGreyTail = tail;
+
+    // Stable id: addPolyline upserts by id, so this replaces the previous
+    // overlay in a single source rebuild rather than a remove + add (two).
+    _greyPathPolylineId = 'greyTraversed';
 
     final greyPolyline = GeoJsonPolyline(
       id: _greyPathPolylineId!,
