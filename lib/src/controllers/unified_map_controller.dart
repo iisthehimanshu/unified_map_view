@@ -124,6 +124,25 @@ class UnifiedMapController extends ChangeNotifier {
 
   bool get controllerIsInitialized => (_currentMapController != null);
 
+  /// Loads [venueName] into this map, in place.
+  ///
+  /// For a controller created without a venue (an empty `venueName`), which
+  /// has shown only markers until now — for example every venue's pin while
+  /// the user's own venue is still being worked out. The same map instance is
+  /// kept, so the camera flies from wherever it is into the venue instead of
+  /// the screen being replaced by a new map. Clears the markers first, since
+  /// they belong to the venue-less view.
+  Future<void> loadVenue(String venueName) async {
+    await clearMarkers();
+    _annotationController = AnnotationController(this, venueName: venueName);
+  }
+
+  /// Completes once the platform map exists and calls such as [addMarkers]
+  /// reach it. Markers added before the style has loaded are kept and drawn
+  /// when it does.
+  Future<void> get mapCreated => _mapCreated.future;
+  final Completer<void> _mapCreated = Completer<void>();
+
   /// Register a custom map provider
   /// This allows adding new map providers without modifying the package
   void registerCustomProvider(MapProvider provider, BaseMapProvider implementation) {
@@ -162,6 +181,7 @@ class UnifiedMapController extends ChangeNotifier {
   /// Called when map is created
   void onMapCreated(dynamic controller) {
     _currentMapController = controller;
+    if (!_mapCreated.isCompleted) _mapCreated.complete();
     _applyInitialRenderModes();
     _annotationController.renderVenue();
     // fitBoundsToGeoJson();

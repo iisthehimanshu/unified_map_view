@@ -78,6 +78,10 @@ class AnnotationController{
 
 
   AnnotationController(this._unifiedMapController, {required String venueName}){
+    // An empty name is a map with no venue — an overview that only carries
+    // markers, shown before a venue has been chosen. Fetching for it would
+    // only fail: the venue APIs have nothing to return for "".
+    if (venueName.trim().isEmpty) return;
     _setVenue(venueName);
   }
 
