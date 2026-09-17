@@ -1192,7 +1192,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     // Rebuild polygon source so height/base_height are removed in 2D.
     await _updatePolygonSource(
       controller,
-      selectPolygonId: selectedLocation?.polygon?.id,
+      selectPolygonIds: _currentSelectionGroup,
     );
   }
 
@@ -2864,7 +2864,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Future<void> _updatePolygonSource(
       MapLibreMapController controller, {
-        String? selectPolygonId,
+        Set<String>? selectPolygonIds,
       }) async {
     if (!_isPolygonLayersEnabled) {
       return;
@@ -2941,7 +2941,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           'fillColorSecondary':
           '#${RenderingUtilities.colorToMapplsHex(_shade(fillColorSecondary))}',
           'fillOpacity': fillColor.a,
-          'isSelected': polygon.id == selectPolygonId,
+          'isSelected': selectPolygonIds?.contains(polygon.id) ?? false,
           'boundary': polygon.properties?['type'] == "Boundary",
           'section': polygon.properties?['type'] == "Section",
           'subsection': polygon.properties?['type'] == "Sub Section",
@@ -6592,6 +6592,63 @@ class MaplibreMapProvider extends BaseMapProvider {
     await selectLocation(controller, id);
   }
 
+  /// Every polygon drawn as part of the currently selected thing, or null when
+  /// nothing is selected. Recomputed rather than cached so it cannot drift from
+  /// [selectedLocation] across a style reload or a 2D/3D rebuild.
+  Set<String>? get _currentSelectionGroup {
+    final polygon = selectedLocation?.polygon;
+    return polygon == null ? null : _selectionGroupFor(polygon);
+  }
+
+  /// The composite ids to mark `isSelected` for a selection of [primary].
+  ///
+  /// A room is not one polygon: the venue draws its walls and beams as separate
+  /// features (`point-7ypw8j7` plus `point-7ypw8j7wall0..2`), and the feature
+  /// data links them explicitly — the room lists its walls in
+  /// `associatedPolygons` and each wall lists the room back.
+  ///
+  /// Walked as an undirected graph rather than one hop, so a tap on a wall
+  /// selects the whole room — room, its other walls and its beams — exactly as
+  /// a tap on the room does. Over this venue that yields 421 groups of at most
+  /// 6, and no group ever contains two rooms, so the walk cannot bleed from one
+  /// room into the next.
+  ///
+  /// The link is read from the data, deliberately not from the id spelling: the
+  /// `<roomId>wall<n>` naming is this venue's convention, and a prefix match
+  /// would silently group unrelated polygons on a venue that names things
+  /// differently. A polygon with no links selects alone, as before.
+  Set<String> _selectionGroupFor(GeoJsonPolygon primary) {
+    final byOwnId = <String, List<GeoJsonPolygon>>{};
+    final listedBy = <String, List<GeoJsonPolygon>>{};
+    for (final p in _polygons) {
+      final ownId = _extractPolygonIdFromTap(p.id);
+      if (ownId != null) (byOwnId[ownId] ??= <GeoJsonPolygon>[]).add(p);
+      for (final rel in p.associatedPolygonIds) {
+        (listedBy[rel] ??= <GeoJsonPolygon>[]).add(p);
+      }
+    }
+
+    // Visited by identity, not by id: the composite key is not guaranteed
+    // unique, and skipping a polygon that merely shares a key would drop a real
+    // member of the group.
+    final visited = <GeoJsonPolygon>{};
+    final ids = <String>{};
+    final queue = <GeoJsonPolygon>[primary];
+    while (queue.isNotEmpty) {
+      final p = queue.removeLast();
+      if (!visited.add(p)) continue;
+      ids.add(p.id);
+      for (final rel in p.associatedPolygonIds) {
+        queue.addAll(byOwnId[rel] ?? const <GeoJsonPolygon>[]);
+      }
+      final ownId = _extractPolygonIdFromTap(p.id);
+      if (ownId != null) {
+        queue.addAll(listedBy[ownId] ?? const <GeoJsonPolygon>[]);
+      }
+    }
+    return ids;
+  }
+
   /// Resolves the polygon a selection id refers to.
   ///
   /// Matches the polygon's OWN id component first, and that exactness is the
@@ -6762,7 +6819,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       // 1. Kick off visual updates immediately for tap feedback.
       // We don't await these to let the camera start ASAP.
       if (polygon != null) {
-        _updatePolygonSource(controller, selectPolygonId: polygon.id);
+        _updatePolygonSource(controller, selectPolygonIds: _selectionGroupFor(polygon));
       }
       if (marker != null) {
         // Clear any leftover frozen animation from the previous selection
@@ -6906,7 +6963,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       String selectPolygonId,
       bool isSelected,
       ) async {
-    _updatePolygonSource(controller, selectPolygonId: isSelected ? selectPolygonId : null);
+    _updatePolygonSource(controller,
+        selectPolygonIds: isSelected ? {selectPolygonId} : null);
   }
 
   @override
@@ -6925,7 +6983,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     try {
-      await _updatePolygonSource(controller, selectPolygonId: null);
+      await _updatePolygonSource(controller, selectPolygonIds: null);
 
       // Undo whatever the animation left behind before the normal layers
       // take back over showing this marker at rest.

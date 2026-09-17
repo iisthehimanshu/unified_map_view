@@ -31,12 +31,33 @@ class GeoJsonFeature {
   final GeoJsonGeometry geometry;
   final Map<String, dynamic>? properties;
 
+  /// Ids of the features this one is drawn together with — a room lists its
+  /// walls and beams, and each of those lists the room back.
+  ///
+  /// Sits at the TOP level of a polygon feature, not inside `properties`
+  /// (points carry it in both places), which is why it needs its own field
+  /// rather than a `properties` lookup.
+  final List<String> associatedPolygons;
+
   GeoJsonFeature({
     this.buildingId,
     this.id,
     required this.geometry,
     this.properties,
+    this.associatedPolygons = const [],
   });
+
+  /// Reads `associatedPolygons` from wherever this feature kind puts it.
+  static List<String> _readAssociatedPolygons(Map<String, dynamic> json) {
+    final raw = json['associatedPolygons'] ??
+        (json['properties'] as Map<String, dynamic>?)?['associatedPolygons'];
+    if (raw is! List) return const [];
+    return raw
+        .where((e) => e != null)
+        .map((e) => e.toString())
+        .where((e) => e.isNotEmpty)
+        .toList(growable: false);
+  }
 
   factory GeoJsonFeature.fromJson(Map<String, dynamic> json) {
     return GeoJsonFeature(
@@ -44,6 +65,7 @@ class GeoJsonFeature {
       id: json['id']?.toString(),
       geometry: GeoJsonGeometry.fromJson(json['geometry']),
       properties: json['properties'] as Map<String, dynamic>?,
+      associatedPolygons: _readAssociatedPolygons(json),
     );
   }
 }
@@ -130,10 +152,16 @@ class GeoJsonPolygon {
   final List<MapLocation> points;
   final Map<String, dynamic>? properties;
 
+  /// Feature ids (bare, not composite keys) of the polygons drawn as part of
+  /// the same thing — a room's walls and beams. Selecting one selects them all;
+  /// see `MaplibreMapProvider._selectionGroupFor`.
+  final List<String> associatedPolygonIds;
+
   GeoJsonPolygon({
     required this.id,
     required this.points,
     this.properties,
+    this.associatedPolygonIds = const [],
   });
 
   /// Create from GeoJSON Feature
@@ -154,6 +182,7 @@ class GeoJsonPolygon {
         longitude: coord[0],
       )).toList(),
       properties: feature.properties,
+      associatedPolygonIds: feature.associatedPolygons,
     );
   }
 }
