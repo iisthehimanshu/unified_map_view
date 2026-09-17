@@ -1284,7 +1284,19 @@ class UnifiedMarkerCreator {
     return createBentArrow(angle: 0, fillColor: fillColor, strokeColor: strokeColor, size: size * 2.0);
   }
 
-  Future<Uint8List> createDirectionArrow({Color color = Colors.white, double size = 32.0}) async {
+  /// Small direction hint repeated along a route: the classic road-marking
+  /// lane arrow — a straight rectangular shaft/tail with a triangular head
+  /// wider than the shaft, solid filled — not a chevron or a dart with a
+  /// concave back. Proportioned narrow relative to its length so it sits
+  /// inside the route line's own width instead of overflowing past its
+  /// edges — the route line this draws along is 8px wide (see `"width":
+  /// 8.0` on the main-line GeoJsonPolyline in annotation_controller.dart),
+  /// and this bakes at a fixed 32px canvas, so the vertical span here is
+  /// deliberately a small fraction of that.
+  Future<Uint8List> createDirectionArrow({
+    Color color = Colors.white,
+    double size = 32.0,
+  }) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
@@ -1293,12 +1305,24 @@ class UnifiedMarkerCreator {
       ..style = PaintingStyle.fill
       ..isAntiAlias = true;
 
-    final path = Path();
-    // Triangle pointing right
-    path.moveTo(size * 0.2, size * 0.2);
-    path.lineTo(size * 0.8, size * 0.5);
-    path.lineTo(size * 0.2, size * 0.8);
-    path.close();
+    const double shaftHalfWidth = 0.06; // fraction of size
+    const double headHalfWidth = 0.14;
+    final double shaftStart = size * 0.14;
+    final double shaftEnd = size * 0.58; // also the head's base x
+    final double headTipX = size * 0.88;
+    final double midY = size * 0.5;
+
+    // Straight shaft, then a triangular head flared wider than the shaft,
+    // pointing right.
+    final path = Path()
+      ..moveTo(shaftStart, midY - size * shaftHalfWidth)
+      ..lineTo(shaftEnd, midY - size * shaftHalfWidth)
+      ..lineTo(shaftEnd, midY - size * headHalfWidth)
+      ..lineTo(headTipX, midY)
+      ..lineTo(shaftEnd, midY + size * headHalfWidth)
+      ..lineTo(shaftEnd, midY + size * shaftHalfWidth)
+      ..lineTo(shaftStart, midY + size * shaftHalfWidth)
+      ..close();
 
     canvas.drawPath(path, paint);
 
