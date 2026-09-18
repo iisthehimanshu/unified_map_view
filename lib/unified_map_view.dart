@@ -67,6 +67,16 @@ class UnifiedMapViewPackage {
     return _initFuture ??= _initializeOnce(venueName);
   }
 
+  /// Makes every request this package sends use [apiKey] — the key the host
+  /// app authenticates with, e.g. the `apiKey` of a web link — instead of
+  /// the package's built-in key. Null or empty restores the built-in key.
+  /// Set it before [initialize] or any map controller is created: requests
+  /// read the key when they are built.
+  static void setApiKey(String? apiKey) {
+    AppConfig.hostApiKey =
+        (apiKey == null || apiKey.trim().isEmpty) ? null : apiKey.trim();
+  }
+
   static Set<String>? _allowedBuildingIds;
 
   /// The buildings the venue is restricted to, or null to render all of them.
