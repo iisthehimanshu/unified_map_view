@@ -69,9 +69,19 @@ class GlobalGeoJSONVenueAPI {
     // fix (e.g. corrected per-part colors on furniture/landmark models)
     // stayed invisible until the app was uninstalled and reinstalled,
     // which is the only path that starts with an empty cache.
+    //
+    // A failed fetch falls through to the cache rather than throwing past it.
+    // Being "online" is only a guess — on web it is any Wi-Fi or ethernet
+    // link, including one with no internet behind it — and when the request
+    // then fails, the cached venue is exactly what the app must render.
     if (await checkInternetConnectivity()) {
-      final fresh = await _fetchFromApi(venueName, service);
-      if (fresh != null) return fresh;
+      try {
+        final fresh = await _fetchFromApi(venueName, service);
+        if (fresh != null) return fresh;
+      } catch (e) {
+        print("GlobalGeoJSONVenueAPI: live fetch failed, using the cached "
+            "venue if there is one: $e");
+      }
     }
 
     if (service.containsID(venueName)) {
@@ -118,7 +128,10 @@ class GlobalGeoJSONVenueAPI {
       if (!kIsWeb) print("GlobalGeoJSONVenueAPI from API $body");
       return body;
     } else if (response.statusCode == 403) {
-      return _fetchFromApi(venueName, service);
+      // Rejected key. Retrying cannot fix that, and retrying with no delay or
+      // limit (as this used to) floods the server until the page is closed.
+      print("getGeoJSONData: api key rejected (403)");
+      return null;
     } else {
       print("getGeoJSONData failed: ${response.statusCode} ${response.body}");
       return null;
