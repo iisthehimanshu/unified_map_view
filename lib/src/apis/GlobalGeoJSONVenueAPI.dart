@@ -13,7 +13,44 @@ import '../services/GlobalGeoJSONStorageService.dart';
 
 class GlobalGeoJSONVenueAPI {
 
-  Future<Map<String, dynamic>?> getGeoJSONData(String venueName) async {
+  /// One load per venue per session, shared by every caller. `initialize`, each
+  /// map's annotation controller and the host (navigation_sdk builds its
+  /// per-building mapping elements from this response) all ask for the same
+  /// multi-MB venue; each call used to start its own live fetch.
+  static final Map<String, Future<Map<String, dynamic>?>> _loads = {};
+
+  /// Hands the package a venue response the host already has, so no request
+  /// is made for it. It is not written to the cache — the host owns that.
+  static void provide(String venueName, Map<String, dynamic> data) {
+    _loads[venueName] = Future.value(data);
+  }
+
+  /// Drops the shared load, so the next call fetches again. Null clears all.
+  static void invalidate([String? venueName]) {
+    if (venueName == null) {
+      _loads.clear();
+    } else {
+      _loads.remove(venueName);
+    }
+  }
+
+  Future<Map<String, dynamic>?> getGeoJSONData(String venueName) {
+    final existing = _loads[venueName];
+    if (existing != null) return existing;
+    final load = _load(venueName);
+    _loads[venueName] = load;
+    // A failed load must not be remembered — the next caller retries.
+    load.then((data) {
+      if (data == null && identical(_loads[venueName], load)) {
+        _loads.remove(venueName);
+      }
+    }, onError: (_) {
+      if (identical(_loads[venueName], load)) _loads.remove(venueName);
+    });
+    return load;
+  }
+
+  Future<Map<String, dynamic>?> _load(String venueName) async {
     final service = await GlobalGeoJSONVenueStorageService();
     await service.init();
     final bool dbHasData = service.containsID(venueName) == true;

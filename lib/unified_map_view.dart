@@ -77,6 +77,22 @@ class UnifiedMapViewPackage {
         (apiKey == null || apiKey.trim().isEmpty) ? null : apiKey.trim();
   }
 
+  /// The venue's indoor GeoJSON — the same response the map renders from,
+  /// loaded once per session and shared. Hosts read it instead of fetching the
+  /// venue again. Call after [initialize], which opens the cache it falls back
+  /// to when offline.
+  static Future<Map<String, dynamic>?> getVenueGeoJson(String venueName) =>
+      GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
+
+  /// Supplies the venue's GeoJSON so the package makes no request for it.
+  /// Call before [initialize] or before a map loads [venueName].
+  static void setVenueGeoJson(String venueName, Map<String, dynamic> data) =>
+      GlobalGeoJSONVenueAPI.provide(venueName, data);
+
+  /// Forgets the shared venue GeoJSON so the next load fetches it again.
+  static void clearVenueGeoJson([String? venueName]) =>
+      GlobalGeoJSONVenueAPI.invalidate(venueName);
+
   static Set<String>? _allowedBuildingIds;
 
   /// The buildings the venue is restricted to, or null to render all of them.
