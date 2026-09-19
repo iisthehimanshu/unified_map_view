@@ -13,7 +13,44 @@ import '../services/GlobalGeoJSONStorageService.dart';
 
 class GlobalGeoJSONVenueAPI {
 
-  Future<Map<String, dynamic>?> getGeoJSONData(String venueName) async {
+  /// One load per venue per session, shared by every caller. `initialize`, each
+  /// map's annotation controller and the host (navigation_sdk builds its
+  /// per-building mapping elements from this response) all ask for the same
+  /// multi-MB venue; each call used to start its own live fetch.
+  static final Map<String, Future<Map<String, dynamic>?>> _loads = {};
+
+  /// Hands the package a venue response the host already has, so no request
+  /// is made for it. It is not written to the cache — the host owns that.
+  static void provide(String venueName, Map<String, dynamic> data) {
+    _loads[venueName] = Future.value(data);
+  }
+
+  /// Drops the shared load, so the next call fetches again. Null clears all.
+  static void invalidate([String? venueName]) {
+    if (venueName == null) {
+      _loads.clear();
+    } else {
+      _loads.remove(venueName);
+    }
+  }
+
+  Future<Map<String, dynamic>?> getGeoJSONData(String venueName) {
+    final existing = _loads[venueName];
+    if (existing != null) return existing;
+    final load = _load(venueName);
+    _loads[venueName] = load;
+    // A failed load must not be remembered — the next caller retries.
+    load.then((data) {
+      if (data == null && identical(_loads[venueName], load)) {
+        _loads.remove(venueName);
+      }
+    }, onError: (_) {
+      if (identical(_loads[venueName], load)) _loads.remove(venueName);
+    });
+    return load;
+  }
+
+  Future<Map<String, dynamic>?> _load(String venueName) async {
     final service = await GlobalGeoJSONVenueStorageService();
     await service.init();
     final bool dbHasData = service.containsID(venueName) == true;
@@ -32,9 +69,19 @@ class GlobalGeoJSONVenueAPI {
     // fix (e.g. corrected per-part colors on furniture/landmark models)
     // stayed invisible until the app was uninstalled and reinstalled,
     // which is the only path that starts with an empty cache.
+    //
+    // A failed fetch falls through to the cache rather than throwing past it.
+    // Being "online" is only a guess — on web it is any Wi-Fi or ethernet
+    // link, including one with no internet behind it — and when the request
+    // then fails, the cached venue is exactly what the app must render.
     if (await checkInternetConnectivity()) {
-      final fresh = await _fetchFromApi(venueName, service);
-      if (fresh != null) return fresh;
+      try {
+        final fresh = await _fetchFromApi(venueName, service);
+        if (fresh != null) return fresh;
+      } catch (e) {
+        print("GlobalGeoJSONVenueAPI: live fetch failed, using the cached "
+            "venue if there is one: $e");
+      }
     }
 
     if (service.containsID(venueName)) {
@@ -81,7 +128,10 @@ class GlobalGeoJSONVenueAPI {
       if (!kIsWeb) print("GlobalGeoJSONVenueAPI from API $body");
       return body;
     } else if (response.statusCode == 403) {
-      return _fetchFromApi(venueName, service);
+      // Rejected key. Retrying cannot fix that, and retrying with no delay or
+      // limit (as this used to) floods the server until the page is closed.
+      print("getGeoJSONData: api key rejected (403)");
+      return null;
     } else {
       print("getGeoJSONData failed: ${response.statusCode} ${response.body}");
       return null;

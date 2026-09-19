@@ -88,6 +88,27 @@ class PredefinedMarkers{
     );
   }
 
+  /// A venue's pin with its name underneath, for an overview map that shows
+  /// every venue before one has been chosen. Drawn the same way as
+  /// [getDestinationMarker].
+  static GeoJsonMarker getVenueMarker(MapLocation location, String id,
+      {required String venueName}) {
+    return GeoJsonMarker(
+      id: id,
+      position: location,
+      title: venueName,
+      snippet: "",
+      assetPath: LandmarkAssetType.destination.assetPath,
+      iconName: "Venue",
+      priority: true,
+      imageSize: const Size(30, 30),
+      renderAnchor: const Offset(0.5, 0.8),
+      anchor: LandmarkAssetType.destination.anchor,
+      customRendering: true,
+      properties: const {"fontSize": 12.0},
+    );
+  }
+
   static GeoJsonMarker getDestinationMarker(MapLocation location, String id, {String title = ""}){
     return GeoJsonMarker(
         id: id,

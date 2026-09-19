@@ -102,7 +102,14 @@ class AppConfig {
     }
   }
 
+  /// The key the host app was given — on web, the `apiKey` of the page's
+  /// link. Takes precedence over the built-in keys below, so every request
+  /// this package makes is made with the same key as the host's own.
+  static String? hostApiKey;
+
   static String get apiKey {
+    final hostKey = hostApiKey;
+    if (hostKey != null && hostKey.isNotEmpty) return hostKey;
     if (baseUrl == 'https://dev.iwayplus.in') {
       return '7cc62870-d67e-11f0-91ed-2f0eb903e7db';
     } else {

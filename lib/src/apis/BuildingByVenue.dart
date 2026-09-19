@@ -81,7 +81,10 @@ class BuildingByVenue {
       await model.save();
       return BuildingData.fromJson(responseBody);
     } else if (response.statusCode == 403) {
-      return _fetchFromApi(id, box);
+      // Rejected key. Retrying cannot fix that, and retrying with no delay or
+      // limit (as this used to) floods the server until the page is closed.
+      // Thrown, so the caller falls back to the cache like any other failure.
+      throw Exception('building/get/venue: api key rejected (403)');
     } else {
       throw Exception('Failed to load building data');
     }

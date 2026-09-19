@@ -188,6 +188,64 @@ class MaplibreMapProvider extends BaseMapProvider {
   double _pathShineProgress = 0.0;
   List<Map<String, dynamic>> _allCornerFeatures = [];
 
+  /// The square canvas [UnifiedMarkerCreator.createBentArrow] bakes the big
+  /// corner arrow at (its `size` default), and the fraction of that square
+  /// the visible tail+shaft+head actually spans lengthwise (tailLength 0.45 +
+  /// headShaftLength 0.25 + headTipLength 0.22 = 0.92, from that function).
+  /// [_pathBigArrowLayerId]'s on-screen footprint is this times its current
+  /// `iconSize` — used below to keep the "does it fit on this segment" filter
+  /// and the declutter spacing in [_refreshCornerVisibility] in sync with the
+  /// arrow's REAL current pixel size instead of a guessed flat constant that
+  /// quietly stopped matching it (which is what let arrows overflow their
+  /// segment and collide at some zooms while looking tiny at others).
+  static const double _kArrowBakePx = 256.0;
+  static const double _kArrowVisibleSpanFraction = 0.92;
+
+  /// zoom -> iconSize stops for the big-arrow layer's `iconSize` expression
+  /// (set where [_pathBigArrowLayerId] is added). Only 2 stops, deliberately:
+  /// with exactly 2, ANY pair of values is automatically self-consistent
+  /// with the "exponential" curve MapLibre draws between them for SOME base
+  /// — [_arrowIconSizeForZoom] doesn't hardcode that base, it derives the
+  /// same curve straight from these two values, so it can never drift out of
+  /// sync with what's declared in the expression below the way a 3rd
+  /// (redundant, hand-computed) stop could. Exponential — not linear —
+  /// because that's the shape that keeps the arrow's size relative to the
+  /// path (which scales at the same zoom-dependent rate) constant, instead
+  /// of relative to the screen; a pure base-2 curve (min 0.2 / max 3.2, tried
+  /// 2026-09-17) did that perfectly but over a wider range than wanted —
+  /// these values pull the two ends closer together (bigger at min zoom,
+  /// smaller at max zoom) while keeping the same smooth curve shape between
+  /// them. If you change one of these, change the matching stop in the
+  /// expression below to the exact same value.
+  static const List<List<double>> _arrowSizeStops = [
+    [20.0, 0.35],
+    [24.0, 1.3],
+  ];
+
+  /// Interpolated `iconSize` the big arrow renders at at [zoom], per
+  /// [_arrowSizeStops] — exponential (base 2) between stops, matching the
+  /// layer's own `["interpolate", ["exponential", 2], …]` expression.
+  double _arrowIconSizeForZoom(double zoom) {
+    final stops = _arrowSizeStops;
+    if (zoom <= stops.first[0]) return stops.first[1];
+    if (zoom >= stops.last[0]) return stops.last[1];
+    for (var i = 0; i < stops.length - 1; i++) {
+      final a = stops[i];
+      final b = stops[i + 1];
+      if (zoom >= a[0] && zoom <= b[0]) {
+        final double ratio = b[1] / a[1];
+        final double t = (zoom - a[0]) / (b[0] - a[0]);
+        return a[1] * pow(ratio, t);
+      }
+    }
+    return stops.last[1];
+  }
+
+  /// The big arrow's actual on-screen length (px) at [zoom] — see
+  /// [_kArrowBakePx] / [_kArrowVisibleSpanFraction].
+  double _arrowFootprintPxForZoom(double zoom) =>
+      _kArrowBakePx * _kArrowVisibleSpanFraction * _arrowIconSizeForZoom(zoom);
+
   /// Wall-clock time of the last `onCameraMove` from the native map. Used to
   /// pause cosmetic per-frame source rewrites (the travelling path "shine")
   /// while the camera is actually moving — those rewrites force a native
@@ -1196,7 +1254,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     // Rebuild polygon source so height/base_height are removed in 2D.
     await _updatePolygonSource(
       controller,
-      selectPolygonId: selectedLocation?.polygon?.id,
+      selectPolygonIds: _currentSelectionGroup,
     );
   }
 
@@ -2893,7 +2951,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Future<void> _updatePolygonSource(
       MapLibreMapController controller, {
-        String? selectPolygonId,
+        Set<String>? selectPolygonIds,
       }) async {
     if (!_isPolygonLayersEnabled) {
       return;
@@ -2970,7 +3028,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           'fillColorSecondary':
           '#${RenderingUtilities.colorToMapplsHex(_shade(fillColorSecondary))}',
           'fillOpacity': fillColor.a,
-          'isSelected': polygon.id == selectPolygonId,
+          'isSelected': selectPolygonIds?.contains(polygon.id) ?? false,
           'boundary': polygon.properties?['type'] == "Boundary",
           'section': polygon.properties?['type'] == "Section",
           'subsection': polygon.properties?['type'] == "Sub Section",
@@ -3798,15 +3856,42 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     final metersPerPixel = 156543.03392 * cos(lat * pi / 180) / pow(2, zoom);
-    const double pixelThreshold = 80.0;
+
+    // The big arrow's actual on-screen length at this zoom (see
+    // _arrowFootprintPxForZoom) — was a flat 55/80px guess that stopped
+    // matching the real sprite (256px baked, see _kArrowBakePx) and let
+    // arrows overflow their segment and collide at higher zooms while
+    // barely mattering at lower ones.
+    final double arrowFootprintPx = _arrowFootprintPxForZoom(zoom);
+
+    // Two corners need at least this much room between them, in screen
+    // pixels, for their arrows not to overlap regardless of which way either
+    // one is rotated: the arrow's own length, plus a fixed margin that still
+    // covers the turn bubble sitting on the same point (its original,
+    // unrelated 80px headroom, kept as a floor).
+    const double pixelThresholdFloor = 80.0;
+    final double pixelThreshold =
+        max(pixelThresholdFloor, arrowFootprintPx + 16.0);
     final double meterThreshold = pixelThreshold * metersPerPixel;
 
-    // The big corner arrow is a fixed ~48px sprite pivoted on the bend. When a
-    // path segment meeting the bend is shorter than that on screen — a tight
-    // route near the destination, or the view zoomed out — the arrow overruns
-    // the turn and reads as floating free of the path. Flag those per corner so
-    // the arrow layer can drop just the arrow (the turn bubble still shows).
-    const double arrowFitMinSegPixels = 55.0;
+    // A path segment meeting the bend shorter than the arrow's own on-screen
+    // length — a tight route near the destination — would have the arrow
+    // overrun the turn and read as floating free of the path. Flag those per
+    // corner so the arrow layer can drop just the arrow (the turn bubble has
+    // no such filter and still shows).
+    //
+    // The 0.5 factor (some overhang allowed, not an exact fit) is load-
+    // bearing, not cosmetic: because the arrow's size and a segment's on-
+    // screen length both scale at the identical rate with zoom (that's what
+    // makes the arrow track the path's size at every zoom — see
+    // _arrowSizeStops), their ratio for any given FIXED real-world segment
+    // length is the same at every zoom. A segment that's short relative to
+    // the arrow doesn't become "long enough" by zooming — with factor 1.0
+    // (tried 2026-09-17) a segment on the wrong side of that ratio hid its
+    // arrow at literally every zoom, not just some, which is what made a
+    // route with tight turns (e.g. the ~6m-spaced example harness route)
+    // show no arrows anywhere no matter how far you zoomed in.
+    final double arrowFitMinSegPixels = arrowFootprintPx * 0.5;
 
     final sorted = [..._allCornerFeatures]
       ..sort((a, b) => (b['properties']['turnSharpness'] as double)
@@ -6507,10 +6592,31 @@ class MaplibreMapProvider extends BaseMapProvider {
         const SymbolLayerProperties(
           symbolSortKey: -999999,
           iconImage: ["coalesce", ["get", "icon"], _kPathBigArrowImageId],
-          iconSize: 1.2,
+          // Exponential (see _arrowSizeStops — the two stop VALUES here MUST
+          // match that list exactly; they're mirrored by
+          // _arrowIconSizeForZoom so the fit/declutter math below agrees with
+          // what's actually rendered). The 1.3883 base is just whatever
+          // number makes this curve pass through exactly those two stops
+          // (ratio^(1/Δzoom) — recompute it if you change either stop); it
+          // has no significance on its own. Exponential rather than linear
+          // because that's the shape that keeps the arrow's size relative to
+          // the path (which scales at the same zoom-dependent rate) roughly
+          // constant across the range, instead of relative to the screen.
+          iconSize: [
+            "interpolate", ["exponential", 1.3883], ["zoom"],
+            20, 0.35,
+            24, 1.3,
+          ],
           iconRotationAlignment: 'map',
           iconRotate: ["get", "bearing"],
           iconAnchor: 'center', // Pivot at the bend
+          // MUST stay true. Tried false (+ a turnSharpness symbolSortKey) to
+          // have MapLibre's own placement engine hide the losing arrow on a
+          // collision instead of stacking both — made every arrow disappear,
+          // not just colliding ones (2026-09-17). Arrow-vs-arrow spacing is
+          // handled below instead, by dropping the weaker corner from the
+          // source entirely (_refreshCornerVisibility's declutter pass) so
+          // there's never two arrow features close enough to collide.
           iconAllowOverlap: true,
           iconIgnorePlacement: false,
           iconPadding: 0,
@@ -6675,6 +6781,90 @@ class MaplibreMapProvider extends BaseMapProvider {
     await selectLocation(controller, id);
   }
 
+  /// Every polygon drawn as part of the currently selected thing, or null when
+  /// nothing is selected. Recomputed rather than cached so it cannot drift from
+  /// [selectedLocation] across a style reload or a 2D/3D rebuild.
+  Set<String>? get _currentSelectionGroup {
+    final polygon = selectedLocation?.polygon;
+    return polygon == null ? null : _selectionGroupFor(polygon);
+  }
+
+  /// The composite ids to mark `isSelected` for a selection of [primary].
+  ///
+  /// A room is not one polygon: the venue draws its walls and beams as separate
+  /// features (`point-7ypw8j7` plus `point-7ypw8j7wall0..2`), and the feature
+  /// data links them explicitly — the room lists its walls in
+  /// `associatedPolygons` and each wall lists the room back.
+  ///
+  /// Walked as an undirected graph rather than one hop, so a tap on a wall
+  /// selects the whole room — room, its other walls and its beams — exactly as
+  /// a tap on the room does. Over this venue that yields 421 groups of at most
+  /// 6, and no group ever contains two rooms, so the walk cannot bleed from one
+  /// room into the next.
+  ///
+  /// The link is read from the data, deliberately not from the id spelling: the
+  /// `<roomId>wall<n>` naming is this venue's convention, and a prefix match
+  /// would silently group unrelated polygons on a venue that names things
+  /// differently. A polygon with no links selects alone, as before.
+  Set<String> _selectionGroupFor(GeoJsonPolygon primary) {
+    final byOwnId = <String, List<GeoJsonPolygon>>{};
+    final listedBy = <String, List<GeoJsonPolygon>>{};
+    for (final p in _polygons) {
+      final ownId = _extractPolygonIdFromTap(p.id);
+      if (ownId != null) (byOwnId[ownId] ??= <GeoJsonPolygon>[]).add(p);
+      for (final rel in p.associatedPolygonIds) {
+        (listedBy[rel] ??= <GeoJsonPolygon>[]).add(p);
+      }
+    }
+
+    // Visited by identity, not by id: the composite key is not guaranteed
+    // unique, and skipping a polygon that merely shares a key would drop a real
+    // member of the group.
+    final visited = <GeoJsonPolygon>{};
+    final ids = <String>{};
+    final queue = <GeoJsonPolygon>[primary];
+    while (queue.isNotEmpty) {
+      final p = queue.removeLast();
+      if (!visited.add(p)) continue;
+      ids.add(p.id);
+      for (final rel in p.associatedPolygonIds) {
+        queue.addAll(byOwnId[rel] ?? const <GeoJsonPolygon>[]);
+      }
+      final ownId = _extractPolygonIdFromTap(p.id);
+      if (ownId != null) {
+        queue.addAll(listedBy[ownId] ?? const <GeoJsonPolygon>[]);
+      }
+    }
+    return ids;
+  }
+
+  /// Resolves the polygon a selection id refers to.
+  ///
+  /// Matches the polygon's OWN id component first, and that exactness is the
+  /// whole point: this venue names a room's walls after the room, with no
+  /// separator. `point-7ypw8j7` is a room; `point-7ypw8j7wall0`,
+  /// `...wall1` and `...wall2` are its walls and beams. A `contains` test over
+  /// the composite key matches all four, so the `firstWhere` this replaces
+  /// returned whichever came first in the venue data — the room for
+  /// `point-frc9ipa`, but `point-7ypw8j7wall0` for `point-7ypw8j7`, whose
+  /// walls are serialised ahead of it. Tapping that room's marker selected and
+  /// highlighted its wall, while the identical tap one room over was correct.
+  /// 173 of this venue's 900 polygon ids are a substring of another's, so the
+  /// source ordering decided it silently, per room.
+  ///
+  /// The substring pass is kept as a fallback, for callers handing over a whole
+  /// composite key rather than a bare feature id.
+  GeoJsonPolygon? _findPolygonById(String polyID, String markerPolyID) {
+    for (final p in _polygons) {
+      final ownId = _extractPolygonIdFromTap(p.id);
+      if (ownId == polyID || ownId == markerPolyID) return p;
+    }
+    for (final p in _polygons) {
+      if (p.id.contains(polyID) || p.id.contains(markerPolyID)) return p;
+    }
+    return null;
+  }
+
   String? _extractPolygonIdFromTap(String key) {
     var keyMap = GeoJsonUtils.extractKeyValueMap(key);
     if (keyMap["polyId"] != null) return keyMap["polyId"];
@@ -6793,10 +6983,8 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       try {
         if (_polygons.isNotEmpty) {
-          polygon = _polygons.firstWhere(
-                (p) => p.id.contains(polyID) || p.id.contains(polyIDInsideMarker),
-            orElse: () => throw Exception('Polygon not found'),
-          );
+          polygon = _findPolygonById(polyID, polyIDInsideMarker);
+          if (polygon == null) throw Exception('Polygon not found');
           if (polygon.points.length < 3) {
             print('Warning: Polygon has fewer than 3 points: ${polygon.id}');
             polygon = null;
@@ -6820,7 +7008,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       // 1. Kick off visual updates immediately for tap feedback.
       // We don't await these to let the camera start ASAP.
       if (polygon != null) {
-        _updatePolygonSource(controller, selectPolygonId: polygon.id);
+        _updatePolygonSource(controller, selectPolygonIds: _selectionGroupFor(polygon));
       }
       if (marker != null) {
         // Clear any leftover frozen animation from the previous selection
@@ -6964,7 +7152,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       String selectPolygonId,
       bool isSelected,
       ) async {
-    _updatePolygonSource(controller, selectPolygonId: isSelected ? selectPolygonId : null);
+    _updatePolygonSource(controller,
+        selectPolygonIds: isSelected ? {selectPolygonId} : null);
   }
 
   @override
@@ -6983,7 +7172,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     try {
-      await _updatePolygonSource(controller, selectPolygonId: null);
+      await _updatePolygonSource(controller, selectPolygonIds: null);
 
       // Undo whatever the animation left behind before the normal layers
       // take back over showing this marker at rest.

@@ -29,6 +29,13 @@ class AnnotationController{
   // "assigned yet" without risking the same throw.
   bool _venueDataReady = false;
 
+  // Mirrors `_venueDataReady`, but for the furniture-model fetch. The
+  // furniture render used to fire straight off `furnitureDataFuture.then`
+  // with no regard for whether `onMapCreated` had run yet (see
+  // `_tryRenderFurniture`'s doc comment for why that dropped furniture
+  // silently and unrecoverably, especially on web).
+  bool _furnitureDataReady = false;
+
   String? _focusedBuilding;
   List<int>? _focusedBuildingAvailableFloors;
   int? _focusBuildingSelectedFloor;
@@ -78,6 +85,10 @@ class AnnotationController{
 
 
   AnnotationController(this._unifiedMapController, {required String venueName}){
+    // An empty name is a map with no venue — an overview that only carries
+    // markers, shown before a venue has been chosen. Fetching for it would
+    // only fail: the venue APIs have nothing to return for "".
+    if (venueName.trim().isEmpty) return;
     _setVenue(venueName);
   }
 
@@ -114,10 +125,32 @@ class AnnotationController{
     furnitureDataFuture.then((furnitureData) async {
       if (furnitureData.isEmpty) return;
       _venueData.furnitureData = furnitureData;
-      await _renderFurnitureForCurrentFloors();
+      _furnitureDataReady = true;
+      await _tryRenderFurniture();
     }).catchError((e) {
       print('furniture load failed, skipping 3D objects: $e');
     });
+  }
+
+  /// Renders furniture once both sides of its own readiness race are done:
+  /// the model fetch (`_furnitureDataReady`) and the platform map controller
+  /// (`controllerIsInitialized`, set in `onMapCreated`). Call this from both
+  /// sides, same as `renderVenue`'s `_venueDataReady`/`controllerIsInitialized`
+  /// guard — whichever finishes second is the one that actually renders.
+  ///
+  /// Without this, the furniture fetch resolving before `onMapCreated` (the
+  /// map controller not existing yet) made `UnifiedMapController.addFurniture`
+  /// silently no-op, and nothing else ever retried — furniture (temples,
+  /// etc.) just never appeared for that page load. On native, `onMapCreated`
+  /// fires near-instantly so the controller almost always wins; on web the
+  /// MapLibre GL JS bootstrap (WebGL context, style JSON, tiles) is slow and
+  /// highly variable, so it frequently loses the race instead — which is why
+  /// the symptom ("furniture visible sometimes, not other times") showed up
+  /// on web specifically.
+  Future<void> _tryRenderFurniture() async {
+    if (!_unifiedMapController.controllerIsInitialized) return;
+    if (!_furnitureDataReady) return;
+    await _renderFurnitureForCurrentFloors();
   }
 
   /// Re-derives each building's currently-selected floor and pushes only its
@@ -137,6 +170,10 @@ class AnnotationController{
 
   Future<void> renderVenue() async {
     if(!_unifiedMapController.controllerIsInitialized) return;
+    // The controller just became ready (or already was): flush any furniture
+    // that arrived earlier and was dropped because the controller didn't
+    // exist yet. See _tryRenderFurniture's doc comment.
+    await _tryRenderFurniture();
     // See _venueDataReady's doc comment: onMapCreated can call this before
     // _setVenue's fetch has assigned _venueData. _setVenue calls renderVenue
     // itself right after the assignment, so skipping here just waits for

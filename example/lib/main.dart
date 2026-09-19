@@ -186,7 +186,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
         });
         print('HARNESS onMarkerTap -> $markerId');
       },
-      url: "https://dev.iwayplus.in",
+      url: "https://maps.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
           MapProvider.mappls: MapplsMapProvider()},
