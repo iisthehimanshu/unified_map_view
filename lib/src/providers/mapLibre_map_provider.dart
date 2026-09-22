@@ -151,7 +151,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _normalPolygonLayerId = 'normal-polygons-layer';
   final String _patternPolygonLayerId = 'pattern-polygons-layer';
   final String _selectedPlainPolygonLayerId = 'selected-plain-polygon-layer';
-  final String _selectedPlainPolygonStrokeLayerId = 'selected-plain-polygon-stroke-layer';
   final String _selectedExtrudedPolygonLayerId = 'selected-extruded-polygon-layer';
   final String _patchBelowPolygonLayerId = 'patch-below-polygon-layer';
   final String _patchAbovePolygonLayerId = 'patch-above-polygon-layer';
@@ -313,7 +312,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     // selection
     _selectedMarkerLayerId: MapLayer.selection,
     _selectedPlainPolygonLayerId: MapLayer.selection,
-    _selectedPlainPolygonStrokeLayerId: MapLayer.selection,
     _selectedExtrudedPolygonLayerId: MapLayer.selection,
   };
 
@@ -5887,7 +5885,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           visibility: _visibility(_selectedPlainPolygonLayerId),
           fillColor: "#4CAF50",
           fillOpacity: op(0.6),
-          fillOutlineColor: "#2E7D32",
+          fillOutlineColor: "#4CAF50",
         )),
         filter: [
           "all",
@@ -5895,29 +5893,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "isSelected"]],
         ],
         enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
-      );
-
-      // Stroke for the flat selected polygon. The height filter keeps it to the
-      // 2D rendering only; in 3D the selection is drawn by the extrusion layer.
-      await controller.addLineLayer(
-        _polygonSourceId,
-        _selectedPlainPolygonStrokeLayerId,
-        _layerProps(_selectedPlainPolygonStrokeLayerId,
-            (op) => LineLayerProperties(
-          visibility: _visibility(_selectedPlainPolygonStrokeLayerId),
-          lineColor: "#1B5E20",
-          lineWidth: 2.5,
-          lineOpacity: op(1.0),
-          lineJoin: "round",
-          lineCap: "round",
-        )),
-        filter: [
-          "all",
-          ["!", ["has", "height"]],
-          ["to-boolean", ["get", "isSelected"]],
-        ],
-        enableInteraction: false,
         belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
       );
 
