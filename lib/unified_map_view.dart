@@ -108,6 +108,11 @@ class UnifiedMapViewPackage {
         (normalized == null || normalized.isEmpty) ? null : normalized;
   }
 
+  static void _registerAdapter(TypeAdapter adapter) {
+    if (Hive.isAdapterRegistered(adapter.typeId)) return;
+    Hive.registerAdapter(adapter);
+  }
+
   static Future<void> _initializeOnce(String venueName) async {
     try {
       PerfTrace.mark('UnifiedMapViewPackage.initialize start');
@@ -115,13 +120,13 @@ class UnifiedMapViewPackage {
       await PerfTrace.timeAsync('Hive.initFlutter', () => Hive.initFlutter());
 
       // Register adapters
-      Hive.registerAdapter(BuildingByVenueAPIModelAdapter());
+      _registerAdapter(BuildingByVenueAPIModelAdapter());
       // On web a non-lazy openBox deserialises every record up front, so this
       // pays a full decode of the cached venue blob before returning.
       await PerfTrace.timeAsync('openBox BuildingByVenue',
           () => Hive.openBox<BuildingByVenueAPIModel>('UNifiedBuildingByVenueAPIModelFile'));
 
-      Hive.registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
+      _registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
       await PerfTrace.timeAsync('openBox GlobalGeoJSONVenue',
           () => Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile'));
       _initialized = true;
