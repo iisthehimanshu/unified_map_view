@@ -1023,8 +1023,20 @@ class MaplibreMapProvider extends BaseMapProvider {
                 await _setGeoJsonCircle(_controller!);
               }
               if (_furnitureItems.isNotEmpty) {
-                await _enableFurnitureLayer(_controller!);
-                await _updateFurnitureSource(_controller!);
+                // Unguarded before: a throw here (the same transient "Style
+                // is not done loading" race [_retryIfStyleLoading] retries,
+                // now possible again if that retry's own bound is exceeded)
+                // was uncaught, which aborted the rest of this callback —
+                // screenSize/_refreshPatchAboveOpacity below would silently
+                // never run. Furniture failing is cosmetic; skipping the
+                // patch-above refresh is not, so this is best-effort same as
+                // the icon rebake above.
+                try {
+                  await _enableFurnitureLayer(_controller!);
+                  await _updateFurnitureSource(_controller!);
+                } catch (e) {
+                  print('style-loaded: furniture re-add failed: $e');
+                }
               }
               _screenSize = MediaQuery.of(context).size;
               await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
@@ -3121,7 +3133,19 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// by this much forces neighbouring parts to overlap instead of merely
   /// touch, closing the seam. It's well under furniture scale (chairs are
   /// tens of centimetres), so it isn't visible as size inflation.
-  static const double _partSeamOverlap = 0.01;
+  ///
+  /// Bumped hard on web: this value was tuned against native GLES/Metal
+  /// depth precision. WebGL's depth buffer is materially shallower on a lot
+  /// of browser/GPU combinations (notably ANGLE-backed Chrome on integrated
+  /// GPUs), so the same nudge that reliably breaks the depth tie natively
+  /// can still land inside WebGL's rounding error — which is exactly the
+  /// "furniture renders colorless, flips visible/invisible with camera
+  /// angle" report that only showed up on web. A first doubling (0.01->0.02)
+  /// was confirmed live to still be insufficient on a real device — flicker
+  /// persisted — so this goes straight to 5cm, ~well under a chair's own
+  /// scale (tens of centimetres) and still imperceptible as size inflation,
+  /// to buy real margin instead of nudging by millimetres at a time.
+  static const double _partSeamOverlap = kIsWeb ? 0.05 : 0.01;
 
   /// Parts meant to sit flush against each other (a cushion directly on a
   /// seat base, a tabletop layer on its frame) frequently share the exact
@@ -3139,8 +3163,13 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// the pad per part index guarantees no two parts of the same item can
   /// ever end up with identical padded geometry, without needing to know
   /// which part is meant to sit "inside" which.
+  ///
+  /// Bumped hard on web for the same depth-precision reason as
+  /// [_partSeamOverlap] above — the per-part spread needs to be wider to
+  /// stay outside WebGL's coarser rounding error. Combined with the base
+  /// overlap above, web parts now spread roughly 5cm-8cm apart by index.
   static const int _seamJitterSteps = 6;
-  static const double _seamJitterStep = 0.0015;
+  static const double _seamJitterStep = kIsWeb ? 0.006 : 0.0015;
 
   /// "3dRef" may arrive as a Map or as a JSON-encoded string depending on
   /// how the API serialized the property — accept both.
@@ -3241,42 +3270,119 @@ class MaplibreMapProvider extends BaseMapProvider {
         .whenComplete(() => _furnitureLayerSetup = null);
   }
 
+  /// Retries [action] while it keeps failing with maplibre-gl-js's "Style is
+  /// not done loading" error (`Style._checkLoaded`) — thrown by every
+  /// addSource/addLayer call issued before the *initial* style finishes
+  /// loading (fonts/sprite/style JSON, independent of tiles — a raster
+  /// basemap plus a glyphs URL, both fetched from third-party hosts the app
+  /// doesn't control). Native rarely hits this: native style setup is fast
+  /// and not subject to a browser's network variance for the style JSON,
+  /// glyphs and tiles.
+  ///
+  /// Measured live against release web builds, back to back, on the same
+  /// machine: 'style.load' fired 9.7s after map construction on one run and
+  /// still hadn't fired after 20s on the next — over 2x swing with nothing
+  /// else different. There is no safe short bound here; the timeout below is
+  /// deliberately generous (100 attempts x 600ms = 60s) so it only ever
+  /// trips for a genuinely stuck load, not ordinary variance. Furniture is
+  /// non-critical supplementary content and every failed attempt is a cheap
+  /// synchronous rejection, so waiting costs nothing but time.
+  ///
+  /// Every add call in furniture setup used to have no protection against
+  /// this at all: the first hit bubbled straight to [addFurniture]'s
+  /// catch-and-log, which permanently dropped the furniture layer for the
+  /// rest of the session unless a spurious onStyleLoadedCallback refire (see
+  /// that callback's own doc comment — it is known to fire without an actual
+  /// style swap) happened to retry it by luck. That is what "furniture
+  /// renders sometimes, not other times" on web actually was. A bounded
+  /// retry here closes the race deterministically instead of hoping for the
+  /// lucky refire — and onStyleLoadedCallback's own furniture re-add (the
+  /// event-driven backstop for whenever 'style.load' actually fires) is now
+  /// wrapped in its own try/catch, so even this retry timing out there can't
+  /// take the rest of that callback down with it.
+  Future<T> _retryIfStyleLoading<T>(Future<T> Function() action) async {
+    const maxAttempts = 100;
+    for (var attempt = 1;; attempt++) {
+      try {
+        return await action();
+      } catch (e) {
+        final transient = e.toString().contains('Style is not done loading');
+        if (!transient || attempt >= maxAttempts) rethrow;
+        await Future.delayed(const Duration(milliseconds: 600));
+      }
+    }
+  }
+
   Future<void> _enableFurnitureLayerOnce(
       MapLibreMapController controller) async {
     if (_isFurnitureLayerEnabled) return;
 
-    await controller.addSource(
-      _furnitureSourceId,
-      GeojsonSourceProperties(
-        data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
-        // Furniture parts are centimetre-scale, which puts them right on the
-        // edge of what a tiled GeoJSON source can represent. Two separate
-        // mechanisms erase them, and both have to stay disabled.
-        //
-        // 1. tolerance MUST stay 0. It is not just Douglas-Peucker: for any
-        //    tile below maxzoom, geojson-vt drops a polygon ring outright when
-        //    its area is under (tolerance / (2^z * extent))^2. At z18 that
-        //    threshold is a ~1.4cm square, at z17 a ~2.8cm square — so thin
-        //    parts silently disappear, and reappear once you zoom to maxzoom
-        //    where the tolerance is forced to 0. That is exactly the
-        //    "random parts missing" symptom. Simplification would save nothing
-        //    here anyway: these rings are 4-16 points each.
-        //
-        // 2. maxzoom controls the quantisation grid of the deepest tile, since
-        //    coordinates are rounded to `extent` steps. At the default 18 a
-        //    step is ~3.7cm and a 5cm post collapses to zero area. At 22 a step
-        //    is ~2.3mm, fine enough for anything in these models, while still
-        //    stopping the source from building real tiles for two more zoom
-        //    levels on every pan the way 24 did.
-        maxzoom: 22,
-        tolerance: 0,
-        // Default. Furniture parts are sub-metre, so the doubled 256 buffer
-        // was only duplicating geometry into neighbouring tiles. Buffer only
-        // controls how much neighbouring geometry a tile carries, so lowering
-        // it cannot drop a part — a clipped fill is re-closed at the seam.
-        buffer: 256,
-      ),
-    );
+    // A source that "already exists" is not a failure here — it is proof
+    // the real JS source is fine. onStyleLoadedCallback can refire without
+    // an actual style swap (see that callback's own doc comment), which
+    // unconditionally resets `_isFurnitureLayerEnabled` to false and then
+    // retries this whole setup — even though nothing was really removed.
+    // Before this guard, that retry's addSource call threw
+    // 'Source "furniture-source" already exists', uncaught by
+    // [_retryIfStyleLoading] (it only retries the *style-not-loaded* case),
+    // which aborted the entire function right here: the flags below never
+    // got set back to true, and the extrusion layer's re-adder (registered
+    // further down) never got (re)registered — Dart's bookkeeping was left
+    // permanently out of sync with a map that was actually still fine. This
+    // is the concrete cause behind "furniture visible on one load, not the
+    // next" — confirmed live via exactly this error in a production console
+    // log. Swallowing it here and continuing keeps the two in sync instead.
+    try {
+      await _retryIfStyleLoading(() => controller.addSource(
+        _furnitureSourceId,
+        GeojsonSourceProperties(
+          data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
+          // Furniture parts are centimetre-scale, which puts them right on
+          // the edge of what a tiled GeoJSON source can represent. Two
+          // separate mechanisms erase them, and both have to stay disabled.
+          //
+          // 1. tolerance MUST stay 0. It is not just Douglas-Peucker: for
+          //    any tile below maxzoom, geojson-vt drops a polygon ring
+          //    outright when its area is under (tolerance / (2^z *
+          //    extent))^2. At z18 that threshold is a ~1.4cm square, at z17
+          //    a ~2.8cm square — so thin parts silently disappear, and
+          //    reappear once you zoom to maxzoom where the tolerance is
+          //    forced to 0. That is exactly the "random parts missing"
+          //    symptom. Simplification would save nothing here anyway:
+          //    these rings are 4-16 points each.
+          //
+          // 2. maxzoom controls the quantisation grid of the deepest tile,
+          //    since coordinates are rounded to `extent` steps. At the
+          //    default 18 a step is ~3.7cm and a 5cm post collapses to zero
+          //    area. At 22 a step is ~2.3mm, fine enough for anything in
+          //    these models, while still stopping the source from building
+          //    real tiles for two more zoom levels on every pan the way 24
+          //    did.
+          maxzoom: 22,
+          tolerance: 0,
+          // Cut way down from the previous 256. That default duplicates
+          // every feature within `buffer` tile-units of a boundary into the
+          // neighbouring tile too — harmless for the flat 2D fill (drawing
+          // the same opaque area twice is invisible), but for the 3D
+          // extrusion two bit-identical copies of the same polygon is the
+          // worst case of the exact depth-buffer tie [_partSeamOverlap]
+          // documents: unlike two different parts (which the eps/jitter
+          // above now separates), a tile-duplicated copy of the SAME part
+          // has IDENTICAL geometry to its twin, so no amount of per-part
+          // jitter helps it — only cutting the duplication itself does. Any
+          // furniture item near a tile edge was hitting exactly this,
+          // independent of the seam fix, which is why flicker persisted on
+          // some items and not others. Buffer only controls how much
+          // neighbouring geometry a tile carries, so lowering it cannot
+          // drop a part — a clipped fill is re-closed at the seam — it only
+          // shrinks the boundary strip where duplication (and now,
+          // extrusion z-fighting) can happen at all.
+          buffer: 8,
+        ),
+      ));
+    } catch (e) {
+      if (!e.toString().contains('already exists')) rethrow;
+    }
 
     // Drop any survivor before adding. `_isFurnitureLayerEnabled` is reset in
     // onStyleLoadedCallback on the assumption the style was replaced and took
@@ -3286,16 +3392,19 @@ class MaplibreMapProvider extends BaseMapProvider {
     // onStyleLoaded call site has no catch. removeLayer no-ops when the layer is
     // absent, so this is free in the normal case.
     //
-    // addSource above needs no equivalent: the plugin already logs
-    // "source with id 'furniture-source' already exists, skipping" and carries
-    // on rather than throwing.
+    // addSource above WAS assumed to need no equivalent, on the belief that
+    // the plugin logs "source with id 'furniture-source' already exists,
+    // skipping" and carries on rather than throwing. Confirmed false live,
+    // on web, via a production console log: it throws
+    // 'Error: Source "furniture-source" already exists.', which is exactly
+    // the addSource call's own try/catch further up now exists to swallow.
     try {
       await controller.removeLayer(_furnitureFillLayerId);
     } catch (_) {}
 
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
-    await controller.addFillLayer(
+    await _retryIfStyleLoading(() => controller.addFillLayer(
       _furnitureSourceId,
       _furnitureFillLayerId,
       _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
@@ -3310,7 +3419,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillOpacity: op(null),
       )),
       minzoom: _furnitureMinZoom,
-    );
+    ));
 
     _isFurnitureLayerEnabled = true;
     await _applyLayerPolicy(controller, only: [_furnitureFillLayerId]);
@@ -3333,7 +3442,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     try {
       await controller.removeLayer(_furnitureLayerId);
     } catch (_) {}
-    await controller.addFillExtrusionLayer(
+    await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
       _furnitureSourceId,
       _furnitureLayerId,
       _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3348,13 +3457,13 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillExtrusionOpacity: op(1.0),
       )),
       minzoom: _furnitureMinZoom,
-    );
+    ));
     _isFurnitureExtrusionAdded = true;
     // Same plugin gap as the polygon extrusions: setLayerProperties rejects
     // fill-extrusion layers, so policy changes have to rebuild this one.
     _layerReAdders[_furnitureLayerId] = () async {
       await controller.removeLayer(_furnitureLayerId);
-      await controller.addFillExtrusionLayer(
+      await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
         _furnitureSourceId,
         _furnitureLayerId,
         _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3365,7 +3474,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               fillExtrusionOpacity: op(1.0),
             )),
         minzoom: _furnitureMinZoom,
-      );
+      ));
     };
     await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
   }
