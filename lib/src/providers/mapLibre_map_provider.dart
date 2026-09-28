@@ -39,7 +39,9 @@ typedef _OpacityResolver = dynamic Function(dynamic base);
 /// kept so a style reload — which wipes every addImage() call — can re-upload
 /// without re-fetching the source photo or re-entering the bake path.
 class _BakedMarkerIcon {
-  /// Full composite, with the label baked in. Registered under the marker id.
+  /// Full composite, with the label baked in. Registered under
+  /// [_MapLibreMapProviderIconKeys.mainIconIdFor], which is content-derived:
+  /// markers whose bake inputs match share one upload.
   final Uint8List main;
 
   /// Image id the zoomed-out (label-less) variant is registered under. Shared
@@ -875,6 +877,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               // _bakedIconCache stay valid — only the addImage() registration
               // is gone — so the rebake pass below is upload-only.
               _registeredSmallIconIds.clear();
+              _registeredMainIconIds.clear();
               // Registered animal icons are wiped too (the composited bytes in
               // _animalIconCache are still valid and get reused, only the
               // addImage() registration needs to happen again).
@@ -1796,7 +1799,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       'properties': {
         'title': '',
         'id': marker.id,
-        if (marker.iconName != null || true) 'icon': marker.id,
+        if (marker.iconName != null || true)
+          'icon': _mainIconIds[marker.id] ?? marker.id,
         'isPriority': marker.priority ?? false,
         'intractable': marker.properties?["polyId"] != null,
         if (_currentHeading != null) "bearing": _currentHeading!,
@@ -2614,7 +2618,8 @@ class MaplibreMapProvider extends BaseMapProvider {
               'properties': {
                 'title': '',
                 'id': marker.id,
-                if (marker.iconName != null || true) 'icon': marker.id,
+                if (marker.iconName != null || true)
+          'icon': _mainIconIds[marker.id] ?? marker.id,
                 'isPriority': marker.priority ?? false,
                 'intractable': marker.properties?["polyId"] != null,
                 if (marker.compassBasedRotation) "bearing": heading,
@@ -2874,6 +2879,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         // are still registered with the live style and their bytes are reusable
         // by the next render, which is the whole point of keying by content.
         _smallIconIds.clear();
+        _mainIconIds.clear();
+        _markerContentKeys.clear();
         _bakedIconCache.clear();
         await setGeoJsonSource(controller, [], _clusterSourceId);
         await setGeoJsonSource(controller, [], _rotationSourceId);
@@ -4302,6 +4309,53 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// markers still use (their ids are already content-keyed).
   final Map<String, String> _smallIconIds = {};
 
+  /// Content key per marker id, memoised on first use.
+  ///
+  /// Memoised rather than recomputed because [_registerBakedIcon] writes
+  /// `marker.anchor` after the bake, and the key reads the anchor the bake
+  /// used. Recomputing on a later call would read the mutated value and
+  /// produce a different key for the same image.
+  final Map<String, String> _markerContentKeys = {};
+
+  /// Image id each marker's main bake was actually registered under. Read when
+  /// building the feature, so the `icon` property points at the shared upload
+  /// rather than the marker id.
+  final Map<String, String> _mainIconIds = {};
+
+  /// Main image ids already handed to addImage() in the current style session.
+  /// Cleared on style reload alongside [_registeredSmallIconIds].
+  final Set<String> _registeredMainIconIds = {};
+
+  /// What a marker's main bake actually depends on.
+  ///
+  /// Mirrors the inputs the bake reads, in the same spirit as the label-less
+  /// `smallIconId` below it. Two markers with equal keys produce byte-identical
+  /// composites, so they can share one registration: on a venue like
+  /// ApolloHospital that collapses 1,444 markers to roughly 550 uploads, the
+  /// rest being repeats such as 165 "Sitting Area" pins.
+  String _markerContentKey(GeoJsonMarker marker) {
+    final existing = _markerContentKeys[marker.id];
+    if (existing != null) return existing;
+    final bool isGallery = marker.assetPath?.contains('Gallery.png') ?? false;
+    final Size size = isGallery
+        ? const Size(62, 62)
+        : (marker.imageSize ?? const Size(85, 85));
+    final double fontSize =
+        isGallery ? 14.0 : (marker.properties?["fontSize"] ?? 14.5);
+    final Offset anchor =
+        marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+    final String text = marker.textVisibility ? (marker.title ?? "") : "";
+    // The branch discriminators matter: a museum POI and a pill marker with the
+    // same asset and label are different pictures.
+    final key = 'main|${marker.customRendering}'
+        '|${marker.properties?['poiRef'] != null}'
+        '|${marker.properties?['pathStop'] ?? false}'
+        '|${marker.assetPath}|${size.width}x${size.height}'
+        '|$fontSize|$isGallery|${anchor.dx},${anchor.dy}|$text';
+    _markerContentKeys[marker.id] = key;
+    return key;
+  }
+
   /// Bytes behind each id in [_registeredSmallIconIds], kept across style
   /// reloads so the shared label-less icons can be re-uploaded without being
   /// re-baked. Every registered id always has an entry here, because an id only
@@ -4313,8 +4367,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Keyed on the inputs that change what gets drawn, not just the id.
   final Map<String, _BakedMarkerIcon> _bakedIconCache = {};
 
-  String _bakedIconKey(GeoJsonMarker marker) =>
-      '${marker.id}|${marker.textVisibility}|${marker.title ?? ""}';
+  /// Keyed by content, not by marker: the second marker with the same picture
+  /// reuses the first one's bytes instead of re-fetching and re-baking them.
+  String _bakedIconKey(GeoJsonMarker marker) => _markerContentKey(marker);
 
   bool _isAnimalMarker(GeoJsonMarker marker) =>
       marker.customRendering && marker.properties?['animalRef'] != null;
@@ -4751,15 +4806,19 @@ class MaplibreMapProvider extends BaseMapProvider {
         : (_registeredSmallIconIds.contains(baked.smallIconId)
             ? null
             : _smallIconBytes[baked.smallIconId]);
+    final String mainId = _markerContentKey(marker);
+    final bool mainAlreadyUp = _registeredMainIconIds.contains(mainId);
     await Future.wait([
-      _addImageSafe(controller, _dbgReg(marker.id), baked.main),
+      if (!mainAlreadyUp) _addImageSafe(controller, _dbgReg(mainId), baked.main),
       if (smallBytes != null)
         _addImageSafe(controller, _dbgReg(baked.smallIconId), smallBytes),
-      if (baked.selected != null)
+      if (baked.selected != null && !mainAlreadyUp)
         _addImageSafe(
-            controller, _dbgReg("${marker.id}-selected"), baked.selected!),
+            controller, _dbgReg("$mainId-selected"), baked.selected!),
     ]);
+    if (!mainAlreadyUp) _registeredMainIconIds.add(mainId);
     if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
+    _mainIconIds[marker.id] = mainId;
     _smallIconIds[marker.id] = baked.smallIconId;
     _bakedIconCache[_bakedIconKey(marker)] = baked;
     marker.anchor = baked.anchor;
