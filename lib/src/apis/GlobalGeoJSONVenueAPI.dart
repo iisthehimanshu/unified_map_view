@@ -35,6 +35,15 @@ class GlobalGeoJSONVenueAPI {
   }
 
   Future<Map<String, dynamic>?> getGeoJSONData(String venueName) {
+    // The venue goes in the URL path, so an empty name requests
+    // `/secured/get-indoor-geojson-venue/` — which answers 500. Callers reach
+    // here before the venue is known (initialize is passed `venueName ?? ""`),
+    // so bail without spending the round-trip. Deliberately not recorded in
+    // [_loads]: the next call with a real venue must still fetch.
+    if (venueName.trim().isEmpty) {
+      print("getGeoJSONData: empty venue name — skipping request");
+      return Future.value(null);
+    }
     final existing = _loads[venueName];
     if (existing != null) return existing;
     final load = _load(venueName);
