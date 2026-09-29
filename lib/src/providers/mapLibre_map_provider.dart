@@ -39,7 +39,9 @@ typedef _OpacityResolver = dynamic Function(dynamic base);
 /// kept so a style reload — which wipes every addImage() call — can re-upload
 /// without re-fetching the source photo or re-entering the bake path.
 class _BakedMarkerIcon {
-  /// Full composite, with the label baked in. Registered under the marker id.
+  /// Full composite, with the label baked in. Registered under
+  /// [_MapLibreMapProviderIconKeys.mainIconIdFor], which is content-derived:
+  /// markers whose bake inputs match share one upload.
   final Uint8List main;
 
   /// Image id the zoomed-out (label-less) variant is registered under. Shared
@@ -154,7 +156,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _normalPolygonLayerId = 'normal-polygons-layer';
   final String _patternPolygonLayerId = 'pattern-polygons-layer';
   final String _selectedPlainPolygonLayerId = 'selected-plain-polygon-layer';
-  final String _selectedPlainPolygonStrokeLayerId = 'selected-plain-polygon-stroke-layer';
   final String _selectedExtrudedPolygonLayerId = 'selected-extruded-polygon-layer';
   final String _patchBelowPolygonLayerId = 'patch-below-polygon-layer';
   final String _patchAbovePolygonLayerId = 'patch-above-polygon-layer';
@@ -316,7 +317,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     // selection
     _selectedMarkerLayerId: MapLayer.selection,
     _selectedPlainPolygonLayerId: MapLayer.selection,
-    _selectedPlainPolygonStrokeLayerId: MapLayer.selection,
     _selectedExtrudedPolygonLayerId: MapLayer.selection,
   };
 
@@ -881,6 +881,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               // _bakedIconCache stay valid — only the addImage() registration
               // is gone — so the rebake pass below is upload-only.
               _registeredSmallIconIds.clear();
+              _registeredMainIconIds.clear();
               // Registered animal icons are wiped too (the composited bytes in
               // _animalIconCache are still valid and get reused, only the
               // addImage() registration needs to happen again).
@@ -1029,8 +1030,20 @@ class MaplibreMapProvider extends BaseMapProvider {
                 await _setGeoJsonCircle(_controller!);
               }
               if (_furnitureItems.isNotEmpty) {
-                await _enableFurnitureLayer(_controller!);
-                await _updateFurnitureSource(_controller!);
+                // Unguarded before: a throw here (the same transient "Style
+                // is not done loading" race [_retryIfStyleLoading] retries,
+                // now possible again if that retry's own bound is exceeded)
+                // was uncaught, which aborted the rest of this callback —
+                // screenSize/_refreshPatchAboveOpacity below would silently
+                // never run. Furniture failing is cosmetic; skipping the
+                // patch-above refresh is not, so this is best-effort same as
+                // the icon rebake above.
+                try {
+                  await _enableFurnitureLayer(_controller!);
+                  await _updateFurnitureSource(_controller!);
+                } catch (e) {
+                  print('style-loaded: furniture re-add failed: $e');
+                }
               }
               _screenSize = MediaQuery.of(context).size;
               await _refreshPatchAboveOpacity(_controller!, screenSize: _screenSize);
@@ -1802,7 +1815,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       'properties': {
         'title': '',
         'id': marker.id,
-        if (marker.iconName != null || true) 'icon': marker.id,
+        if (marker.iconName != null || true)
+          'icon': _mainIconIds[marker.id] ?? marker.id,
         'isPriority': marker.priority ?? false,
         'intractable': marker.properties?["polyId"] != null,
         'faceUser': marker.properties?['faceUser'] == true,
@@ -1835,18 +1849,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// symbol relayout on the render thread is what makes a concurrent camera
   /// pan stutter during guided navigation.
   bool _userMarkerAnimating = false;
-
-  /// Wall-clock time the puck's GeoJSON source was last pushed to the map.
-  /// While the camera is moving (a pinch/pan gesture or the nav follow
-  /// animation) the glide below defers its per-frame pushes and leans on this
-  /// for a low-rate keepalive, so a manual zoom isn't fighting a full symbol
-  /// relayout every frame.
-  DateTime _lastPuckSourcePush = DateTime.fromMillisecondsSinceEpoch(0);
-
-  /// Longest the puck may go without a real source push while the camera is in
-  /// motion. Its on-screen spot is carried by the camera transform meanwhile,
-  /// so this only bounds map-coordinate drift, not visible smoothness.
-  static const int _kPuckMovingKeepaliveMs = 500;
 
   Future<void> _animateMarkerToPosition(
       MapLibreMapController controller,
@@ -1927,7 +1929,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     final totalMs = duration.inMilliseconds;
     final stopwatch = Stopwatch()..start();
     int lastCircleMs = -circleIntervalMs;
-    bool didFirstPush = false;
 
     try {
       while (true) {
@@ -1950,31 +1951,18 @@ class MaplibreMapProvider extends BaseMapProvider {
           lastCircleMs = elapsed;
         }
 
-        // While the camera is moving — a user pinch/pan, or the guided-nav
-        // follow animation — the puck's on-screen position is driven by the
-        // camera transform, not by this source. Pushing the source (and paying
-        // a render-thread symbol-placement pass) every frame in that window is
-        // exactly what makes a hand gesture feel like it lags the fingers.
-        // Skip the push while moving; a keepalive still bounds drift, and both
-        // the final frame and onCameraIdle land the puck exactly.
-        final now = DateTime.now();
-        // Always land the first and last frame of a glide, plus a keepalive
-        // while the camera keeps moving; everything in between yields to the
-        // gesture / follow animation.
-        final mustPush = !didFirstPush ||
-            progress >= 1.0 ||
-            now.difference(_lastPuckSourcePush).inMilliseconds >=
-                _kPuckMovingKeepaliveMs;
-        if (mustPush || !_cameraMovingNow) {
-          didFirstPush = true;
-          _lastPuckSourcePush = now;
-          // Independent sources — push them concurrently so a frame costs one
-          // round trip's worth of wall time, not two chained ones.
-          await Future.wait([
-            _updateUserLocation(controller),
-            if (pushCircle) _setGeoJsonCircle(controller),
-          ]);
-        }
+        // Every frame is pushed, camera moving or not. Skipping pushes while the
+        // camera moves assumed the camera transform carries the puck — true for
+        // a pinch/pan, but on each step renderHere animates the camera *to the
+        // new position* at the same time as this glide: the puck then sat on
+        // its old coordinate for the whole glide and snapped at the end,
+        // reading as a delete-and-recreate instead of a glide.
+        // Independent sources — push them concurrently so a frame costs one
+        // round trip's worth of wall time, not two chained ones.
+        await Future.wait([
+          _updateUserLocation(controller),
+          if (pushCircle) _setGeoJsonCircle(controller),
+        ]);
 
         if (token != _markerAnimationToken) return;
         // progress == 1.0 means the frame just pushed sits exactly on
@@ -2629,7 +2617,8 @@ class MaplibreMapProvider extends BaseMapProvider {
               'properties': {
                 'title': '',
                 'id': marker.id,
-                if (marker.iconName != null || true) 'icon': marker.id,
+                if (marker.iconName != null || true)
+          'icon': _mainIconIds[marker.id] ?? marker.id,
                 'isPriority': marker.priority ?? false,
                 'intractable': marker.properties?["polyId"] != null,
                 // Keep screen-aligned markers on the faceUser (viewport) layer on
@@ -2893,6 +2882,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         // are still registered with the live style and their bytes are reusable
         // by the next render, which is the whole point of keying by content.
         _smallIconIds.clear();
+        _mainIconIds.clear();
+        _markerContentKeys.clear();
         _bakedIconCache.clear();
         await setGeoJsonSource(controller, [], _clusterSourceId);
         await setGeoJsonSource(controller, [], _rotationSourceId);
@@ -3152,7 +3143,19 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// by this much forces neighbouring parts to overlap instead of merely
   /// touch, closing the seam. It's well under furniture scale (chairs are
   /// tens of centimetres), so it isn't visible as size inflation.
-  static const double _partSeamOverlap = 0.01;
+  ///
+  /// Bumped hard on web: this value was tuned against native GLES/Metal
+  /// depth precision. WebGL's depth buffer is materially shallower on a lot
+  /// of browser/GPU combinations (notably ANGLE-backed Chrome on integrated
+  /// GPUs), so the same nudge that reliably breaks the depth tie natively
+  /// can still land inside WebGL's rounding error — which is exactly the
+  /// "furniture renders colorless, flips visible/invisible with camera
+  /// angle" report that only showed up on web. A first doubling (0.01->0.02)
+  /// was confirmed live to still be insufficient on a real device — flicker
+  /// persisted — so this goes straight to 5cm, ~well under a chair's own
+  /// scale (tens of centimetres) and still imperceptible as size inflation,
+  /// to buy real margin instead of nudging by millimetres at a time.
+  static const double _partSeamOverlap = kIsWeb ? 0.05 : 0.01;
 
   /// Parts meant to sit flush against each other (a cushion directly on a
   /// seat base, a tabletop layer on its frame) frequently share the exact
@@ -3170,8 +3173,13 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// the pad per part index guarantees no two parts of the same item can
   /// ever end up with identical padded geometry, without needing to know
   /// which part is meant to sit "inside" which.
+  ///
+  /// Bumped hard on web for the same depth-precision reason as
+  /// [_partSeamOverlap] above — the per-part spread needs to be wider to
+  /// stay outside WebGL's coarser rounding error. Combined with the base
+  /// overlap above, web parts now spread roughly 5cm-8cm apart by index.
   static const int _seamJitterSteps = 6;
-  static const double _seamJitterStep = 0.0015;
+  static const double _seamJitterStep = kIsWeb ? 0.006 : 0.0015;
 
   /// "3dRef" may arrive as a Map or as a JSON-encoded string depending on
   /// how the API serialized the property — accept both.
@@ -3272,42 +3280,119 @@ class MaplibreMapProvider extends BaseMapProvider {
         .whenComplete(() => _furnitureLayerSetup = null);
   }
 
+  /// Retries [action] while it keeps failing with maplibre-gl-js's "Style is
+  /// not done loading" error (`Style._checkLoaded`) — thrown by every
+  /// addSource/addLayer call issued before the *initial* style finishes
+  /// loading (fonts/sprite/style JSON, independent of tiles — a raster
+  /// basemap plus a glyphs URL, both fetched from third-party hosts the app
+  /// doesn't control). Native rarely hits this: native style setup is fast
+  /// and not subject to a browser's network variance for the style JSON,
+  /// glyphs and tiles.
+  ///
+  /// Measured live against release web builds, back to back, on the same
+  /// machine: 'style.load' fired 9.7s after map construction on one run and
+  /// still hadn't fired after 20s on the next — over 2x swing with nothing
+  /// else different. There is no safe short bound here; the timeout below is
+  /// deliberately generous (100 attempts x 600ms = 60s) so it only ever
+  /// trips for a genuinely stuck load, not ordinary variance. Furniture is
+  /// non-critical supplementary content and every failed attempt is a cheap
+  /// synchronous rejection, so waiting costs nothing but time.
+  ///
+  /// Every add call in furniture setup used to have no protection against
+  /// this at all: the first hit bubbled straight to [addFurniture]'s
+  /// catch-and-log, which permanently dropped the furniture layer for the
+  /// rest of the session unless a spurious onStyleLoadedCallback refire (see
+  /// that callback's own doc comment — it is known to fire without an actual
+  /// style swap) happened to retry it by luck. That is what "furniture
+  /// renders sometimes, not other times" on web actually was. A bounded
+  /// retry here closes the race deterministically instead of hoping for the
+  /// lucky refire — and onStyleLoadedCallback's own furniture re-add (the
+  /// event-driven backstop for whenever 'style.load' actually fires) is now
+  /// wrapped in its own try/catch, so even this retry timing out there can't
+  /// take the rest of that callback down with it.
+  Future<T> _retryIfStyleLoading<T>(Future<T> Function() action) async {
+    const maxAttempts = 100;
+    for (var attempt = 1;; attempt++) {
+      try {
+        return await action();
+      } catch (e) {
+        final transient = e.toString().contains('Style is not done loading');
+        if (!transient || attempt >= maxAttempts) rethrow;
+        await Future.delayed(const Duration(milliseconds: 600));
+      }
+    }
+  }
+
   Future<void> _enableFurnitureLayerOnce(
       MapLibreMapController controller) async {
     if (_isFurnitureLayerEnabled) return;
 
-    await controller.addSource(
-      _furnitureSourceId,
-      GeojsonSourceProperties(
-        data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
-        // Furniture parts are centimetre-scale, which puts them right on the
-        // edge of what a tiled GeoJSON source can represent. Two separate
-        // mechanisms erase them, and both have to stay disabled.
-        //
-        // 1. tolerance MUST stay 0. It is not just Douglas-Peucker: for any
-        //    tile below maxzoom, geojson-vt drops a polygon ring outright when
-        //    its area is under (tolerance / (2^z * extent))^2. At z18 that
-        //    threshold is a ~1.4cm square, at z17 a ~2.8cm square — so thin
-        //    parts silently disappear, and reappear once you zoom to maxzoom
-        //    where the tolerance is forced to 0. That is exactly the
-        //    "random parts missing" symptom. Simplification would save nothing
-        //    here anyway: these rings are 4-16 points each.
-        //
-        // 2. maxzoom controls the quantisation grid of the deepest tile, since
-        //    coordinates are rounded to `extent` steps. At the default 18 a
-        //    step is ~3.7cm and a 5cm post collapses to zero area. At 22 a step
-        //    is ~2.3mm, fine enough for anything in these models, while still
-        //    stopping the source from building real tiles for two more zoom
-        //    levels on every pan the way 24 did.
-        maxzoom: 22,
-        tolerance: 0,
-        // Default. Furniture parts are sub-metre, so the doubled 256 buffer
-        // was only duplicating geometry into neighbouring tiles. Buffer only
-        // controls how much neighbouring geometry a tile carries, so lowering
-        // it cannot drop a part — a clipped fill is re-closed at the seam.
-        buffer: 256,
-      ),
-    );
+    // A source that "already exists" is not a failure here — it is proof
+    // the real JS source is fine. onStyleLoadedCallback can refire without
+    // an actual style swap (see that callback's own doc comment), which
+    // unconditionally resets `_isFurnitureLayerEnabled` to false and then
+    // retries this whole setup — even though nothing was really removed.
+    // Before this guard, that retry's addSource call threw
+    // 'Source "furniture-source" already exists', uncaught by
+    // [_retryIfStyleLoading] (it only retries the *style-not-loaded* case),
+    // which aborted the entire function right here: the flags below never
+    // got set back to true, and the extrusion layer's re-adder (registered
+    // further down) never got (re)registered — Dart's bookkeeping was left
+    // permanently out of sync with a map that was actually still fine. This
+    // is the concrete cause behind "furniture visible on one load, not the
+    // next" — confirmed live via exactly this error in a production console
+    // log. Swallowing it here and continuing keeps the two in sync instead.
+    try {
+      await _retryIfStyleLoading(() => controller.addSource(
+        _furnitureSourceId,
+        GeojsonSourceProperties(
+          data: {'type': 'FeatureCollection', 'features': <dynamic>[]},
+          // Furniture parts are centimetre-scale, which puts them right on
+          // the edge of what a tiled GeoJSON source can represent. Two
+          // separate mechanisms erase them, and both have to stay disabled.
+          //
+          // 1. tolerance MUST stay 0. It is not just Douglas-Peucker: for
+          //    any tile below maxzoom, geojson-vt drops a polygon ring
+          //    outright when its area is under (tolerance / (2^z *
+          //    extent))^2. At z18 that threshold is a ~1.4cm square, at z17
+          //    a ~2.8cm square — so thin parts silently disappear, and
+          //    reappear once you zoom to maxzoom where the tolerance is
+          //    forced to 0. That is exactly the "random parts missing"
+          //    symptom. Simplification would save nothing here anyway:
+          //    these rings are 4-16 points each.
+          //
+          // 2. maxzoom controls the quantisation grid of the deepest tile,
+          //    since coordinates are rounded to `extent` steps. At the
+          //    default 18 a step is ~3.7cm and a 5cm post collapses to zero
+          //    area. At 22 a step is ~2.3mm, fine enough for anything in
+          //    these models, while still stopping the source from building
+          //    real tiles for two more zoom levels on every pan the way 24
+          //    did.
+          maxzoom: 22,
+          tolerance: 0,
+          // Cut way down from the previous 256. That default duplicates
+          // every feature within `buffer` tile-units of a boundary into the
+          // neighbouring tile too — harmless for the flat 2D fill (drawing
+          // the same opaque area twice is invisible), but for the 3D
+          // extrusion two bit-identical copies of the same polygon is the
+          // worst case of the exact depth-buffer tie [_partSeamOverlap]
+          // documents: unlike two different parts (which the eps/jitter
+          // above now separates), a tile-duplicated copy of the SAME part
+          // has IDENTICAL geometry to its twin, so no amount of per-part
+          // jitter helps it — only cutting the duplication itself does. Any
+          // furniture item near a tile edge was hitting exactly this,
+          // independent of the seam fix, which is why flicker persisted on
+          // some items and not others. Buffer only controls how much
+          // neighbouring geometry a tile carries, so lowering it cannot
+          // drop a part — a clipped fill is re-closed at the seam — it only
+          // shrinks the boundary strip where duplication (and now,
+          // extrusion z-fighting) can happen at all.
+          buffer: 8,
+        ),
+      ));
+    } catch (e) {
+      if (!e.toString().contains('already exists')) rethrow;
+    }
 
     // Drop any survivor before adding. `_isFurnitureLayerEnabled` is reset in
     // onStyleLoadedCallback on the assumption the style was replaced and took
@@ -3317,16 +3402,19 @@ class MaplibreMapProvider extends BaseMapProvider {
     // onStyleLoaded call site has no catch. removeLayer no-ops when the layer is
     // absent, so this is free in the normal case.
     //
-    // addSource above needs no equivalent: the plugin already logs
-    // "source with id 'furniture-source' already exists, skipping" and carries
-    // on rather than throwing.
+    // addSource above WAS assumed to need no equivalent, on the belief that
+    // the plugin logs "source with id 'furniture-source' already exists,
+    // skipping" and carries on rather than throwing. Confirmed false live,
+    // on web, via a production console log: it throws
+    // 'Error: Source "furniture-source" already exists.', which is exactly
+    // the addSource call's own try/catch further up now exists to swallow.
     try {
       await controller.removeLayer(_furnitureFillLayerId);
     } catch (_) {}
 
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
-    await controller.addFillLayer(
+    await _retryIfStyleLoading(() => controller.addFillLayer(
       _furnitureSourceId,
       _furnitureFillLayerId,
       _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
@@ -3341,7 +3429,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillOpacity: op(null),
       )),
       minzoom: _furnitureMinZoom,
-    );
+    ));
 
     _isFurnitureLayerEnabled = true;
     await _applyLayerPolicy(controller, only: [_furnitureFillLayerId]);
@@ -3364,7 +3452,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     try {
       await controller.removeLayer(_furnitureLayerId);
     } catch (_) {}
-    await controller.addFillExtrusionLayer(
+    await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
       _furnitureSourceId,
       _furnitureLayerId,
       _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3379,13 +3467,13 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillExtrusionOpacity: op(1.0),
       )),
       minzoom: _furnitureMinZoom,
-    );
+    ));
     _isFurnitureExtrusionAdded = true;
     // Same plugin gap as the polygon extrusions: setLayerProperties rejects
     // fill-extrusion layers, so policy changes have to rebuild this one.
     _layerReAdders[_furnitureLayerId] = () async {
       await controller.removeLayer(_furnitureLayerId);
-      await controller.addFillExtrusionLayer(
+      await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
         _furnitureSourceId,
         _furnitureLayerId,
         _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3396,7 +3484,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               fillExtrusionOpacity: op(1.0),
             )),
         minzoom: _furnitureMinZoom,
-      );
+      ));
     };
     await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
   }
@@ -4224,6 +4312,53 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// markers still use (their ids are already content-keyed).
   final Map<String, String> _smallIconIds = {};
 
+  /// Content key per marker id, memoised on first use.
+  ///
+  /// Memoised rather than recomputed because [_registerBakedIcon] writes
+  /// `marker.anchor` after the bake, and the key reads the anchor the bake
+  /// used. Recomputing on a later call would read the mutated value and
+  /// produce a different key for the same image.
+  final Map<String, String> _markerContentKeys = {};
+
+  /// Image id each marker's main bake was actually registered under. Read when
+  /// building the feature, so the `icon` property points at the shared upload
+  /// rather than the marker id.
+  final Map<String, String> _mainIconIds = {};
+
+  /// Main image ids already handed to addImage() in the current style session.
+  /// Cleared on style reload alongside [_registeredSmallIconIds].
+  final Set<String> _registeredMainIconIds = {};
+
+  /// What a marker's main bake actually depends on.
+  ///
+  /// Mirrors the inputs the bake reads, in the same spirit as the label-less
+  /// `smallIconId` below it. Two markers with equal keys produce byte-identical
+  /// composites, so they can share one registration: on a venue like
+  /// ApolloHospital that collapses 1,444 markers to roughly 550 uploads, the
+  /// rest being repeats such as 165 "Sitting Area" pins.
+  String _markerContentKey(GeoJsonMarker marker) {
+    final existing = _markerContentKeys[marker.id];
+    if (existing != null) return existing;
+    final bool isGallery = marker.assetPath?.contains('Gallery.png') ?? false;
+    final Size size = isGallery
+        ? const Size(62, 62)
+        : (marker.imageSize ?? const Size(85, 85));
+    final double fontSize =
+        isGallery ? 14.0 : (marker.properties?["fontSize"] ?? 14.5);
+    final Offset anchor =
+        marker.renderAnchor ?? marker.anchor ?? const Offset(0.5, 0.5);
+    final String text = marker.textVisibility ? (marker.title ?? "") : "";
+    // The branch discriminators matter: a museum POI and a pill marker with the
+    // same asset and label are different pictures.
+    final key = 'main|${marker.customRendering}'
+        '|${marker.properties?['poiRef'] != null}'
+        '|${marker.properties?['pathStop'] ?? false}'
+        '|${marker.assetPath}|${size.width}x${size.height}'
+        '|$fontSize|$isGallery|${anchor.dx},${anchor.dy}|$text';
+    _markerContentKeys[marker.id] = key;
+    return key;
+  }
+
   /// Bytes behind each id in [_registeredSmallIconIds], kept across style
   /// reloads so the shared label-less icons can be re-uploaded without being
   /// re-baked. Every registered id always has an entry here, because an id only
@@ -4235,8 +4370,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Keyed on the inputs that change what gets drawn, not just the id.
   final Map<String, _BakedMarkerIcon> _bakedIconCache = {};
 
-  String _bakedIconKey(GeoJsonMarker marker) =>
-      '${marker.id}|${marker.textVisibility}|${marker.title ?? ""}';
+  /// Keyed by content, not by marker: the second marker with the same picture
+  /// reuses the first one's bytes instead of re-fetching and re-baking them.
+  String _bakedIconKey(GeoJsonMarker marker) => _markerContentKey(marker);
 
   bool _isAnimalMarker(GeoJsonMarker marker) =>
       marker.customRendering && marker.properties?['animalRef'] != null;
@@ -4673,15 +4809,19 @@ class MaplibreMapProvider extends BaseMapProvider {
         : (_registeredSmallIconIds.contains(baked.smallIconId)
             ? null
             : _smallIconBytes[baked.smallIconId]);
+    final String mainId = _markerContentKey(marker);
+    final bool mainAlreadyUp = _registeredMainIconIds.contains(mainId);
     await Future.wait([
-      _addImageSafe(controller, _dbgReg(marker.id), baked.main),
+      if (!mainAlreadyUp) _addImageSafe(controller, _dbgReg(mainId), baked.main),
       if (smallBytes != null)
         _addImageSafe(controller, _dbgReg(baked.smallIconId), smallBytes),
-      if (baked.selected != null)
+      if (baked.selected != null && !mainAlreadyUp)
         _addImageSafe(
-            controller, _dbgReg("${marker.id}-selected"), baked.selected!),
+            controller, _dbgReg("$mainId-selected"), baked.selected!),
     ]);
+    if (!mainAlreadyUp) _registeredMainIconIds.add(mainId);
     if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
+    _mainIconIds[marker.id] = mainId;
     _smallIconIds[marker.id] = baked.smallIconId;
     _bakedIconCache[_bakedIconKey(marker)] = baked;
     marker.anchor = baked.anchor;
@@ -5970,7 +6110,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           visibility: _visibility(_selectedPlainPolygonLayerId),
           fillColor: "#4CAF50",
           fillOpacity: op(0.6),
-          fillOutlineColor: "#2E7D32",
+          fillOutlineColor: "#4CAF50",
         )),
         filter: [
           "all",
@@ -5978,29 +6118,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "isSelected"]],
         ],
         enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
-      );
-
-      // Stroke for the flat selected polygon. The height filter keeps it to the
-      // 2D rendering only; in 3D the selection is drawn by the extrusion layer.
-      await controller.addLineLayer(
-        _polygonSourceId,
-        _selectedPlainPolygonStrokeLayerId,
-        _layerProps(_selectedPlainPolygonStrokeLayerId,
-            (op) => LineLayerProperties(
-          visibility: _visibility(_selectedPlainPolygonStrokeLayerId),
-          lineColor: "#1B5E20",
-          lineWidth: 2.5,
-          lineOpacity: op(1.0),
-          lineJoin: "round",
-          lineCap: "round",
-        )),
-        filter: [
-          "all",
-          ["!", ["has", "height"]],
-          ["to-boolean", ["get", "isSelected"]],
-        ],
-        enableInteraction: false,
         belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
       );
 

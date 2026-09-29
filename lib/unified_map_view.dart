@@ -5,6 +5,7 @@ library unified_map_view;
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/adapters.dart';
 import 'package:unified_map_view/src/apis/BuildingByVenue.dart';
+import 'package:unified_map_view/src/apis/FurnitureAPI.dart';
 import 'package:unified_map_view/src/apis/GlobalGeoJSONVenueAPI.dart';
 import 'package:unified_map_view/src/config.dart';
 import 'package:unified_map_view/src/utils/perf_trace.dart';
@@ -93,6 +94,36 @@ class UnifiedMapViewPackage {
   static void clearVenueGeoJson([String? venueName]) =>
       GlobalGeoJSONVenueAPI.invalidate(venueName);
 
+  /// Supplies the venue's buildings response (`/secured/building/get/venue`) so
+  /// the package makes no request for it. Call before [initialize] or before a
+  /// map loads [venueName]. Hosts that already fetch the same venue — the SDK
+  /// posts the identical body to the identical endpoint — hand it over here
+  /// instead of both paying for it.
+  static void setVenueBuildings(String venueName, Map<String, dynamic> data) =>
+      BuildingByVenue.provide(venueName, data);
+
+  /// The venue's raw buildings response (`/secured/building/get/venue`), from
+  /// the one load this package shares per venue per session — the same one
+  /// the map renders from. Hosts that need the same response read it here
+  /// instead of posting the identical request themselves. Call after
+  /// [initialize], which opens the cache the load falls back to offline.
+  static Future<Map<String, dynamic>> getVenueBuildingsResponse(
+          String venueName) =>
+      BuildingByVenue().fetchResponse(venueName);
+
+  /// Forgets the shared venue buildings so the next load fetches them again.
+  static void clearVenueBuildings([String? venueName]) =>
+      BuildingByVenue.invalidate(venueName);
+
+  /// Supplies the data version the venue's cached 3D models
+  /// (`/secured/get-all-threed-models`) are checked against, so the package
+  /// makes no versions request of its own. While [version] is pending, a map
+  /// that opens waits for it (up to 5s) before deciding. The models are served
+  /// from the cache when it matches the version they were stored with, and
+  /// re-fetched when it differs. Without a version they are always fetched.
+  static void setFurnitureVersion(String venueName, Future<String?> version) =>
+      FurnitureAPI.provideVersion(venueName, version);
+
   static Set<String>? _allowedBuildingIds;
 
   /// The buildings the venue is restricted to, or null to render all of them.
@@ -129,6 +160,8 @@ class UnifiedMapViewPackage {
       _registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
       await PerfTrace.timeAsync('openBox GlobalGeoJSONVenue',
           () => Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile'));
+      await PerfTrace.timeAsync('openBox Furniture',
+          () => Hive.openBox(FurnitureAPI.boxName));
       _initialized = true;
 
       await PerfTrace.timeAsync('initialize: fetchBuildingIDS',
