@@ -1829,18 +1829,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// pan stutter during guided navigation.
   bool _userMarkerAnimating = false;
 
-  /// Wall-clock time the puck's GeoJSON source was last pushed to the map.
-  /// While the camera is moving (a pinch/pan gesture or the nav follow
-  /// animation) the glide below defers its per-frame pushes and leans on this
-  /// for a low-rate keepalive, so a manual zoom isn't fighting a full symbol
-  /// relayout every frame.
-  DateTime _lastPuckSourcePush = DateTime.fromMillisecondsSinceEpoch(0);
-
-  /// Longest the puck may go without a real source push while the camera is in
-  /// motion. Its on-screen spot is carried by the camera transform meanwhile,
-  /// so this only bounds map-coordinate drift, not visible smoothness.
-  static const int _kPuckMovingKeepaliveMs = 500;
-
   Future<void> _animateMarkerToPosition(
       MapLibreMapController controller,
       String id,
@@ -1920,7 +1908,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     final totalMs = duration.inMilliseconds;
     final stopwatch = Stopwatch()..start();
     int lastCircleMs = -circleIntervalMs;
-    bool didFirstPush = false;
 
     try {
       while (true) {
@@ -1943,31 +1930,18 @@ class MaplibreMapProvider extends BaseMapProvider {
           lastCircleMs = elapsed;
         }
 
-        // While the camera is moving — a user pinch/pan, or the guided-nav
-        // follow animation — the puck's on-screen position is driven by the
-        // camera transform, not by this source. Pushing the source (and paying
-        // a render-thread symbol-placement pass) every frame in that window is
-        // exactly what makes a hand gesture feel like it lags the fingers.
-        // Skip the push while moving; a keepalive still bounds drift, and both
-        // the final frame and onCameraIdle land the puck exactly.
-        final now = DateTime.now();
-        // Always land the first and last frame of a glide, plus a keepalive
-        // while the camera keeps moving; everything in between yields to the
-        // gesture / follow animation.
-        final mustPush = !didFirstPush ||
-            progress >= 1.0 ||
-            now.difference(_lastPuckSourcePush).inMilliseconds >=
-                _kPuckMovingKeepaliveMs;
-        if (mustPush || !_cameraMovingNow) {
-          didFirstPush = true;
-          _lastPuckSourcePush = now;
-          // Independent sources — push them concurrently so a frame costs one
-          // round trip's worth of wall time, not two chained ones.
-          await Future.wait([
-            _updateUserLocation(controller),
-            if (pushCircle) _setGeoJsonCircle(controller),
-          ]);
-        }
+        // Every frame is pushed, camera moving or not. Skipping pushes while the
+        // camera moves assumed the camera transform carries the puck — true for
+        // a pinch/pan, but on each step renderHere animates the camera *to the
+        // new position* at the same time as this glide: the puck then sat on
+        // its old coordinate for the whole glide and snapped at the end,
+        // reading as a delete-and-recreate instead of a glide.
+        // Independent sources — push them concurrently so a frame costs one
+        // round trip's worth of wall time, not two chained ones.
+        await Future.wait([
+          _updateUserLocation(controller),
+          if (pushCircle) _setGeoJsonCircle(controller),
+        ]);
 
         if (token != _markerAnimationToken) return;
         // progress == 1.0 means the frame just pushed sits exactly on
