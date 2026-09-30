@@ -1416,10 +1416,12 @@ class MaplibreMapProvider extends BaseMapProvider {
       MarkerSelectionAnimationStyle.none;
 
   /// Whether tapping a plain marker glides the camera in to it (zoom ~19).
-  /// Default `false`: a marker tap just selects + enlarges it in place, with no
-  /// camera movement. Pure-polygon taps still fit the polygon, and animal
-  /// markers with an enclosure still do their focus-then-pull-back sequence.
-  bool zoomToMarkerOnSelect = false;
+  /// Default `true`: a marker tap centers and zooms the camera on it (or fits
+  /// its polygon when it has one). Set to `false` to just select + enlarge it
+  /// in place with no camera movement. Pure-polygon taps always fit the
+  /// polygon, and animal markers with an enclosure always do their
+  /// focus-then-pull-back sequence.
+  bool zoomToMarkerOnSelect = true;
 
   Timer? _circleAnimationTimer;
   bool _circleExpanding = true;
