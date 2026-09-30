@@ -139,7 +139,7 @@ class UnifiedMapViewPackage {
         (normalized == null || normalized.isEmpty) ? null : normalized;
   }
 
-  static void _registerAdapter(TypeAdapter adapter) {
+  static void _registerAdapter<T>(TypeAdapter<T> adapter) {
     if (Hive.isAdapterRegistered(adapter.typeId)) return;
     Hive.registerAdapter(adapter);
   }
