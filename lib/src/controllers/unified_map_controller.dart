@@ -1027,6 +1027,14 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
+    // With a path drawn, the floor dial lists floors from every building on the
+    // route, so the tapped floor may not even exist in [buildingID]. Switch the
+    // other route buildings that have path on that floor too, otherwise the path
+    // is drawn over a building still showing its previous floor plan.
+    for (final bid in _annotationController.buildingsWithPathOnFloor(floor)) {
+      if (bid == buildingID) continue;
+      await _annotationController.changeBuildingFloor(bid, floor);
+    }
     await _annotationController.annotatePath(floor);
     notifyListeners();
   }

@@ -47,6 +47,16 @@ class AnnotationController{
   Map<String, int> get selectedFloor => _venueData.selectedFloor;
   List<int> get floorsContainingPath => extractFloorsContainingPath(_path).toList();
 
+  /// Buildings (excluding the campus) whose drawn path has a segment on [floor].
+  List<String> buildingsWithPathOnFloor(int floor) {
+    if (_path == null) return [];
+    final campusId = _venueData.campusBuildingId;
+    return _path!.entries
+        .where((e) => e.key != campusId && e.value.containsKey(floor))
+        .map((e) => e.key)
+        .toList();
+  }
+
   int getFloorRenderLevel(int floor, String bid) => _venueData.getFloorRenderLevel(floor, bid);
 
   Map<String, Map<int, List<List<Cell>>>>? _path;
