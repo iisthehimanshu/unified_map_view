@@ -825,13 +825,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                   final polygonId = _extractPolygonIdFromTap(id);
                   if (polygonId != null &&
                       !polygonId.toLowerCase().contains("boundary")) {
-                    GeoJsonPolygon? matched;
-                    for (final p in _polygons) {
-                      if (p.id.contains(polygonId)) {
-                        matched = p;
-                        break;
-                      }
-                    }
+                    final matched = _findPolygonById(polygonId, polygonId);
                     _selectFromTap(
                       controller,
                       polygonId,
@@ -6901,6 +6895,28 @@ class MaplibreMapProvider extends BaseMapProvider {
     return null;
   }
 
+  /// Whether the composite marker key [markerId] names [id] exactly, either as
+  /// the marker's own feature id or as the polygon it is attached to.
+  bool _markerKeyMatches(String markerId, String id) {
+    final keyMap = GeoJsonUtils.extractKeyValueMap(markerId);
+    return keyMap["polyId"] == id || keyMap["id"] == id;
+  }
+
+  /// Resolves the marker a selection id refers to. Exact first, for the same
+  /// reason as [_findPolygonById]: copied features keep the source id as a
+  /// suffix (`<timestamp>-<timestamp>-<sourceId>`), so a `contains` test for
+  /// the source's id also matches every copy and the venue ordering decides
+  /// which one wins.
+  GeoJsonMarker? _findMarkerById(String id) {
+    for (final m in _symbols) {
+      if (_markerKeyMatches(m.id, id)) return m;
+    }
+    for (final m in _symbols) {
+      if (m.id.contains(id)) return m;
+    }
+    return null;
+  }
+
   String? _extractPolygonIdFromTap(String key) {
     var keyMap = GeoJsonUtils.extractKeyValueMap(key);
     if (keyMap["polyId"] != null) return keyMap["polyId"];
@@ -6982,7 +6998,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> selectLocation(controller, String polyID) async {
     final currentMarker = selectedLocation?.marker as GeoJsonMarker?;
-    if (selectedLocation?.polyID == polyID || (currentMarker != null && currentMarker.id.contains(polyID))) return;
+    if (selectedLocation?.polyID == polyID || (currentMarker != null && _markerKeyMatches(currentMarker.id, polyID))) return;
     if (controller is! MapLibreMapController) {
       print('Error: Invalid controller type');
       return;
@@ -7001,10 +7017,8 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       try {
         if (_symbols.isNotEmpty) {
-          marker = _symbols.firstWhere(
-                (m) => m.id.contains(polyID),
-            orElse: () => throw Exception('Marker not found'),
-          );
+          marker = _findMarkerById(polyID);
+          if (marker == null) throw Exception('Marker not found');
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
