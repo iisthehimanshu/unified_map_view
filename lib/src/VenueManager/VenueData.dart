@@ -85,6 +85,10 @@ class VenueData{
   /// previous first-match linear scan did.
   final Map<String, Map<int, int?>> _renderLevelToFloorNumber = {};
 
+  /// buildingId -> (actual floor level -> floorName), from `floorConfigs`.
+  /// The level is `floorRenderLevel`, or `floorNumber` when that is unset.
+  final Map<String, Map<int, String>> _floorLevelToFloorName = {};
+
   /// floorNumber -> initialOrientation, from `floorConfigs`.
   final Map<int, double> _floorOrientations = {};
 
@@ -101,6 +105,18 @@ class VenueData{
         _renderLevelToFloorNumber
             .putIfAbsent(buildingId, () => {})
             .putIfAbsent(renderLevel, () => f.floorNumber);
+      }
+
+      // Without a render level the actual floor level is `floorNumber`.
+      final nameLevel = renderLevel ?? f.floorNumber;
+      final floorName = f.floorName?.trim();
+      if (buildingId != null &&
+          nameLevel != null &&
+          floorName != null &&
+          floorName.isNotEmpty) {
+        _floorLevelToFloorName
+            .putIfAbsent(buildingId, () => {})
+            .putIfAbsent(nameLevel, () => floorName);
       }
 
       final floorNumber = f.floorNumber;
@@ -251,6 +267,13 @@ class VenueData{
   /// controller notification), so this must stay a plain map lookup.
   int getFloorRenderLevel(int floor, String bid) {
     return _renderLevelToFloorNumber[bid]?[floor] ?? floor;
+  }
+
+  /// The `floorName` from the floor config matching the actual [floor] level
+  /// of [bid], or null when the config has none. Plain map lookup, like
+  /// [getFloorRenderLevel], since it is also called from widget builds.
+  String? getFloorName(int floor, String bid) {
+    return _floorLevelToFloorName[bid]?[floor];
   }
 
   List<GeoJsonFeature> setBuildingFloor({required String buildingId, required int floor}){

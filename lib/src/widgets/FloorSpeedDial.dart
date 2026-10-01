@@ -81,9 +81,12 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
 
     return floors.map((floor) {
       final isSelected = controller.focusBuildingSelectedFloor == floor;
+      final floorName = controller.getFloorName(floor, controller.focusedBuilding ?? "");
 
       return SpeedDialChild(
         shape: const CircleBorder(),
+        // Floor name from the API sits as a banner to the left of the number.
+        labelWidget: floorName != null ? _floorNameLabel(floorName) : null,
         child: _floorLabel(
           floor, controller.focusedBuilding??"",
           color: isSelected ? Colors.white : Colors.black,
@@ -98,7 +101,14 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
     }).toList();
   }
 
-  Widget _buildingNameLabel(String name) {
+  Widget _buildingNameLabel(String name) => _bannerLabel(name);
+
+  Widget _floorNameLabel(String name) => Padding(
+        padding: const EdgeInsets.only(right: 12),
+        child: _bannerLabel(name, fontWeight: FontWeight.w500),
+      );
+
+  Widget _bannerLabel(String text, {FontWeight fontWeight = FontWeight.bold}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
@@ -113,9 +123,9 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
         ],
       ),
       child: Text(
-        name,
-        style: const TextStyle(
-          fontWeight: FontWeight.bold,
+        text,
+        style: TextStyle(
+          fontWeight: fontWeight,
           color: Colors.black,
         ),
       ),

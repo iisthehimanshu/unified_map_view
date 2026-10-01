@@ -58,6 +58,7 @@ class AnnotationController{
   }
 
   int getFloorRenderLevel(int floor, String bid) => _venueData.getFloorRenderLevel(floor, bid);
+  String? getFloorName(int floor, String bid) => _venueData.getFloorName(floor, bid);
 
   Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
