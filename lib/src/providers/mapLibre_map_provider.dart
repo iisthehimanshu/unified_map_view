@@ -3313,6 +3313,55 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Layers that must always draw on top of furniture: every marker/label
+  /// symbol layer, the route/polyline layers and the user-location layers.
+  late final Set<String> _aboveFurnitureLayerIds = {
+    _polylineLayerId,
+    _pathOutlineLayerId,
+    _pathSolidLayerId,
+    _pathArrowLayerId,
+    _pathDashedLayerId,
+    _greyOverlayLayerId,
+    _pathBigArrowLayerId,
+    _pathShineLayerId,
+    _turnBubbleLayerId,
+    _dotMarkerLayerId,
+    _normalTextMarkerLayerId,
+    '$_normalIconMarkerLayerId-withSectionId',
+    '$_normalIconMarkerLayerId-withoutSectionId',
+    _customRenderingMarkerLayerId,
+    _overlapOverrideMarkerLayerId,
+    _fixedMarkerLayerId,
+    _priorityMarkerLayerId,
+    _selectedMarkerLayerId,
+    _animatedMarkerLayerId,
+    _sectionMarkerLayerId,
+    _subSectionMarkerLayerId,
+    _patchAboveMarkerLayerId,
+    _rotationMarkerLayerId,
+    _normalCircleLayerId,
+  };
+
+  /// `belowLayerId` anchor for the furniture layers: the lowest layer in the
+  /// current stack that has to stay above furniture.
+  ///
+  /// Furniture is set up late (after the marker/polyline layers already
+  /// exist), so adding it with no anchor put it at the very top of the stack.
+  /// Layer order wins over depth for symbols, so both the flat 2D fill and
+  /// the 3D extrusion were painted over markers (lift, stairs, ...) sitting
+  /// on or near a piece of furniture. Returns null — add on top, as before —
+  /// when none of those layers exist yet; any added later land above anyway.
+  Future<String?> _furnitureBelowLayerId(
+      MapLibreMapController controller) async {
+    try {
+      final ids = await controller.getLayerIds();
+      for (final id in ids) {
+        if (_aboveFurnitureLayerIds.contains(id)) return id as String;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> _enableFurnitureLayerOnce(
       MapLibreMapController controller) async {
     if (_isFurnitureLayerEnabled) return;
@@ -3404,7 +3453,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
-    await _retryIfStyleLoading(() => controller.addFillLayer(
+    await _retryIfStyleLoading(() async => controller.addFillLayer(
       _furnitureSourceId,
       _furnitureFillLayerId,
       _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
@@ -3419,6 +3468,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillOpacity: op(null),
       )),
       minzoom: _furnitureMinZoom,
+      belowLayerId: await _furnitureBelowLayerId(controller),
     ));
 
     _isFurnitureLayerEnabled = true;
@@ -3442,7 +3492,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     try {
       await controller.removeLayer(_furnitureLayerId);
     } catch (_) {}
-    await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
+    await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
       _furnitureSourceId,
       _furnitureLayerId,
       _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3457,13 +3507,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillExtrusionOpacity: op(1.0),
       )),
       minzoom: _furnitureMinZoom,
+      belowLayerId: await _furnitureBelowLayerId(controller),
     ));
     _isFurnitureExtrusionAdded = true;
     // Same plugin gap as the polygon extrusions: setLayerProperties rejects
     // fill-extrusion layers, so policy changes have to rebuild this one.
     _layerReAdders[_furnitureLayerId] = () async {
       await controller.removeLayer(_furnitureLayerId);
-      await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
+      await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
         _furnitureSourceId,
         _furnitureLayerId,
         _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3474,6 +3525,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               fillExtrusionOpacity: op(1.0),
             )),
         minzoom: _furnitureMinZoom,
+        belowLayerId: await _furnitureBelowLayerId(controller),
       ));
     };
     await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
