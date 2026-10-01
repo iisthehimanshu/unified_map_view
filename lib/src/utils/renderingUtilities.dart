@@ -303,6 +303,19 @@ class RenderingUtilities{
     }
   }
 
+  /// Shorter side, in meters, of the smallest rectangle (any orientation)
+  /// that encloses [polygon]. Null for a degenerate polygon.
+  double? shortestSideMeters(List<MapLocation> polygon) {
+    if (polygon.length < 3) return null;
+    final centroid = _getCentroid(polygon);
+    final hull = _convexHull(
+        polygon.map((p) => _latLngToLocal(p, centroid)).toList());
+    if (hull.length < 3) return null;
+    final rect = _minAreaRectangle(hull);
+    final side = min(rect.width, rect.height);
+    return side.isFinite && side > 0 ? side : null;
+  }
+
   RectangleResult findBestFitRectangleBearing(List<MapLocation> polygon) {
     if (polygon.length < 3) {
       throw ArgumentError('Polygon must have at least 3 points');
