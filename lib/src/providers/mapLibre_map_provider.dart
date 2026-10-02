@@ -3609,6 +3609,12 @@ class MaplibreMapProvider extends BaseMapProvider {
     // "polygon" -> an explicit footprint given as a "points" list of [x, z]
     // corners in local metres, relative to the part centre. Used for shells
     // whose outline is not a simple rectangle (e.g. an MRI housing body).
+    //
+    // The second coordinate runs opposite to "oz": the outline is authored
+    // as a flat 2D shape that is then laid down onto the floor, which turns
+    // its +y into -z. Adding it un-negated put the outline back-to-front
+    // against the model's box/cylinder parts (a chair's shell facing away
+    // from its own legs).
     if (shape == 'polygon') {
       final pts = p['points'] as List?;
       if (pts == null || pts.isEmpty) return const [];
@@ -3616,7 +3622,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           .whereType<List>()
           .map<List<double>>((pt) => [
                 ox + (double.tryParse('${pt[0]}') ?? 0.0),
-                oz + (double.tryParse('${pt.length > 1 ? pt[1] : 0}') ?? 0.0),
+                oz - (double.tryParse('${pt.length > 1 ? pt[1] : 0}') ?? 0.0),
               ])
           .toList();
     }
