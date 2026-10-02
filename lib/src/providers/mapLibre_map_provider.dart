@@ -3556,8 +3556,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           : (double.tryParse('${p['h'] ?? 0}') ?? 0.0);
       final oy = double.tryParse('${p['oy'] ?? 0}') ?? 0.0;
 
-      final eps = _partSeamOverlap +
-          (partIndex % _seamJitterSteps) * _seamJitterStep;
+      // final eps = _partSeamOverlap +
+      //     (partIndex % _seamJitterSteps) * _seamJitterStep;
+
+      final eps = 0.0;
+
 
       final localCorners = _footprintFor(p, eps);
       if (localCorners.isEmpty) continue;
