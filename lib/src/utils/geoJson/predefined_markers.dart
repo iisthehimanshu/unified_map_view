@@ -50,10 +50,9 @@ class PredefinedMarkers{
   static GeoJsonMarker getUserMarker(MapLocation location, String id,
       {UserMarkerStyle? style}){
     final bool directional = HeadingSource.isDirectional;
-    // Size is a rendering concern, not a directional one: web draws the puck at
-    // half scale either way.
-    final Size defaultSize =
-        kIsWeb ? const Size(17.5, 17.5) : const Size(35, 35);
+    final Size defaultSize = (kIsWeb && !directional)
+        ? const Size(17.5, 17.5)
+        : const Size(35, 35);
     return GeoJsonMarker(
         id: id,
         position: location,

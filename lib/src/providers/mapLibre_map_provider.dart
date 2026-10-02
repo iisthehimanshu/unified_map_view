@@ -829,13 +829,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                   final polygonId = _extractPolygonIdFromTap(id);
                   if (polygonId != null &&
                       !polygonId.toLowerCase().contains("boundary")) {
-                    GeoJsonPolygon? matched;
-                    for (final p in _polygons) {
-                      if (p.id.contains(polygonId)) {
-                        matched = p;
-                        break;
-                      }
-                    }
+                    final matched = _findPolygonById(polygonId, polygonId);
                     _selectFromTap(
                       controller,
                       polygonId,
@@ -1420,10 +1414,12 @@ class MaplibreMapProvider extends BaseMapProvider {
       MarkerSelectionAnimationStyle.none;
 
   /// Whether tapping a plain marker glides the camera in to it (zoom ~19).
-  /// Default `false`: a marker tap just selects + enlarges it in place, with no
-  /// camera movement. Pure-polygon taps still fit the polygon, and animal
-  /// markers with an enclosure still do their focus-then-pull-back sequence.
-  bool zoomToMarkerOnSelect = false;
+  /// Default `true`: a marker tap centers and zooms the camera on it (or fits
+  /// its polygon when it has one). Set to `false` to just select + enlarge it
+  /// in place with no camera movement. Pure-polygon taps always fit the
+  /// polygon, and animal markers with an enclosure always do their
+  /// focus-then-pull-back sequence.
+  bool zoomToMarkerOnSelect = true;
 
   Timer? _circleAnimationTimer;
   bool _circleExpanding = true;
@@ -1534,6 +1530,13 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (matches.isEmpty) return;
     final marker = matches.first;
     if (marker.assetPath == null) return;
+    // A logo is sized to its booth by the resting layer's zoom curve; the
+    // animated layer draws at a flat size and would blow it up to the full
+    // bake. It stays put instead.
+    if (marker.isExhibitorLogo) {
+      _animatingMarkerId = null;
+      return;
+    }
 
     // Awaited: static icon must be confirmed hidden before the animated
     // layer starts drawing, otherwise both are visible for a frame or two.
@@ -1583,7 +1586,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                 // the whole tap animation instead of growing/shrinking.
                 'icon': _isAnimalMarker(marker)
                     ? _animalDisplayIconId(marker)
-                    : marker.id,
+                    : (_mainIconIds[marker.id] ?? marker.id),
                 'iconScaleFactor': scale,
                 'iconShake': shakeDeg,
                 'labelScale': labelScale,
@@ -2236,7 +2239,10 @@ class MaplibreMapProvider extends BaseMapProvider {
               ],
             },
             'properties': {
-              'title': marker.textVisibility
+              // An exhibitor booth shows its logo instead of its name, so the
+              // name is only drawn when the logo failed to register.
+              'title': (marker.textVisibility ||
+                      (marker.isExhibitorLogo && !_hasUsableIcon(marker)))
                   ? creator.formatText(
                   marker.title ?? "", TextFormat.smartWrap)
                   : '',
@@ -2247,9 +2253,12 @@ class MaplibreMapProvider extends BaseMapProvider {
               // MapLibre then draws the label with no icon. Dropping the property
               // routes it to the text layer, which is what it actually is.
               if (_hasUsableIcon(marker))
+                // Baked markers are registered under their shared content
+                // key, not the marker id (see _registerBakedIcon); plain icon
+                // markers have no entry and keep the marker id.
                 'icon': _isAnimalMarker(marker)
                     ? _animalDisplayIconId(marker)
-                    : marker.id,
+                    : (_mainIconIds[marker.id] ?? marker.id),
               // Image id for the zoomed-out (label-less) variant. Shared between
               // every marker with the same photo and pill geometry, so ~190
               // byte-identical uploads collapse to one per distinct photo.
@@ -2270,7 +2279,14 @@ class MaplibreMapProvider extends BaseMapProvider {
               'subSection': marker.properties?['type'] == "Sub Section",
               'sectionId': hasSectionId,
               'boundary':marker.properties?["type"]=="Boundary",
-              'isSelected': marker.id == selectedMarkerId,
+              // A selected logo stays in the resting layer: the selected layer
+              // draws at a flat, zoom-independent size, which would detach the
+              // logo from the booth it is fitted to. The booth polygon still
+              // highlights.
+              'isSelected': marker.id == selectedMarkerId &&
+                  !(marker.isExhibitorLogo && _hasUsableIcon(marker)),
+              if (marker.isExhibitorLogo && _hasUsableIcon(marker))
+                'logoScale': _exhibitorLogoScale(marker),
               'customRendering':marker.customRendering,
               // POI markers bake a separate '<id>-selected' highlight image; this
               // flag tells the selected-marker layer to use it.
@@ -2884,6 +2900,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _smallIconIds.clear();
         _mainIconIds.clear();
         _markerContentKeys.clear();
+        _logoSideMeters.clear();
         _bakedIconCache.clear();
         await setGeoJsonSource(controller, [], _clusterSourceId);
         await setGeoJsonSource(controller, [], _rotationSourceId);
@@ -4822,7 +4839,11 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (!mainAlreadyUp) _registeredMainIconIds.add(mainId);
     if (smallBytes != null) _registeredSmallIconIds.add(baked.smallIconId);
     _mainIconIds[marker.id] = mainId;
-    _smallIconIds[marker.id] = baked.smallIconId;
+    // A small id equal to the marker id means "same picture as the main one",
+    // and the main one lives under [mainId] — nothing is registered under the
+    // marker id itself.
+    _smallIconIds[marker.id] =
+        baked.smallIconId == marker.id ? mainId : baked.smallIconId;
     _bakedIconCache[_bakedIconKey(marker)] = baked;
     marker.anchor = baked.anchor;
   }
@@ -4915,6 +4936,30 @@ class MaplibreMapProvider extends BaseMapProvider {
               smallIconId: marker.id,
               selected: poiSelected.icon,
               anchor: poiMarker.anchor,
+            ),
+          );
+          return true;
+        }
+        if (marker.isExhibitorLogo) {
+          // Bare logo on a tight canvas; its on-map size comes from the
+          // `logoScale` feature property (see _exhibitorLogoScale).
+          final Uint8List? logoBytes =
+              await CacheController().fetchWithCache(marker.assetPath!);
+          // Nothing to draw. Reporting the failure routes the marker to the
+          // text layer, which shows the exhibitor's name instead.
+          if (logoBytes == null || logoBytes.isEmpty) return false;
+          final logo = await creator.createLogoMarker(
+            imageBytes: logoBytes,
+            edge: GeoJsonMarker.exhibitorLogoBakeEdge,
+          );
+          await _registerBakedIcon(
+            controller,
+            marker,
+            // No label, so the zoomed-out variant is the same picture.
+            _BakedMarkerIcon(
+              main: logo.icon,
+              smallIconId: marker.id,
+              anchor: logo.anchor,
             ),
           );
           return true;
@@ -5310,6 +5355,116 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// falls back to the layer-0 dot — for an animal, the paw. That is the "every
   /// animal is a paw at every zoom" defect, and it is a collision-ordering bug,
   /// not an icon-loading one: the composites were registered fine throughout.
+  /// Zoom the `logoScale` feature property is expressed at.
+  static const double _kLogoScaleRefZoom = 22.0;
+
+  /// Share of the booth's shortest side a logo's longer edge covers.
+  static const double _kLogoFillFraction = 0.9;
+
+  /// Ground size assumed for a logo whose booth polygon cannot be found.
+  static const double _kLogoFallbackSideMeters = 2.0;
+
+  /// Shortest side of each logo marker's booth polygon, in meters. Only hits
+  /// are stored, so a marker pushed before its polygon is retried.
+  final Map<String, double> _logoSideMeters = {};
+
+  /// The polygon a logo marker stands on: the first of the landmark's
+  /// `associatedPolygons` that is in the same building and is not a wall.
+  GeoJsonPolygon? _exhibitorBoothPolygon(GeoJsonMarker marker) {
+    final associated = marker.properties?['associatedPolygons'];
+    if (associated is! List || associated.isEmpty) return null;
+    final wanted = associated.map((e) => e.toString()).toSet();
+    final building = GeoJsonUtils.extractKeyValueMap(marker.id)['buildingID'];
+    for (final polygon in _polygons) {
+      final key = GeoJsonUtils.extractKeyValueMap(polygon.id);
+      if (!wanted.contains(key['id'])) continue;
+      if (building != null && key['buildingID'] != building) continue;
+      if (polygon.properties?['type'] == 'Wall' ||
+          polygon.properties?['polygonType'] == 'Wall') {
+        continue;
+      }
+      return polygon;
+    }
+    return null;
+  }
+
+  /// `icon-size` that makes [marker]'s logo span [_kLogoFillFraction] of its
+  /// booth's shortest side at [_kLogoScaleRefZoom]. The layer doubles it per
+  /// zoom level from there, which is exactly how the ground itself scales, so
+  /// the logo stays fitted to the booth at every zoom.
+  double _exhibitorLogoScale(GeoJsonMarker marker) {
+    double? side = _logoSideMeters[marker.id];
+    if (side == null) {
+      final polygon = _exhibitorBoothPolygon(marker);
+      side = polygon == null
+          ? null
+          : RenderingUtilities().shortestSideMeters(polygon.points);
+      if (side != null) _logoSideMeters[marker.id] = side;
+    }
+    side ??= _kLogoFallbackSideMeters;
+    // Web Mercator ground resolution on MapLibre's 512px world tile.
+    final double metersPerPixel = 40075016.686 *
+        cos(marker.position.latitude * pi / 180) /
+        (512 * pow(2, _kLogoScaleRefZoom));
+    // What the baked image measures on screen at icon-size 1. Native registers
+    // images at the device pixel ratio, so that is the bake's logical size;
+    // web registers at pixelRatio 1, so it is the raw pixel size.
+    final double naturalEdge = GeoJsonMarker.exhibitorLogoBakeEdge *
+        (kIsWeb ? markerBakeRatio : 1.0);
+    return side * _kLogoFillFraction / metersPerPixel / naturalEdge;
+  }
+
+  /// `icon-size` of the custom-rendering layer.
+  ///
+  /// Three per-feature curves share one top-level zoom interpolation (see the
+  /// iOS rule on [_customRenderingLayerProps]):
+  ///  * museum POIs (`hasSelectedIcon`): 0.3 until z18, then up to 1.0 at z22;
+  ///  * exhibitor logos (`logoScale`): ground-fixed, doubling per zoom level;
+  ///  * everything else: 0.2 at z14 up to 1.0 at z18.3. These stops carry
+  ///    _kAnimalWebIconScale, which is 1.0 off web — so native sizing is
+  ///    unchanged and only the browser gets the smaller composites.
+  ///
+  /// The stops are every half zoom level so that linear interpolation tracks
+  /// the logos' exponential curve to within 1.5%. The other two curves are
+  /// piecewise linear and are resampled at those same stops plus their own
+  /// breakpoints, which reproduces them exactly.
+  static final List<dynamic> _customRenderingIconSize = () {
+    double lerp(List<List<double>> curve, double z) {
+      if (z <= curve.first[0]) return curve.first[1];
+      for (int i = 1; i < curve.length; i++) {
+        if (z <= curve[i][0]) {
+          final a = curve[i - 1], b = curve[i];
+          return a[1] + (b[1] - a[1]) * (z - a[0]) / (b[0] - a[0]);
+        }
+      }
+      return curve.last[1];
+    }
+
+    const poi = [[14.0, 0.3], [18.0, 0.3], [18.3, 0.3525], [22.0, 1.0]];
+    const other = [[14.0, 0.2], [18.0, 0.9442], [18.3, 1.0], [22.0, 1.0]];
+    final zooms = <double>{
+      for (double z = 14.0; z <= 24.0; z += 0.5) z,
+      18.3,
+    }.toList()
+      ..sort();
+    return <dynamic>[
+      "interpolate",
+      ["linear"],
+      ["zoom"],
+      for (final z in zooms) ...[
+        z,
+        [
+          "case",
+          ["to-boolean", ["get", "hasSelectedIcon"]],
+          lerp(poi, z),
+          ["has", "logoScale"],
+          ["*", ["get", "logoScale"], pow(2, z - _kLogoScaleRefZoom)],
+          lerp(other, z) * _kAnimalWebIconScale,
+        ],
+      ],
+    ];
+  }();
+
   SymbolLayerProperties _customRenderingLayerProps(dynamic iconOpacity,
           {String visibility = "visible", dynamic sortKey}) =>
       SymbolLayerProperties(
@@ -5339,18 +5494,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         // 18.3→1.0 curve. Per the iOS rule above, the zoom `interpolate`
         // stays at the top level and the per-feature branch lives in the
         // stop outputs (nesting zoom inside a `case` throws on iOS).
-        iconSize: [
-          "interpolate",
-          ["linear"],
-          ["zoom"],
-          // The non-hasSelectedIcon stops carry _kAnimalWebIconScale, which is
-          // 1.0 off web — so native sizing is byte-identical and only the
-          // browser gets the smaller composites.
-          14.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.2 * _kAnimalWebIconScale],
-          18.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3, 0.9442 * _kAnimalWebIconScale],
-          18.3,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 0.3525, 1.0 * _kAnimalWebIconScale],
-          22.0,  ["case", ["to-boolean", ["get", "hasSelectedIcon"]], 1.0, 1.0 * _kAnimalWebIconScale],
-        ],
+        //
+        // Exhibitor logos (`logoScale`) are a third branch, see
+        // [_customRenderingIconSize].
+        iconSize: _customRenderingIconSize,
         iconAnchor: ["get", "iconAnchor"],
         iconAllowOverlap: false,
         iconOpacity: iconOpacity,
@@ -6982,6 +7129,28 @@ class MaplibreMapProvider extends BaseMapProvider {
     return null;
   }
 
+  /// Whether the composite marker key [markerId] names [id] exactly, either as
+  /// the marker's own feature id or as the polygon it is attached to.
+  bool _markerKeyMatches(String markerId, String id) {
+    final keyMap = GeoJsonUtils.extractKeyValueMap(markerId);
+    return keyMap["polyId"] == id || keyMap["id"] == id;
+  }
+
+  /// Resolves the marker a selection id refers to. Exact first, for the same
+  /// reason as [_findPolygonById]: copied features keep the source id as a
+  /// suffix (`<timestamp>-<timestamp>-<sourceId>`), so a `contains` test for
+  /// the source's id also matches every copy and the venue ordering decides
+  /// which one wins.
+  GeoJsonMarker? _findMarkerById(String id) {
+    for (final m in _symbols) {
+      if (_markerKeyMatches(m.id, id)) return m;
+    }
+    for (final m in _symbols) {
+      if (m.id.contains(id)) return m;
+    }
+    return null;
+  }
+
   String? _extractPolygonIdFromTap(String key) {
     var keyMap = GeoJsonUtils.extractKeyValueMap(key);
     if (keyMap["polyId"] != null) return keyMap["polyId"];
@@ -7063,7 +7232,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   @override
   Future<void> selectLocation(controller, String polyID) async {
     final currentMarker = selectedLocation?.marker as GeoJsonMarker?;
-    if (selectedLocation?.polyID == polyID || (currentMarker != null && currentMarker.id.contains(polyID))) return;
+    if (selectedLocation?.polyID == polyID || (currentMarker != null && _markerKeyMatches(currentMarker.id, polyID))) return;
     if (controller is! MapLibreMapController) {
       print('Error: Invalid controller type');
       return;
@@ -7082,10 +7251,8 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       try {
         if (_symbols.isNotEmpty) {
-          marker = _symbols.firstWhere(
-                (m) => m.id.contains(polyID),
-            orElse: () => throw Exception('Marker not found'),
-          );
+          marker = _findMarkerById(polyID);
+          if (marker == null) throw Exception('Marker not found');
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');

@@ -361,6 +361,42 @@ class GeoJsonMarker {
     return s.isEmpty ? null : s;
   }
 
+  /// Box (logical dp) an exhibitor logo is fitted into, aspect preserved, by
+  /// renderers that draw it at a fixed screen size. Wider than tall because
+  /// most logos are wordmarks.
+  static const Size exhibitorLogoSize = Size(84, 48);
+
+  /// Longer edge (logical dp) of the logo bake used by renderers that scale
+  /// the logo to its booth polygon instead. This is bake RESOLUTION, not the
+  /// on-map size; large enough to stay sharp zoomed right into a booth.
+  static const double exhibitorLogoBakeEdge = 128;
+
+  /// Logo url of the exhibitor attached to a landmark, or null when the
+  /// landmark has no exhibitor or the exhibitor has no logo.
+  static String? exhibitorLogoUrl(Map<String, dynamic>? properties) {
+    final exhibitor = properties?["exhibitorRef"];
+    if (exhibitor is! Map) return null;
+    final branding = exhibitor["brandingDetails"];
+    if (branding is! Map) return null;
+    final logo = pick(branding["companyLogo"])?.trim();
+    if (logo == null || !logo.startsWith('http')) return null;
+    return logo;
+  }
+
+  /// Organisation name of the exhibitor attached to a landmark, or null when
+  /// the landmark has no exhibitor or the exhibitor is unnamed.
+  static String? exhibitorName(Map<String, dynamic>? properties) {
+    final exhibitor = properties?["exhibitorRef"];
+    if (exhibitor is! Map) return null;
+    final organization = exhibitor["organizationDetails"];
+    if (organization is! Map) return null;
+    return pick(pick(organization["organizationName"])?.trim());
+  }
+
+  /// Whether this marker draws an exhibitor logo in place of its name.
+  bool get isExhibitorLogo =>
+      customRendering && !textVisibility && exhibitorLogoUrl(properties) != null;
+
   /// Create from GeoJSON Feature
   static GeoJsonMarker? fromFeature(GeoJsonFeature feature) {
     if (feature.geometry.type != GeoJsonGeometryType.point) return null;
@@ -445,6 +481,25 @@ class GeoJsonMarker {
       }
     }
 
+    // Exhibitor booth: the company logo stands in for the name. After the
+    // asset block on purpose — that block overwrites textVisibility and
+    // anchor, and a logo marker needs its label off and a centered anchor
+    // whatever the landmark type matched. Baked through the custom-rendering
+    // path so the upload (anything up to several thousand px wide) is
+    // downscaled instead of registered at native size. Sizing against the
+    // booth polygon is the renderer's job — the polygon is a separate feature
+    // this parse never sees — so [exhibitorLogoSize] is only the fixed-size
+    // fallback.
+    final exhibitorLogo = exhibitorLogoUrl(feature.properties);
+    Size? imageSize;
+    if(exhibitorLogo != null){
+      assetPath = exhibitorLogo;
+      textVisibility = false;
+      customRendering = true;
+      anchor = null;
+      imageSize = exhibitorLogoSize;
+    }
+
     String? polyId = feature.properties?["polyId"];
     final associatedPolygons = feature.properties?['associatedPolygons'];
     if (associatedPolygons is List && associatedPolygons.isNotEmpty) {
@@ -457,10 +512,14 @@ class GeoJsonMarker {
             pick(feature.properties?["poiRef"]?["name"]?[AppConfig.languageCode]) ??
             pick(feature.properties?["poiRef"]?["locationName"]?[AppConfig.languageCode]) ??
             pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
+            exhibitorName(feature.properties) ??
             pick(feature.properties?["sponsorRef"]?["name"]);
 
     if (parsedTitle == null || parsedTitle.isEmpty) {
-      if (feature.properties?["textLive"] ?? (assetPath == null ? true : false)) {
+      // An exhibitor with no organisation name: a logo marker still keeps the
+      // landmark name even though it is not drawn, because the renderer falls
+      // back to the title when the logo cannot be loaded.
+      if (feature.properties?["textLive"] ?? (assetPath == null || exhibitorLogo != null)) {
         parsedTitle =
             pick(feature.properties?["renderName"]) ??
                 pick(feature.properties?["name"]) ??
@@ -485,6 +544,7 @@ class GeoJsonMarker {
           asset?.assetPath ?? LandmarkAssetType.genericMarker.assetPath,
       iconName: iconName,
       properties: feature.properties,
+      imageSize: imageSize,
       textVisibility: textVisibility??true,
       priority: false,
       anchor: anchor,
