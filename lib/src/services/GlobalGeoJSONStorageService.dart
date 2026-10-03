@@ -62,15 +62,8 @@ class GlobalGeoJSONVenueStorageService {
     final box =
         _getGlobalGeoJsonBox;
 
-    if (box.containsKey(
-      uniqueId,
-    )) {
-
-      await box.delete(
-        uniqueId,
-      );
-    }
-
+    // No delete first: put replaces the entry, and with the save now running
+    // behind an open map, a page closed between the two would lose the cache.
     await box.put(
       uniqueId,
       user,
