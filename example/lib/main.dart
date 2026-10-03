@@ -304,7 +304,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   // }
 
   void localizeUser(){
-    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.716439358009897, longitude: 77.1109546329173), "65d88662db333f894570bad3", 0));
+    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.54285326658291, longitude: 77.19308899898738), "6821ce4f9d3f927cab064e8a", 0));
   }
 
   void moveUser() {

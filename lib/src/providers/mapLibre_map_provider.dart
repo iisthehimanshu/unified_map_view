@@ -3431,7 +3431,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
-    await _retryIfStyleLoading(() => controller.addFillLayer(
+    await _retryIfStyleLoading(() async => controller.addFillLayer(
       _furnitureSourceId,
       _furnitureFillLayerId,
       _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
@@ -3446,6 +3446,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillOpacity: op(null),
       )),
       minzoom: _furnitureMinZoom,
+      belowLayerId: await _furnitureBelowLayerId(controller),
     ));
 
     _isFurnitureLayerEnabled = true;
@@ -3456,6 +3457,20 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (_config.immersive) {
       await _addFurnitureExtrusionLayer(controller);
     }
+  }
+
+  Future<String?> _furnitureBelowLayerId(
+      MapLibreMapController controller) async {
+    try {
+      final ids = await controller.getLayerIds();
+      for (final id in ids) {
+        if (id is String &&
+            (id.contains('marker') || id == _normalCircleLayerId)) {
+          return id;
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Adds the furniture fill-extrusion layer (3D). No-op if already present
@@ -3469,7 +3484,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     try {
       await controller.removeLayer(_furnitureLayerId);
     } catch (_) {}
-    await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
+    await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
       _furnitureSourceId,
       _furnitureLayerId,
       _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3484,13 +3499,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillExtrusionOpacity: op(1.0),
       )),
       minzoom: _furnitureMinZoom,
+      belowLayerId: await _furnitureBelowLayerId(controller),
     ));
     _isFurnitureExtrusionAdded = true;
     // Same plugin gap as the polygon extrusions: setLayerProperties rejects
     // fill-extrusion layers, so policy changes have to rebuild this one.
     _layerReAdders[_furnitureLayerId] = () async {
       await controller.removeLayer(_furnitureLayerId);
-      await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
+      await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
         _furnitureSourceId,
         _furnitureLayerId,
         _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3501,6 +3517,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               fillExtrusionOpacity: op(1.0),
             )),
         minzoom: _furnitureMinZoom,
+        belowLayerId: await _furnitureBelowLayerId(controller),
       ));
     };
     await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
@@ -3585,8 +3602,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           : (double.tryParse('${p['h'] ?? 0}') ?? 0.0);
       final oy = double.tryParse('${p['oy'] ?? 0}') ?? 0.0;
 
-      final eps = _partSeamOverlap +
-          (partIndex % _seamJitterSteps) * _seamJitterStep;
+      // final eps = _partSeamOverlap +
+      //     (partIndex % _seamJitterSteps) * _seamJitterStep;
+
+      final eps = 0.0;
+
 
       final localCorners = _footprintFor(p, eps);
       if (localCorners.isEmpty) continue;
@@ -3638,6 +3658,12 @@ class MaplibreMapProvider extends BaseMapProvider {
     // "polygon" -> an explicit footprint given as a "points" list of [x, z]
     // corners in local metres, relative to the part centre. Used for shells
     // whose outline is not a simple rectangle (e.g. an MRI housing body).
+    //
+    // The second coordinate runs opposite to "oz": the outline is authored
+    // as a flat 2D shape that is then laid down onto the floor, which turns
+    // its +y into -z. Adding it un-negated put the outline back-to-front
+    // against the model's box/cylinder parts (a chair's shell facing away
+    // from its own legs).
     if (shape == 'polygon') {
       final pts = p['points'] as List?;
       if (pts == null || pts.isEmpty) return const [];
@@ -3645,7 +3671,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           .whereType<List>()
           .map<List<double>>((pt) => [
                 ox + (double.tryParse('${pt[0]}') ?? 0.0),
-                oz + (double.tryParse('${pt.length > 1 ? pt[1] : 0}') ?? 0.0),
+                oz - (double.tryParse('${pt.length > 1 ? pt[1] : 0}') ?? 0.0),
               ])
           .toList();
     }
