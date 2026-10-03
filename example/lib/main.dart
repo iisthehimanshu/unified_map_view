@@ -163,7 +163,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'Apollo Gurugram',
+        venueName: 'IITDelhi',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
@@ -186,7 +186,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
         });
         print('HARNESS onMarkerTap -> $markerId');
       },
-      url: "https://dev.iwayplus.in",
+      url: "https://maps.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
           MapProvider.mappls: MapplsMapProvider()},
@@ -304,7 +304,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   // }
 
   void localizeUser(){
-    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.716439358009897, longitude: 77.1109546329173), "65d88662db333f894570bad3", 0));
+    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.54285326658291, longitude: 77.19308899898738), "6821ce4f9d3f927cab064e8a", 0));
   }
 
   void moveUser() {
