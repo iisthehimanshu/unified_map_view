@@ -21,13 +21,13 @@ class FurnitureAPI {
     _versions[venueName] = version;
   }
 
-  /// The version for [venueName], or null when none was supplied, the host's
-  /// request failed, or it has not answered in time.
+  /// The version for [venueName], or null when none was supplied or the
+  /// host's request failed.
   static Future<String?> _versionFor(String venueName) async {
     final version = _versions[venueName];
     if (version == null) return null;
     try {
-      return await version.timeout(const Duration(seconds: 5));
+      return await version;
     } catch (_) {
       return null;
     }
@@ -36,30 +36,41 @@ class FurnitureAPI {
   static Box? get _box =>
       Hive.isBoxOpen(boxName) ? Hive.box(boxName) : null;
 
-  /// The venue's 3D models. Served from the cache when the host's version
-  /// matches the one the cache was stored with; fetched otherwise, and on a
-  /// failed fetch the cache is used anyway so the models still show offline.
+  /// The venue's 3D models. Cached models are served at once; they are
+  /// checked against the host's version behind that and re-fetched for the
+  /// next launch when it differs. With nothing cached they are fetched.
   Future<List<FurnitureModel>> fetchFurniture(String venueName) async {
     final box = _box;
     final cached = box?.get(venueName) as Map?;
-    final versionFuture = _versionFor(venueName);
 
     if (cached != null) {
-      final version = await versionFuture;
-      if (version != null && cached['version'] == version) {
-        print('3D models: version unchanged ($version) — served from cache');
-        return _parse(cached['body'] as String);
-      }
-      print('3D models: version ${cached['version']} -> $version — fetching');
+      _refreshIfStale(venueName, cached['version'] as String?, box);
+      return _parse(cached['body'] as String);
     }
 
     final body = await _request(venueName);
-    if (body == null) {
-      return cached != null ? _parse(cached['body'] as String) : [];
-    }
-    final version = await versionFuture;
-    await box?.put(venueName, {'version': version, 'body': body});
+    if (body == null) return [];
+    _store(venueName, body, box);
     return _parse(body);
+  }
+
+  /// Re-fetches the models when the host's version is not the one the cache
+  /// was stored with. An unknown version counts as changed.
+  Future<void> _refreshIfStale(String venueName, String? cachedVersion, Box? box) async {
+    final version = await _versionFor(venueName);
+    if (version != null && version == cachedVersion) {
+      print('3D models: version unchanged ($version) — cache is current');
+      return;
+    }
+    print('3D models: version $cachedVersion -> $version — refreshing the cache');
+    final body = await _request(venueName);
+    if (body != null) await _store(venueName, body, box);
+  }
+
+  /// Stores [body] under the host's version, once that is known.
+  Future<void> _store(String venueName, String body, Box? box) async {
+    final version = await _versionFor(venueName);
+    await box?.put(venueName, {'version': version, 'body': body});
   }
 
   /// The raw response body, or null when the request failed.

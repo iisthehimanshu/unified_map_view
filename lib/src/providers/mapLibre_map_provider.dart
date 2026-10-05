@@ -3402,7 +3402,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // Flat footprint — visible only in 2D mode. Uses the same per-part
     // "color" so the object reads as a top-down floor-plan silhouette.
-    await _retryIfStyleLoading(() => controller.addFillLayer(
+    await _retryIfStyleLoading(() async => controller.addFillLayer(
       _furnitureSourceId,
       _furnitureFillLayerId,
       _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
@@ -3417,6 +3417,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillOpacity: op(null),
       )),
       minzoom: _furnitureMinZoom,
+      belowLayerId: await _furnitureBelowLayerId(controller),
     ));
 
     _isFurnitureLayerEnabled = true;
@@ -3427,6 +3428,20 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (_config.immersive) {
       await _addFurnitureExtrusionLayer(controller);
     }
+  }
+
+  Future<String?> _furnitureBelowLayerId(
+      MapLibreMapController controller) async {
+    try {
+      final ids = await controller.getLayerIds();
+      for (final id in ids) {
+        if (id is String &&
+            (id.contains('marker') || id == _normalCircleLayerId)) {
+          return id;
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Adds the furniture fill-extrusion layer (3D). No-op if already present
@@ -3440,7 +3455,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     try {
       await controller.removeLayer(_furnitureLayerId);
     } catch (_) {}
-    await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
+    await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
       _furnitureSourceId,
       _furnitureLayerId,
       _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3455,13 +3470,14 @@ class MaplibreMapProvider extends BaseMapProvider {
         fillExtrusionOpacity: op(1.0),
       )),
       minzoom: _furnitureMinZoom,
+      belowLayerId: await _furnitureBelowLayerId(controller),
     ));
     _isFurnitureExtrusionAdded = true;
     // Same plugin gap as the polygon extrusions: setLayerProperties rejects
     // fill-extrusion layers, so policy changes have to rebuild this one.
     _layerReAdders[_furnitureLayerId] = () async {
       await controller.removeLayer(_furnitureLayerId);
-      await _retryIfStyleLoading(() => controller.addFillExtrusionLayer(
+      await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
         _furnitureSourceId,
         _furnitureLayerId,
         _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
@@ -3472,6 +3488,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               fillExtrusionOpacity: op(1.0),
             )),
         minzoom: _furnitureMinZoom,
+        belowLayerId: await _furnitureBelowLayerId(controller),
       ));
     };
     await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
