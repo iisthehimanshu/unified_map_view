@@ -18,10 +18,7 @@ class BuildingByVenue {
   /// `initialize` and each map's annotation controller (`renderVenue`) both ask
   /// for the venue, and each used to start its own live fetch, so
   /// `building/get/venue` went out twice on a single launch. Sharing the load
-  /// keeps the "prefer a live fetch when online" behaviour below intact — there
-  /// is still exactly one live fetch per session, so a server-side data fix is
-  /// still picked up on the next launch — it just stops the second caller
-  /// duplicating the first.
+  /// leaves exactly one live fetch per session (see [_fetchResponse]).
   ///
   /// Holds the raw response, so a host can reuse the very same load through
   /// [fetchResponse] instead of posting the identical request itself.
@@ -72,34 +69,38 @@ class BuildingByVenue {
   Future<Map<String, dynamic>> _fetchResponse(String id) async {
     final buildingByVenueBox = BuildingByVenueAPIBOX.getData();
 
-    // Seed from the bundled asset (if any) so there's something to fall
-    // back to below even if the live fetch fails or there's no internet.
+    // Seed from the bundled asset (if any) so a first run has something to
+    // serve below.
     if (!buildingByVenueBox.containsKey(id)) {
       await _seedFromAssetIfNeeded(id, buildingByVenueBox);
     }
 
-    // Prefer a live fetch whenever we're online, and use its result for
-    // THIS render — not just save it for next launch. The previous
-    // fire-and-forget "_backgroundSync" always rendered from whatever was
-    // cached (a bundled asset, or a prior session's fetch) and only
-    // updated the cache for the *next* launch, so a server-side data fix
-    // stayed invisible until the app was uninstalled and reinstalled,
-    // which is the only path that starts with an empty cache.
-    if (await checkInternetConnectivity()) {
-      try {
-        return await _fetchFromApi(id, buildingByVenueBox);
-      } catch (_) {
-        // fall through to cache below
-      }
-    }
-
+    // Cached: serve it now and refresh the cache behind it, for the next
+    // launch. Waiting on the live fetch here held the whole venue off screen
+    // for as long as the network took, on every launch, for a response that
+    // rarely differs from the cached one.
     if (buildingByVenueBox.containsKey(id)) {
       final responseBody = buildingByVenueBox.get(id)!.responseBody;
       print("UNIFIED MAP BUILDINGBYVENUE DATA FROM DATABASE");
+      _refresh(id, buildingByVenueBox);
       return Map<String, dynamic>.from(responseBody);
     }
 
+    if (await checkInternetConnectivity()) {
+      return await _fetchFromApi(id, buildingByVenueBox);
+    }
+
     throw("no preload & no DB data & no internet");
+  }
+
+  /// Fetches the venue live and stores it for the next launch.
+  Future<void> _refresh(String id, dynamic box) async {
+    try {
+      if (!await checkInternetConnectivity()) return;
+      await _fetchFromApi(id, box);
+    } catch (e) {
+      print("UNIFIED MAP BUILDINGBYVENUE background refresh failed: $e");
+    }
   }
 
   /// Seeds DB from bundled asset. Returns true if successful.

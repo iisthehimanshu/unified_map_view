@@ -6084,14 +6084,22 @@ class MaplibreMapProvider extends BaseMapProvider {
           // neighbouring label that would overlap the selected label yields
           // and hides instead of drawing through it.
           symbolSortKey: ["+", -100000, _kSortKeyExpression],
+          // No `!` / `any` / `all` in here. On iOS those become an
+          // NSCompoundPredicate, and MapLibre's icon-image setter segfaults on
+          // one (EXC_BAD_ACCESS at 0x18 in addSymbolProperties — the NZP
+          // TestFlight crash of 2026-10-05). Other properties tolerate them;
+          // icon-image does not. Test "has an icon" positively instead.
           iconImage: [
             "case",
+            ["to-boolean", ["get", "icon"]],
+            [
+              "case",
+              ["to-boolean", ["get", "hasSelectedIcon"]],
+              ["concat", ["get", "icon"], "-selected"],
+              ["get", "icon"],
+            ],
             // Text-only marker (a selected room/polygon label): no icon image.
-            ["!", ["to-boolean", ["get", "icon"]]],
             "",
-            ["to-boolean", ["get", "hasSelectedIcon"]],
-            ["concat", ["get", "icon"], "-selected"],
-            ["get", "icon"],
           ],
           // Flat (no zoom ramp): the selected marker should read the same size
           // at every zoom, so the size ONLY comes from the per-feature

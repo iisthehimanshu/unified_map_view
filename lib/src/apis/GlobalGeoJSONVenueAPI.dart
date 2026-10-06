@@ -64,41 +64,43 @@ class GlobalGeoJSONVenueAPI {
     await service.init();
     final bool dbHasData = service.containsID(venueName) == true;
 
-    // Seed from the bundled asset (if any) so there's something to fall
-    // back to below even if the live fetch fails or there's no internet.
+    // Seed from the bundled asset (if any) so a first run has something to
+    // serve below.
     if (!dbHasData) {
       await _seedFromAssetIfNeeded(venueName, service);
     }
 
-    // Prefer a live fetch whenever we're online, and use its result for
-    // THIS render — not just save it for next launch. The previous
-    // fire-and-forget "_backgroundSync" always rendered from whatever was
-    // cached (a bundled asset, or a prior session's fetch) and only
-    // updated the cache for the *next* launch, so any server-side data
-    // fix (e.g. corrected per-part colors on furniture/landmark models)
-    // stayed invisible until the app was uninstalled and reinstalled,
-    // which is the only path that starts with an empty cache.
-    //
-    // A failed fetch falls through to the cache rather than throwing past it.
-    // Being "online" is only a guess — on web it is any Wi-Fi or ethernet
-    // link, including one with no internet behind it — and when the request
-    // then fails, the cached venue is exactly what the app must render.
-    if (await checkInternetConnectivity()) {
-      try {
-        final fresh = await _fetchFromApi(venueName, service);
-        if (fresh != null) return fresh;
-      } catch (e) {
-        print("GlobalGeoJSONVenueAPI: live fetch failed, using the cached "
-            "venue if there is one: $e");
+    // Cached: render from it now and refresh the cache behind it, for the next
+    // launch. Waiting on the live fetch here held the whole venue off screen
+    // for as long as a multi-MB download took, on every launch, for a response
+    // that rarely differs from the cached one.
+    if (service.containsID(venueName)) {
+      final cached = service.getGeoData(venueName)?.responseBody;
+      if (cached != null) {
+        print("GlobalGeoJSONVenueAPI from DataBase");
+        _refresh(venueName, service);
+        return cached;
       }
     }
 
-    if (service.containsID(venueName)) {
-      print("GlobalGeoJSONVenueAPI from DataBase");
-      return service.getGeoData(venueName)?.responseBody;
+    // Being "online" is only a guess — on web it is any Wi-Fi or ethernet
+    // link, including one with no internet behind it.
+    if (await checkInternetConnectivity()) {
+      final fresh = await _fetchFromApi(venueName, service);
+      if (fresh != null) return fresh;
     }
 
     throw("no preload & no DB data & no internet");
+  }
+
+  /// Fetches the venue live and stores it for the next launch.
+  Future<void> _refresh(String venueName, GlobalGeoJSONVenueStorageService service) async {
+    try {
+      if (!await checkInternetConnectivity()) return;
+      await _fetchFromApi(venueName, service);
+    } catch (e) {
+      print("GlobalGeoJSONVenueAPI: background refresh failed: $e");
+    }
   }
 
   /// Seeds DB from bundled asset. Returns true if successful.

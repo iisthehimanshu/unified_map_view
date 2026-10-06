@@ -79,9 +79,9 @@ class UnifiedMapViewPackage {
   }
 
   /// The venue's indoor GeoJSON — the same response the map renders from,
-  /// loaded once per session and shared. Hosts read it instead of fetching the
-  /// venue again. Call after [initialize], which opens the cache it falls back
-  /// to when offline.
+  /// loaded once per session and shared, which is the cached copy when there
+  /// is one. Hosts read it instead of fetching the venue again. Call after
+  /// [initialize], which opens that cache.
   static Future<Map<String, dynamic>?> getVenueGeoJson(String venueName) =>
       GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
 
@@ -104,9 +104,9 @@ class UnifiedMapViewPackage {
 
   /// The venue's raw buildings response (`/secured/building/get/venue`), from
   /// the one load this package shares per venue per session — the same one
-  /// the map renders from. Hosts that need the same response read it here
-  /// instead of posting the identical request themselves. Call after
-  /// [initialize], which opens the cache the load falls back to offline.
+  /// the map renders from, which is the cached copy when there is one. Hosts
+  /// that need the same response read it here instead of posting the identical
+  /// request themselves. Call after [initialize], which opens that cache.
   static Future<Map<String, dynamic>> getVenueBuildingsResponse(
           String venueName) =>
       BuildingByVenue().fetchResponse(venueName);
@@ -117,10 +117,10 @@ class UnifiedMapViewPackage {
 
   /// Supplies the data version the venue's cached 3D models
   /// (`/secured/get-all-threed-models`) are checked against, so the package
-  /// makes no versions request of its own. While [version] is pending, a map
-  /// that opens waits for it (up to 5s) before deciding. The models are served
-  /// from the cache when it matches the version they were stored with, and
-  /// re-fetched when it differs. Without a version they are always fetched.
+  /// makes no versions request of its own. Cached models are served without
+  /// waiting for [version]; when it differs from the version they were stored
+  /// with, they are re-fetched for the next launch. Without a version they
+  /// are always re-fetched.
   static void setFurnitureVersion(String venueName, Future<String?> version) =>
       FurnitureAPI.provideVersion(venueName, version);
 
