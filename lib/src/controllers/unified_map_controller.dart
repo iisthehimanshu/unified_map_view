@@ -1107,8 +1107,13 @@ class UnifiedMapController extends ChangeNotifier {
     if (mapFadeOnPath) {
       await currentProviderImplementation.addMapFade(_currentMapController);
     }
+    // Awaited, and through the annotation controller directly: firing
+    // changeBuildingFloor() here without waiting let the floor swap and the
+    // path draw below run interleaved — both rewrite the polyline source —
+    // and that method also redraws the path itself, so the route was drawn
+    // up to three times over a building still mid-swap.
     for (var bid in bids) {
-      changeBuildingFloor(buildingID: bid, floor: sourceFloor);
+      await _annotationController.changeBuildingFloor(bid, sourceFloor);
     }
     await _annotationController.annotatePath(sourceFloor);
     notifyListeners();

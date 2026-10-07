@@ -3786,6 +3786,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// Bumped by every [_updatePolylineSource] call; see the corner pass there.
+  int _cornerPass = 0;
+
   Future<void> _updatePolylineSource(MapLibreMapController controller) async {
     if (!_isPolylineLayersEnabled) {
       print("Polyline layers not enabled yet");
@@ -3842,13 +3845,23 @@ class MaplibreMapProvider extends BaseMapProvider {
         .map((line) => "${line.id}:${line.points.length}")
         .join("|");
 
+    // Newest pass wins. Several run at once whenever polylines change in quick
+    // succession (a floor swap clearing a building while the route is being
+    // redrawn), and each suspends inside the loop below.
+    final pass = ++_cornerPass;
+
     if (routeSignature == _cornerFeaturesSignature) {
       await _refreshCornerVisibility(controller);
       return;
     }
 
     final cornerFeatures = <Map<String, dynamic>>[];
-    for (var line in _lines) {
+    // A copy, not `_lines` itself: the loop awaits icon bakes, and a polyline
+    // added or removed meanwhile threw "Concurrent modification during
+    // iteration" out of whichever caller was mid-loop. removePolyline does not
+    // catch, so when that caller was a floor swap's clear step the swap died
+    // with the old floor removed and the new one never added.
+    for (var line in List.of(_lines)) {
       final bool isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
       final String? style = line.properties?['style'];
       final bool isGreyOverlay = line.properties?['isGreyOverlay'] ?? false;
@@ -3901,6 +3914,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       }
     }
 
+    // A later pass started while this one was baking; its result is the
+    // current one and this would overwrite it with stale corners.
+    if (pass != _cornerPass) return;
     _allCornerFeatures = cornerFeatures;
     _cornerFeaturesSignature = routeSignature;
     await _refreshCornerVisibility(controller);
