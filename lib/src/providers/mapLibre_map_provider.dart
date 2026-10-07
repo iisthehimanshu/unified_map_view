@@ -27,6 +27,7 @@ import '../models/map_layer.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 
 import '../heading/heading_source.dart';
+import '../utils/web_viewport/map_viewport.dart';
 import 'package:http/http.dart' as http;
 import '../utils/LandmarkAssetType.dart';
 import '../models/marker_type_info.dart';
@@ -1112,10 +1113,46 @@ class MaplibreMapProvider extends BaseMapProvider {
   // Camera
   // ---------------------------------------------------------------------------
 
+  /// Shared by every camera update waiting on [_waitForWebViewport], so they
+  /// resume in the order they were issued.
+  Future<void>? _pendingWebViewport;
+
+  /// Web: holds a camera update until the map element has a real size and the
+  /// map is sized to it. A no-op on native, and on web when both already hold.
+  ///
+  /// While another route covers the map, Flutter takes the platform view out
+  /// of layout: the element measures 0x0 and MapLibre falls back to 400x300.
+  /// A camera update computed then aims at the centre of that phantom
+  /// viewport, (200,150), and fits bounds to its size. The resize that lands
+  /// once the route pops does not re-aim a flight already under way, so the
+  /// target settled near the top of the real screen at the wrong zoom — which
+  /// is what selecting a search result did, since the host issues the
+  /// selection as the search route pops, a frame before the map is back.
+  Future<void> _awaitWebViewport(MapLibreMapController controller) async {
+    if (!kIsWeb || mapViewportState() == MapViewportState.ready) return;
+    await (_pendingWebViewport ??= _waitForWebViewport(controller)
+        .whenComplete(() => _pendingWebViewport = null));
+  }
+
+  Future<void> _waitForWebViewport(MapLibreMapController controller) async {
+    // Bounded (~1s): a map that never comes back must not swallow the update.
+    for (var i = 0;
+        i < 60 && mapViewportState() == MapViewportState.hidden;
+        i++) {
+      await Future.delayed(const Duration(milliseconds: 16));
+    }
+    // The plugin resizes on its own, but debounced by 50ms; do it now so the
+    // update that follows is computed against the real size.
+    if (mapViewportState() == MapViewportState.stale) {
+      controller.forceResizeWebMap();
+    }
+  }
+
   @override
   Future<void> moveCamera(
       dynamic controller, MapLocation location, double zoom) async {
     if (controller is MapLibreMapController) {
+      await _awaitWebViewport(controller);
       await controller.moveCamera(
         CameraUpdate.newLatLngZoom(
           LatLng(location.latitude, location.longitude),
@@ -1135,6 +1172,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         Duration? duration
       }) async {
     if (controller is! MapLibreMapController) return;
+    await _awaitWebViewport(controller);
 
     // Heading-up navigation drives this on every location fix. With the
     // plugin's ~300ms default, each call eases for 300ms then sits frozen
@@ -1191,6 +1229,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     // Keep map perspective in sync with 2D/3D state.
     final targetTilt = isEnabled ? (tiltWhen3D ?? (_config.initialLocation.tilt > 0 ? _config.initialLocation.tilt : 45.0)) : 0.0;
+    await _awaitWebViewport(controller);
     await controller.animateCamera(CameraUpdate.tiltTo(targetTilt));
 
     // Explicitly disable extrusion rendering in 2D to avoid any residual shading.
@@ -7355,6 +7394,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         if (sequentialAnimalFit) {
           // Phase 1: glide in on the tapped animal icon with an explicit,
           // eased duration so it reads as a deliberate focus rather than a snap.
+          await _awaitWebViewport(controller);
           await controller.animateCamera(
             CameraUpdate.newLatLngZoom(
               LatLng(marker!.position.latitude, marker.position.longitude),
@@ -7515,6 +7555,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       northeast: LatLng(maxLat + latPadding, maxLng + lngPadding),
     );
 
+    await _awaitWebViewport(controller);
     await controller.animateCamera(
       CameraUpdate.newLatLngBounds(
         bounds,
@@ -7535,6 +7576,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       LatLng(bound.northeast.latitude, bound.northeast.longitude),
     );
 
+    await _awaitWebViewport(controller);
     await controller.animateCamera(
       CameraUpdate.newLatLngBounds(
         bounds,

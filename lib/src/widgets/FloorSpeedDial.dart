@@ -8,10 +8,16 @@ class FloorSpeedDial extends StatefulWidget {
   final UnifiedMapController controller;
   final Color color;
 
+  /// Called when the user picks a floor from the dial, before the map switches
+  /// to it. Floor changes the host makes through the controller do not fire
+  /// this, so a host can tell the user browsing floors from its own switches.
+  final void Function(String buildingID, int floor)? onFloorSelected;
+
   const FloorSpeedDial({
     super.key,
     required this.controller,
     this.color = Colors.blue,
+    this.onFloorSelected,
   });
 
   @override
@@ -95,6 +101,7 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
         onTap: () {
           final bid = controller.focusedBuilding;
           if (bid == null) return;
+          widget.onFloorSelected?.call(bid, floor);
           controller.changeBuildingFloor(buildingID: bid, floor: floor);
         },
       );
