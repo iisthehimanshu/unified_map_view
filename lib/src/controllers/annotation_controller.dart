@@ -223,6 +223,29 @@ class AnnotationController{
     }
   }
 
+  /// Removes everything drawn for [buildingID]'s current floor, keeping its
+  /// persistent boundary.
+  ///
+  /// A failure here must not stop the caller: by this point the building is
+  /// already recorded as showing the new floor, so bailing out left it with
+  /// the old floor (partly) removed and the new one never added — a blank
+  /// building under a correct floor label — and no later switch to the same
+  /// floor would redraw it.
+  Future<void> _clearBuildingFloor(String buildingID) async {
+    try {
+      await Future.wait([
+        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
+        _unifiedMapController.removePolyline(buildingID),
+        _unifiedMapController.removeMarker(buildingID),
+        _unifiedMapController.removeCircle(buildingID),
+        _unifiedMapController.removeFurniture(buildingID),
+      ]);
+    } catch (e) {
+      print("floor swap: clearing $buildingID failed, drawing the new floor "
+          "anyway: $e");
+    }
+  }
+
   Future<void> changeBuildingFloor(String buildingID, int floor) async {
     if(_venueData.selectedFloor[buildingID] == floor) return;
     _focusBuildingSelectedFloor = floor;
@@ -234,13 +257,7 @@ class AnnotationController{
       // (which the new floor shares), that either wiped the just-added content
       // or, if it lost the race entirely, left the previous floor's markers and
       // furniture on the map stacked under the new ones.
-      await Future.wait([
-        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
-        _unifiedMapController.removePolyline(buildingID),
-        _unifiedMapController.removeMarker(buildingID),
-        _unifiedMapController.removeCircle(buildingID),
-        _unifiedMapController.removeFurniture(buildingID),
-      ]);
+      await _clearBuildingFloor(buildingID);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
     }
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
@@ -289,13 +306,7 @@ class AnnotationController{
       // Awaited (see changeBuildingFloor): an unawaited removal can land after
       // the new floor was added and, matching by buildingID, wipe the new
       // content or leave the old floor stacked underneath.
-      await Future.wait([
-        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
-        _unifiedMapController.removePolyline(buildingID),
-        _unifiedMapController.removeMarker(buildingID),
-        _unifiedMapController.removeCircle(buildingID),
-        _unifiedMapController.removeFurniture(buildingID),
-      ]);
+      await _clearBuildingFloor(buildingID);
 
       final featuresToRender =
           floorData.isNotEmpty ? floorData : _floorFallbackBoundary(buildingID);
