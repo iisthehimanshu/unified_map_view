@@ -96,7 +96,6 @@ all its members; controlling a **member** overrides just that one.
 ### markers (family)
 | Style layer id | Group (member) | What it draws |
 |---|---|---|
-| `collision-dot-markers-layer` | `landmarkMarkers` | Small dot a marker collapses to when it loses a collision |
 | `normalText-markers-layer` | `landmarkMarkers` | Text-only landmark labels |
 | `normalIcon-markers-layer-withSectionId` | `landmarkMarkers` | Icon markers that belong to a section |
 | `normalIcon-markers-layer-withoutSectionId` | `landmarkMarkers` | Icon markers with no section |

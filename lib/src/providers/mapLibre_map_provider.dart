@@ -106,13 +106,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _subSectionMarkerLayerId = 'subSection-markers-layer';
   final String _overlapOverrideMarkerLayerId = 'overlap-override-markers-layer';
 
-  /// Collision-fallback "dot" layer. When a normal marker loses a collision it
-  /// would normally be hidden; instead we render a small dot at its location.
-  /// See [_collisionBase] / [enableMarkerLayers] for the ordering that makes a
-  /// loser fall back to a dot, and a dot-vs-dot loser hide entirely.
-  final String _dotMarkerLayerId = 'collision-dot-markers-layer';
-
-  /// Map image id + asset for the collision-fallback dot.
+  /// Map image id + asset of the default placeholder a marker draws while its
+  /// own image is still loading (see [_animalDisplayIconId]).
   static const String _kDotImageId = '__collision_dot__';
   static const String _kDotAssetPath =
       'packages/unified_map_view/assets/markers/room_dot.png';
@@ -284,7 +279,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// `-with/withoutSectionId` variants are the real layers.
   late final Map<String, MapLayer> _layerGroups = {
     // markers
-    _dotMarkerLayerId: MapLayer.landmarkMarkers,
     _normalTextMarkerLayerId: MapLayer.landmarkMarkers,
     '$_normalIconMarkerLayerId-withSectionId': MapLayer.landmarkMarkers,
     '$_normalIconMarkerLayerId-withoutSectionId': MapLayer.landmarkMarkers,
@@ -658,20 +652,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     ["coalesce", ["get", "sortBias"], 0],
   ];
 
-  /// Markers whose full marker only appears from zoom 18 — text markers
-  /// (collisionBase 0), whose layer still carries `minzoom: 18`. Their dot is
-  /// held at 0 until 18 so nothing is drawn where the full marker cannot be.
-  ///
-  /// icon-with-sectionId (base 3000) used to be in here too. Its layer's z18
-  /// gate was removed, so it now fades in 12→14 like every other icon marker
-  /// and its dot follows the ordinary ramp; leaving it listed here would hide
-  /// the dot below 18 and break the fallback. Used to pick the dot's opacity
-  /// ramp; see [enableMarkerLayers].
-  static const List<dynamic> _kDotStepGroupExpression = [
-    "any",
-    ["==", ["get", "collisionBase"], 0],
-  ];
-
   // ---------------------------------------------------------------------------
   // Styles
   // ---------------------------------------------------------------------------
@@ -745,7 +725,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             // The controller normalises the id with `payload["id"].toString()`
             // before calling us, so `id` is always a String and never null.
             // It CAN be empty: symbol layers deliver no feature id (observed on
-            // collision-dot and normalIcon taps), so the `id.isNotEmpty` gate
+            // normalIcon taps), so the `id.isNotEmpty` gate
             // further down skips them and markers are resolved by
             // queryRenderedFeatures instead. Only polygon layers arrive here
             // with a usable composite id.
@@ -772,7 +752,6 @@ class MaplibreMapProvider extends BaseMapProvider {
                   _priorityMarkerLayerId,
                   _rotationMarkerLayerId,
                   _faceUserMarkerLayerId,
-                  _dotMarkerLayerId,
                 ].where(_tapAllowedForLayer).toList();
 
                 // An empty layer list is NOT "query nothing" — MapLibre drops
@@ -863,7 +842,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               _markerSourcesReady = false;
               _isPolygonLayersEnabled = false;
               _isPolylineLayersEnabled = false;
-              // Registered dot images are wiped too; allow re-registration.
+              // Registered placeholder images are wiped too; allow re-registration.
               _registeredDotImageIds.clear();
               _registeredCornerArrowAngles.clear();
               // Corner arrow/bubble images are wiped with the style, so the next
@@ -2105,9 +2084,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   ///
   /// Counts what each marker layer is actually DRAWING at the current zoom, by
   /// querying rendered features over the whole viewport. Rendered means it
-  /// survived collision, so this distinguishes the three things that look
-  /// identical on screen: a feature filtered out of a layer, a feature in the
-  /// layer that lost its collision, and a feature drawn as a dot instead.
+  /// survived collision, so this distinguishes the two things that look
+  /// identical on screen: a feature filtered out of a layer, and a feature in
+  /// the layer that lost its collision.
   ///
   /// Also reports which layer is drawing the currently selected marker, which
   /// is the question the source alone cannot answer.
@@ -2116,7 +2095,6 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> _debugLayerCensus(
       MapLibreMapController controller, double zoom) async {
     final layerIds = <String>[
-      _dotMarkerLayerId,
       _normalTextMarkerLayerId,
       "$_normalIconMarkerLayerId-withSectionId",
       "$_normalIconMarkerLayerId-withoutSectionId",
@@ -2175,29 +2153,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     return 0;
   }
 
-  /// The per-layer base offset of the full marker's [symbolSortKey] for a
-  /// collision-participating marker. Mirrors the layer filters/bases in
-  /// [enableMarkerLayers] (text=0, fixed/bearing=1000, customRendering=1500,
-  /// icon-withoutSectionId=2000, icon-withSectionId=3000). Used by the dot
-  /// layer so a feature's dot sorts right after its own full marker.
-  ///
-  /// customRendering sits ahead of the plain icon layers (see the "Zoo fix"
-  /// in [_refreshMarkerLayerMinZooms]) so a zoo's animal photo composites —
-  /// the content the map actually exists to show — don't routinely lose
-  /// collisions to incidental amenity icons and fall back to their paw dot.
-  /// It still loses to text/fixed, which are wayfinding furniture rather
-  /// than content.
-  int _collisionBase({
-    required bool hasIcon,
-    required double bearing,
-    required bool customRendering,
-    required bool sectionId,
-  }) {
-    if (bearing != 0.0) return 1000; // Layer 4: fixed/bearing
-    if (!hasIcon) return 0; // Layer 1: text-only
-    if (customRendering) return 1500; // Layer 3: custom rendering
-    return sectionId ? 3000 : 2000; // Layer 2 / 2b: icon markers
-  }
 
   Future<void> setGeoJsonSource(
       dynamic controller,
@@ -2259,14 +2214,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null){
             entryDirection = (marker.properties?['entryDirection'] as num).toDouble();
           }
-
-          // Effective bearing matches the 'bearing' property written below, after
-          // the entryDirection override. A truthy (non-zero) bearing routes a
-          // marker into the fixed/bearing layer.
-          final double effectiveBearing = entryDirection ??
-              (marker.compassBasedRotation
-                  ? 0.0
-                  : ((marker.properties?["bearing"] ?? 0.0) as num).toDouble());
 
           return {
             'type': 'Feature',
@@ -2350,34 +2297,13 @@ class MaplibreMapProvider extends BaseMapProvider {
               // the markers vanishing and reappearing as a group.
               //
               // Normalised by the feature count so the bias stays under 0.5 at
-              // any venue size. That bound is load-bearing: the dot layer sorts
-              // at `collisionBase + 0.6`, so keeping every bias below 0.6 means
-              // each full marker still sorts ahead of every dot and the
-              // marker → dot cascade is untouched.
+              // any venue size, well inside the 1.0 step between priorities.
               //
               // Index order is arbitrary but STABLE, which is the property that
               // matters here. To make the winner meaningful rather than merely
               // deterministic, set real `priority` values in the venue data —
               // the priority term already outranks this bias.
               'sortBias': index / biasDenominator * 0.5,
-              // Per-feature base of the full marker's symbolSortKey. The dot layer
-              // reuses this (+ a fractional offset) so each feature's dot is
-              // placed right after its own full marker in the global collision
-              // pass, yielding the marker → dot → hidden fallback cascade.
-              'collisionBase': _collisionBase(
-                // Must use the same predicate as the `icon` property above, or a
-                // marker lands in the text layer while its collisionBase claims
-                // it is an icon marker — the dot would then sort against a base
-                // no layer is using and the marker → dot cascade breaks for it.
-                hasIcon: _hasUsableIcon(marker),
-                bearing: effectiveBearing,
-                customRendering: marker.customRendering,
-                sectionId: hasSectionId,
-              ),
-              // Image id for this marker's collision-fallback dot. Per-marker dots
-              // are registered under their asset path; null falls back to the
-              // shared default room dot.
-              'dotIcon': marker.dotAssetPath ?? _kDotImageId,
               if(entryDirection != null)'bearing':entryDirection,
               // Bumped on every push, including retries that repeat otherwise
               // identical data (see the self-heal comment below) — without
@@ -4248,12 +4174,12 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   final creator = UnifiedMarkerCreator();
 
-  /// Dot image ids already registered with the current style (cleared on style
-  /// reload, which wipes addImage()). Avoids re-decoding shared dot assets.
+  /// Placeholder image ids already registered with the current style (cleared
+  /// on style reload, which wipes addImage()). Avoids re-decoding shared assets.
   final Set<String> _registeredDotImageIds = {};
 
   /// Corner-arrow angles (rounded to the nearest 5°) already registered with
-  /// the current style. Cleared on style reload same as the dot images.
+  /// the current style. Cleared on style reload same as the placeholder images.
   final Set<int> _registeredCornerArrowAngles = {};
 
   String _cornerArrowImageId(int roundedAngle) =>
@@ -4802,8 +4728,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  /// Registers the default collision-fallback dot image. A style reload wipes
-  /// addImage() calls, so this is invoked again from [enableMarkerLayers].
+  /// Registers the default placeholder image. A style reload wipes addImage()
+  /// calls, so this is invoked again from [enableMarkerLayers].
   Future<void> _loadDotImage(MapLibreMapController controller) async {
     try {
       final bd = await rootBundle.load(_kDotAssetPath);
@@ -4827,8 +4753,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
-  /// Registers a marker's custom dot image (under its asset path as the image
-  /// id) so the dot layer can reference it via the feature's `dotIcon` property.
+  /// Registers a marker's own placeholder image (under its asset path as the
+  /// image id), the one [_animalDisplayIconId] shows until the photo arrives.
   Future<void> _loadMarkerDotIcon(
       MapLibreMapController controller, GeoJsonMarker marker) async {
     final path = marker.dotAssetPath;
@@ -5222,8 +5148,8 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   /// Multiplier applied to every marker layer's `icon-size`.
   ///
-  /// Web halves them: many landmarks collapse to collision dots at once there
-  /// and the icons read far too heavy against the floor plan. **Native keeps
+  /// Web halves them: the icons read far too heavy against the floor plan
+  /// there. **Native keeps
   /// 1.0 — the sizes mobile has always shipped.** Every call site below writes
   /// its original value times this, so the native number stays readable in the
   /// source instead of being pre-multiplied away.
@@ -5235,9 +5161,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   ///
   /// Native is deliberately back at 1.0 — the sizes shipped before the web work
   /// and the ones this venue is tuned for. Dropping it to 0.5 does make the
-  /// collision fights milder, but that is a side effect, not the fix: dots are
-  /// cleared by the marker→dot cascade in [_refreshMarkerLayerMinZooms], which
-  /// works at any size. Do not shrink icons to solve a collision problem.
+  /// collision fights milder, but that is a side effect, not a fix. Do not
+  /// shrink icons to solve a collision problem.
   ///
   /// Call sites stay written as `<value> * _kIconScale` so the native number in
   /// the source is the real one.
@@ -5259,9 +5184,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// field is sent as an explicit null and resets that property to its default.
   /// A partial set therefore drops `text-field`, `text-size` and the rest, and
   /// also overwrites `symbol-sort-key` with a base-less expression — and that
-  /// per-layer base is what keeps each full marker sorted immediately before its
-  /// own collision dot. See the comment in [_refreshMarkerLayerMinZooms] for the
-  /// cascade and for why native deliberately keeps the flattened sort key.
+  /// per-layer base is what decides which layer wins a collision. See the
+  /// comment in [_refreshMarkerLayerMinZooms].
   SymbolLayerProperties _normalTextLayerProps(dynamic textOpacity,
           {String visibility = "visible", dynamic sortKey}) =>
       SymbolLayerProperties(
@@ -5321,9 +5245,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         //                            the icon stays.
         //
         // So the marker has exactly one behaviour: it draws its icon (with the
-        // label when there is room), or it is not drawn at all and its dot
-        // takes over through the cascade. That is what reads as stable when you
-        // zoom, and it is why a marker never half-renders.
+        // label when there is room), or it is not drawn at all. That is what
+        // reads as stable when you zoom, and it is why a marker never
+        // half-renders.
         iconOptional: false,
         textOptional: true,
         iconOpacity: opacity,
@@ -5429,13 +5353,12 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Used at creation on every platform, and by the **web** branch of
   /// [_refreshMarkerLayerMinZooms]. `icon-image` here is not what was broken —
   /// setLayerProperties merges, so it was never dropped. The load-bearing line
-  /// is `symbolSortKey`'s 1500 base (see [_collisionBase] for why it sits
-  /// ahead of the plain icon layers), which the refresh's partial call used to
-  /// overwrite: without it every full marker flattens to ~0, they collide with
-  /// each other as one block under `iconAllowOverlap: false`, and each loser
-  /// falls back to the layer-0 dot — for an animal, the paw. That is the "every
-  /// animal is a paw at every zoom" defect, and it is a collision-ordering bug,
-  /// not an icon-loading one: the composites were registered fine throughout.
+  /// is `symbolSortKey`'s 1500 base (ahead of the plain icon layers, so a
+  /// zoo's animal photos do not routinely lose to incidental amenity icons),
+  /// which the refresh's partial call used to overwrite: without it every full
+  /// marker flattens to ~0 and they collide with each other as one block under
+  /// `iconAllowOverlap: false`. That is a collision-ordering bug, not an
+  /// icon-loading one: the composites were registered fine throughout.
   /// Zoom the `logoScale` feature property is expressed at.
   static const double _kLogoScaleRefZoom = 22.0;
 
@@ -5667,77 +5590,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       // Both sources exist again — async pushes (compass, animation) may resume.
       _markerSourcesReady = true;
 
-      // Register the collision-fallback dot image (style reload wipes images).
+      // Register the default placeholder image (style reload wipes images).
       await _loadDotImage(controller);
-
-      // Layer 0: Collision-fallback dots.
-      // One dot per collision-participating marker, drawn beneath the full
-      // markers. Its symbolSortKey places each dot immediately after its own
-      // full marker in MapLibre's single global collision pass:
-      //   full = collisionBase + (-priority);  dot = collisionBase + 0.6 + (-priority)
-      // Resulting cascade (all via native iconAllowOverlap:false placement):
-      //   • 2 markers collide → winner shows full; loser's full is hidden and
-      //     its small dot places in the gap (marker → dot).
-      //   • marker vs existing dot → the marker's full collides with the dot and
-      //     is hidden, so the marker also falls back to its dot.
-      //   • 2 dots collide → the lower-priority dot is hidden.
-      // The winner never shows a dot: its own dot collides with its own full.
-      await controller.addSymbolLayer(
-        _clusterSourceId,
-        _dotMarkerLayerId,
-        _layerProps(_dotMarkerLayerId, (op) => SymbolLayerProperties(
-          visibility: _visibility(_dotMarkerLayerId),
-          symbolSortKey: ["+", ["get", "collisionBase"], 0.6, _kSortKeyExpression],
-          iconImage: ["get", "dotIcon"],
-          // The dot is a bundled PNG registered via addImage, so its on-screen
-          // size is image pixels × iconSize. Full size on native; web halves it
-          // because many landmarks collapse to dots there at once.
-          iconSize: 1.0 * _kIconScale,
-          iconAnchor: "center",
-          iconAllowOverlap: false,
-          textAllowOverlap: false,
-          // Mirror the per-type zoom visibility of the full markers: text (base
-          // 0) and icon-with-sectionId (base 3000) only appear from zoom 18;
-          // everything else fades in 12→14 like the normal icon markers.
-          // MapLibre only allows a `zoom` expression at the very top level, so
-          // we cannot nest `step`/`interpolate` over zoom inside a `case` (doing
-          // so makes NSExpression(mglJSONObject:) throw an uncaught NSException
-          // on iOS and aborts the app). Instead keep `interpolate` over zoom at
-          // the top and move the per-feature branch into the stop outputs:
-          //   • collisionBase 0/3000 → stays 0 until ~z18, then jumps to 1
-          //     (near-instant step, matching the previous `step` behaviour).
-          //   • everything else → fades in linearly 12→14, matching the
-          //     previous `interpolate`.
-          iconOpacity: op([
-            "interpolate",
-            ["linear"],
-            ["zoom"],
-            12.0,
-            ["case", _kDotStepGroupExpression, 0.0, 0.0],
-            14.0,
-            ["case", _kDotStepGroupExpression, 0.0, 1.0],
-            17.999,
-            ["case", _kDotStepGroupExpression, 0.0, 1.0],
-            18.0,
-            ["case", _kDotStepGroupExpression, 1.0, 1.0],
-          ]),
-        )),
-        filter: [
-          "all",
-          ["!", ["to-boolean", ["get", "overlapOverride"]]],
-          ["!", ["to-boolean", ["get", "isPriority"]]],
-          ["!", ["to-boolean", ["get", "section"]]],
-          ["!", ["to-boolean", ["get", "subSection"]]],
-          ["!", ["to-boolean", ["get", "boundary"]]],
-          // A selected feature is never a dot. Its full marker is now forced
-          // visible by the selected layer regardless of collision, so the dot
-          // is no longer a fallback for it — it would just sit behind the
-          // highlighted icon.
-          ["!", ["to-boolean", ["get", "isSelected"]]],
-        ],
-        enableInteraction: true,
-        belowLayerId: null,
-      );
 
       // Layer 1: Normal text markers (no icon, no bearing)
       await controller.addSymbolLayer(
@@ -5803,12 +5657,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         // reads as the marker "refreshing" on a zoom in/out. The gate is not
         // needed to keep the map uncluttered: these markers participate in the
         // same collision pass as every other icon layer, so a crowded plan
-        // thins itself out and each loser falls back to its own dot via the
-        // cascade in [_refreshMarkerLayerMinZooms].
-        //
-        // Paired with dropping base 3000 from [_kDotStepGroupExpression] — the
-        // dot ramp has to stop special-casing these or the dot stays hidden
-        // below 18 and the fallback has nothing to draw.
+        // thins itself out: a marker that loses a collision is simply not
+        // drawn until there is room for it.
       );
 
       // Layer 2b: Normal icon markers — without sectionId
@@ -6218,8 +6068,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "isSelected"]],
           ["!", ["to-boolean", ["get", "isAnimating"]]],
           // Render the selected marker if it has an icon OR just a label — a
-          // room/polygon whose marker is text-only (shown as the green
-          // collision dot at rest) still gets its label enlarged on tap.
+          // room/polygon whose marker is text-only still gets its label
+          // enlarged on tap.
           ["any", ["to-boolean", ["get", "icon"]], ["to-boolean", ["get", "title"]]],
         ],
         enableInteraction: true,
@@ -6715,27 +6565,22 @@ class MaplibreMapProvider extends BaseMapProvider {
     // Pushes each layer's FULL property set rather than the two opacity/sort
     // keys. The load-bearing line is `symbol-sort-key`: a partial call that
     // names it OVERWRITES it, and the bare `_kSortKeyExpression` discards the
-    // per-layer base from [_collisionBase] (text 0, fixed 1000, icon 2000/3000,
-    // customRendering 1500).
+    // per-layer base set in [enableMarkerLayers] (text 0, fixed 1000, icon
+    // 2000/3000, customRendering 1500).
     //
-    // That base is the whole marker→dot cascade. A feature's dot sorts at
-    // `collisionBase + 0.6` — immediately behind ITS OWN full marker — so the
-    // marker places first, wins, and suppresses its own dot. Flatten every full
-    // marker to ~0 and that pairing is gone: markers all tie while dots keep
-    // their per-feature bases, so a dot is no longer suppressed by the marker it
-    // belongs to and lingers beside it as you zoom in.
+    // That base is what orders the layers in MapLibre's single collision pass.
+    // Flatten every marker to ~0 and they all tie, so which layer keeps its
+    // marker in a collision stops being decided by the layer at all.
     //
     // Zoo fix (2026-09-11): customRendering used to re-sort to 4000, i.e. after
     // every other layer including the plain amenity icons, so animal photo
-    // composites routinely lost collisions and fell back to paws — even
-    // against unrelated icons nowhere near as important as the photo itself.
-    // [_collisionBase] now gives customRendering its own base (1500), ahead of
-    // the icon layers, so it only loses to text/fixed wayfinding furniture.
+    // composites routinely lost collisions — even against unrelated icons
+    // nowhere near as important as the photo itself. customRendering now has
+    // its own base (1500), ahead of the icon layers, so it only loses to
+    // text/fixed wayfinding furniture.
     //
-    // Was web-only; native ran the partial branch below, as ea627c6 does. So
-    // this is the one place the reference build is NOT the behaviour we want —
-    // its flattened key is why the collision dots never clear. Restoring the
-    // bases on native is a deliberate divergence from ea627c6.
+    // Was web-only; native ran the partial branch below, as ea627c6 does.
+    // Restoring the bases on native is a deliberate divergence from ea627c6.
     await controller.setLayerProperties(
       _normalTextMarkerLayerId,
       _layerProps(

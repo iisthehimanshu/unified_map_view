@@ -107,7 +107,7 @@ layers:
     tappable: true
     # opacity: 1.0
 
-  landmarkMarkers:            # text/icon/custom markers + collision dots
+  landmarkMarkers:            # text/icon/custom markers
     visible: true
     opacity: 1.0
     tappable: true
