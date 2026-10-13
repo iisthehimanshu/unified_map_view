@@ -1,5 +1,4 @@
 import 'package:turn_highlighter/turn_highlighter.dart';
-import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
 import 'package:unified_map_view/src/utils/renderingUtilities.dart';
 import 'package:unified_map_view/src/utils/perf_trace.dart';
@@ -263,14 +262,11 @@ class AnnotationController{
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
       String id = GeoJsonUtils.buildKey(buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
       await _unifiedMapController.removeMarker("user");
-      await _unifiedMapController.removeCircle("user");
       // Style read at the point of use — see the note in localizeUser.
       GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
           _user!.location, id,
           style: _unifiedMapController.userMarkerStyle);
-      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(_user!.location, id);
       await _unifiedMapController.addUserMarker(userMarker);
-      await _unifiedMapController.addCircle(userCircle);
       localizeUser(_user!);
     }else{
       // removeMarker(buildingID) above also deletes the user puck: its id is
@@ -320,15 +316,11 @@ class AnnotationController{
         String id = GeoJsonUtils.buildKey(
             buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
         await _unifiedMapController.removeMarker("user");
-        await _unifiedMapController.removeCircle("user");
         // Style read at the point of use — see the note in localizeUser.
         GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
             _user!.location, id,
             style: _unifiedMapController.userMarkerStyle);
-        GeoJsonCircle userCircle =
-            PredefinedCircles.getGenericMarker(_user!.location, id);
         await _unifiedMapController.addUserMarker(userMarker);
-        await _unifiedMapController.addCircle(userCircle);
         localizeUser(_user!);
       }
     }
@@ -871,7 +863,6 @@ class AnnotationController{
       await changeBuildingFloor(user.bid, user.floor);
     }
     await _unifiedMapController.removeMarker("user");
-    await _unifiedMapController.removeCircle("user");
     if(!_userFloorIsRendered(user)){
       final campusId = _venueData.campusBuildingId;
       print("puck: localizeUser skipped the add — venue shows floor "
@@ -891,9 +882,7 @@ class AnnotationController{
       // at the point of use makes the last write win instead of the first.
       GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id,
           style: _unifiedMapController.userMarkerStyle);
-      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
       await _unifiedMapController.addUserMarker(userMarker);
-      await _unifiedMapController.addCircle(userCircle);
     }
   }
 
@@ -919,12 +908,8 @@ class AnnotationController{
     final GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
         user.location, id,
         style: _unifiedMapController.userMarkerStyle);
-    final GeoJsonCircle userCircle =
-        PredefinedCircles.getGenericMarker(user.location, id);
     await _unifiedMapController.removeMarker("user");
-    await _unifiedMapController.removeCircle("user");
     await _unifiedMapController.addUserMarker(userMarker);
-    await _unifiedMapController.addCircle(userCircle);
   }
 
   Future<void> clearUser() async {
