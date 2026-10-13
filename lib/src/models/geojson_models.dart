@@ -561,11 +561,12 @@ class GeoJsonMarker {
     if (marker == null) return const [];
 
     final markers = <GeoJsonMarker>[marker];
-    final shouldAddEntryDirectionMarker =
+    var shouldAddEntryDirectionMarker =
         feature.properties?["global"] == true &&
             feature.properties?["type"] == "Room Door" &&
             feature.properties?["entryDirection"] != null &&
             feature.properties?["openingDirection"] != null;
+    shouldAddEntryDirectionMarker = false;
 
     if (shouldAddEntryDirectionMarker) {
       final baseCoords = feature.properties?['closestProjection'];
