@@ -80,6 +80,7 @@ class Building {
   final bool globalAnnotation;
   final bool locked;
   final List<List<double>>? boundary;
+  final List<dynamic> features;
 
   Building({
     required this.id,
@@ -107,6 +108,7 @@ class Building {
     required this.globalAnnotation,
     required this.locked,
     required this.boundary,
+    required this.features,
   });
 
   factory Building.fromJson(dynamic json) {
@@ -138,6 +140,7 @@ class Building {
       boundary: json['boundary'] != null ?(json['boundary'] as List<dynamic>)
           .map((e) => List<double>.from(e))
           .toList():null,
+      features: json['features'] ?? [],
     );
   }
 
@@ -168,6 +171,7 @@ class Building {
       'globalAnnotation': globalAnnotation,
       'locked': locked,
       'boundary': boundary,
+      'features': features,
     };
   }
 }

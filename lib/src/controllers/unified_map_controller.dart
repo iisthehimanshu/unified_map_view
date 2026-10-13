@@ -1015,6 +1015,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Annotation Controller
   String? get focusedBuilding => _annotationController.focusedBuilding;
+  bool get focusedBuildingShareEnabled => _annotationController.focusedBuildingShareEnabled;
   String? get focusedBuildingName => _annotationController.focusedBuildingName;
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
