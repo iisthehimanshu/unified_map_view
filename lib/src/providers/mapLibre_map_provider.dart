@@ -3622,6 +3622,8 @@ class MaplibreMapProvider extends BaseMapProvider {
     final rotationRad = rotationDeg * pi / 180.0;
     final cosT = cos(rotationRad);
     final sinT = sin(rotationRad);
+    final modelScale = double.tryParse("${props['3dModelScale']}") ?? 1.0;
+    final scale = modelScale.isFinite && modelScale > 0 ? modelScale : 1.0;
 
     final anchorLatRad = anchorLat * pi / 180.0;
     final metersPerDegLng = _metersPerDegLat * cos(anchorLatRad);
@@ -3651,8 +3653,8 @@ class MaplibreMapProvider extends BaseMapProvider {
       if (localCorners.isEmpty) continue;
 
       final ring = localCorners.map((c) {
-        final x = c[0];
-        final z = c[1];
+        final x = c[0] * scale;
+        final z = c[1] * scale;
         // Rotate around the item's own anchor point (matches how
         // rotation_y rotates the whole part group in a three.js-style
         // scene graph).
@@ -3672,8 +3674,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         },
         'properties': {
           'color': p['color'] ?? '#888888',
-          'base': oy - h / 2 - eps,
-          'height': oy + h / 2 + eps,
+          'base': (oy - h / 2 - eps) * scale,
+          'height': (oy + h / 2 + eps) * scale,
         },
       });
     }
