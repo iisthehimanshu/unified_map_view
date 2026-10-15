@@ -2,12 +2,14 @@
 
 library unified_map_view;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:hive/hive.dart';
 import 'package:hive_flutter/adapters.dart';
 import 'package:unified_map_view/src/apis/BuildingByVenue.dart';
 import 'package:unified_map_view/src/apis/FurnitureAPI.dart';
 import 'package:unified_map_view/src/apis/GlobalGeoJSONVenueAPI.dart';
 import 'package:unified_map_view/src/config.dart';
+import 'package:unified_map_view/src/models/venue_data_version.dart';
 import 'package:unified_map_view/src/utils/perf_trace.dart';
 import 'package:unified_map_view/src/database/model/BuildingByVenueAPIModel.dart';
 import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
@@ -25,6 +27,7 @@ export 'src/models/user_marker_style.dart';
 export 'src/models/CameraBound.dart';
 export 'src/models/map_layer.dart';
 export 'src/models/map_style_config.dart';
+export 'src/models/venue_data_version.dart';
 export 'src/utils/LandmarkAssetType.dart';
 export 'src/models/marker_type_info.dart';
 export 'src/models/marker_types.dart';
@@ -90,6 +93,11 @@ class UnifiedMapViewPackage {
   static void setVenueGeoJson(String venueName, Map<String, dynamic> data) =>
       GlobalGeoJSONVenueAPI.provide(venueName, data);
 
+  /// The version of [venueName]'s GeoJSON the map is showing, whether a newer
+  /// one is downloading, and whether one is cached for the next open.
+  static ValueListenable<VenueDataVersion> venueDataVersion(String venueName) =>
+      GlobalGeoJSONVenueAPI.versionOf(venueName);
+
   /// Forgets the shared venue GeoJSON so the next load fetches it again.
   static void clearVenueGeoJson([String? venueName]) =>
       GlobalGeoJSONVenueAPI.invalidate(venueName);
@@ -123,6 +131,13 @@ class UnifiedMapViewPackage {
   /// are always re-fetched.
   static void setFurnitureVersion(String venueName, Future<String?> version) =>
       FurnitureAPI.provideVersion(venueName, version);
+
+  /// Supplies the data version the venue's cached GeoJSON is checked
+  /// against, the same way as [setFurnitureVersion]: cached GeoJSON is served
+  /// at once and re-fetched for the next launch when [version] differs from
+  /// the one it was stored with. [venueDataVersion] reports it.
+  static void setGeoJsonVersion(String venueName, Future<String?> version) =>
+      GlobalGeoJSONVenueAPI.provideVersion(venueName, version);
 
   static Set<String>? _allowedBuildingIds;
 
