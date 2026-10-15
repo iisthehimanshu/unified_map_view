@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'dart:developer' as dev;
 import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
+import '../apimodels/BuildingData.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import '../apis/BuildingByVenue.dart';
 import '../apis/FurnitureAPI.dart';
@@ -36,10 +37,13 @@ class AnnotationController{
   bool _furnitureDataReady = false;
 
   String? _focusedBuilding;
+  Set<String> _shareEnabledBuildingIds = const {};
   List<int>? _focusedBuildingAvailableFloors;
   int? _focusBuildingSelectedFloor;
 
   String? get focusedBuilding => _focusedBuilding;
+  bool get focusedBuildingShareEnabled =>
+      _focusedBuilding != null && _shareEnabledBuildingIds.contains(_focusedBuilding);
   String? get focusedBuildingName => _venueData.buildingNameForId(_focusedBuilding);
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
@@ -128,8 +132,16 @@ class AnnotationController{
     // once they arrive.
     _venueData = PerfTrace.time('VenueData parse',
         () => VenueData(venueName, apiData, buildingData));
+    _shareEnabledBuildingIds = {
+      for (final building in _venueData.buildingData.buildings ?? <Building>[])
+        if (building.features.contains('SHARE_MY_LOCATION')) building.id,
+    };
     _venueDataReady = true;
     await PerfTrace.timeAsync('renderVenue', () => renderVenue());
+    // A cached venue can finish loading without another camera-move event.
+    // Seed the same focused-building state used by FloorSpeedDial once now;
+    // later camera moves keep updating it through onCameraMove as usual.
+    _unifiedMapController.onCameraMove(_unifiedMapController.cameraPosition);
     if (PerfTrace.enabled) print(PerfTrace.report());
 
     furnitureDataFuture.then((furnitureData) async {
