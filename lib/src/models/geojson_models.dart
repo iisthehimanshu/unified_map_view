@@ -513,6 +513,7 @@ class GeoJsonMarker {
             pick(feature.properties?["poiRef"]?["locationName"]?[AppConfig.languageCode]) ??
             pick(feature.properties?["exhibitorRef"]?["company_name"]) ??
             exhibitorName(feature.properties) ??
+            pick(feature.properties?["outletRef"]?["name"]) ??
             pick(feature.properties?["sponsorRef"]?["name"]);
 
     if (parsedTitle == null || parsedTitle.isEmpty) {

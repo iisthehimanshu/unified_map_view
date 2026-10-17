@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:unified_map_view/src/apimodels/BuildingData.dart';
 import 'package:unified_map_view/src/apimodels/GlobalAppGeoJsonDataModel.dart';
 
@@ -357,15 +356,41 @@ class VenueData{
   }
 
   GeoJsonFeature? findLocation(String polyId){
-    GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
-    if (model.data == null) return null;
-    // Stringifies every feature in the venue. This sits on the deep-link
-    // landmark path (selectLocation -> switchToLocationFloor -> findLocation),
-    // so it fires during first paint. Native keeps the dump.
-    if (!kIsWeb) print("model.data $polyId ${model.data}");
-    final feature = model.data!.firstWhere((feature)=>(feature.id == polyId || feature.properties?["polyId"] == polyId));
+    if (_model.data == null) return null;
+    for (final feature in _model.data!) {
+      if (feature.id == polyId || feature.sId == polyId ||
+          feature.properties?["polyId"] == polyId ||
+          feature.properties?["landmarkId"] == polyId) {
+        return GeoJsonFeature.fromJson(feature.toJson());
+      }
+    }
+    return null;
+  }
 
-    return GeoJsonFeature.fromJson(feature.toJson());
+  /// Finds a feature by its own client ID on any floor.
+  GeoJsonFeature? findByClientId(String clientId) {
+    for (final feature in _model.data ?? []) {
+      final properties = feature.properties;
+      if (properties?['clientId']?.toString() == clientId) {
+        return GeoJsonFeature.fromJson(feature.toJson());
+      }
+    }
+    return null;
+  }
+
+  /// Map feature `id` can be the shared map ID. Point markers are keyed by
+  /// their associated room polygon, which is the selectable location ID.
+  String? selectionIdFor(GeoJsonFeature feature) {
+    final associated = feature.properties?['associatedPolygons'];
+    if (associated is List && associated.isNotEmpty) {
+      final id = associated.first?.toString();
+      if (id != null && id.isNotEmpty) return id;
+    }
+    if (feature.associatedPolygons.isNotEmpty) {
+      return feature.associatedPolygons.first;
+    }
+    final polyId = feature.properties?['polyId']?.toString();
+    return polyId != null && polyId.isNotEmpty ? polyId : feature.id;
   }
 
   void findBuildingCenters() {

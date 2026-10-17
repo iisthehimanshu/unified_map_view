@@ -212,7 +212,9 @@ class AnnotationController{
       // Initial render: stream the marker bake in after the geometry paints.
       await _unifiedMapController.addGeoJsonFeatures(
           GeoJsonFeatureCollection(features: venueRenderData),
-          deferMarkers: true);
+          // Selection needs the point marker to exist before selectLocation.
+          deferMarkers: _unifiedMapController.onReadyLandmarkSelectionID == null ||
+              _unifiedMapController.onReadyLandmarkSelectionID!.isEmpty);
       await _unifiedMapController.fitBoundsToGeoJson();
       // List<MapLocation> circlePoints = RenderingUtilities.generateCirclePoints(center: _venueData.venueLatLng, radiusInMeters: 5000);
       // _unifiedMapController.addPolygon(GeoJsonPolygon(id: "venue patch", points: circlePoints, properties: {"type":"Boundary"}));
@@ -226,8 +228,19 @@ class AnnotationController{
         await localizeUser(pendingUser);
       }
       print("onReadyLandmarkSelectionID ${_unifiedMapController.onReadyLandmarkSelectionID}");
-      if(_unifiedMapController.onReadyLandmarkSelectionID != null && _unifiedMapController.onReadyLandmarkSelectionID!.isNotEmpty){
-        await _unifiedMapController.selectLocation(polyID: _unifiedMapController.onReadyLandmarkSelectionID!);
+      String? selectionId = _unifiedMapController.onReadyLandmarkSelectionID;
+      if (selectionId != null && selectionId.isNotEmpty) {
+        final feature = _venueData.findLocation(selectionId) ??
+            _venueData.findByClientId(selectionId);
+        if (feature == null) {
+          print("Launch id '$selectionId' is not present in venue '${_venueData.venueName}' GeoJSON");
+          selectionId = null;
+        } else {
+          selectionId = _venueData.selectionIdFor(feature);
+        }
+      }
+      if (selectionId != null && selectionId.isNotEmpty) {
+        await _unifiedMapController.selectLocation(polyID: selectionId);
       }
     }catch(e, stackTrace){
       print("e ${e} $stackTrace");
