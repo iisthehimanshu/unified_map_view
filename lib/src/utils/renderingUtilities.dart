@@ -104,6 +104,13 @@ class RenderingUtilities{
     return Color.fromARGB((argb >> 24) & 0xFF, grey, grey, grey);
   }
 
+  static Color fallbackStrokeColor(Color fill, {double amount = 0.2}) {
+    final hsl = HSLColor.fromColor(fill);
+    return hsl
+        .withLightness((hsl.lightness - amount).clamp(0.0, 1.0))
+        .toColor();
+  }
+
   static String colorToMapplsHex(Color color) {
     return color.value
         .toRadixString(16)

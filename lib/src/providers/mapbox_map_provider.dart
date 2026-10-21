@@ -561,7 +561,7 @@ class MapboxMapProvider extends BaseMapProvider {
 
       final Color strokeColor = (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
           ? RenderingUtilities.hexToColor(strokeColorHex)
-          : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ?? Color(0xffD3D3D3);
+          : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ?? RenderingUtilities.fallbackStrokeColor(fillColor);
 
       _polygons[polygon.id] = polygon;
 

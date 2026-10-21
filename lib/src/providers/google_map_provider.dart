@@ -190,7 +190,7 @@ class GoogleMapProvider extends BaseMapProvider {
     (strokeColorHex != null && strokeColorHex != "undefined" && strokeColorHex.isNotEmpty)
         ? RenderingUtilities.hexToColor(strokeColorHex)
         : RenderingUtilities.polygonColorMap[type]?["strokeColor"]
-        ?? Colors.blue.withOpacity(0.0);
+        ?? RenderingUtilities.fallbackStrokeColor(fill);
 
     _polygons.add(
       Polygon(
