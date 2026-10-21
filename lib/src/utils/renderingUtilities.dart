@@ -104,7 +104,7 @@ class RenderingUtilities{
     return Color.fromARGB((argb >> 24) & 0xFF, grey, grey, grey);
   }
 
-  static Color fallbackStrokeColor(Color fill, {double amount = 0.2}) {
+  static Color fallbackStrokeColor(Color fill, {double amount = 1.0}) {
     final hsl = HSLColor.fromColor(fill);
     return hsl
         .withLightness((hsl.lightness - amount).clamp(0.0, 1.0))

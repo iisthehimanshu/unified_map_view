@@ -2951,7 +2951,9 @@ class MaplibreMapProvider extends BaseMapProvider {
           strokeColorHex.isNotEmpty)
           ? RenderingUtilities.hexToColor(strokeColorHex)
           : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ??
-          RenderingUtilities.fallbackStrokeColor(fillColor);
+          (type == 'wall'
+              ? fillColor
+              : RenderingUtilities.fallbackStrokeColor(fillColor));
 
 
       final Color fillColorSecondary = (fillColorSecondaryHex != null &&
