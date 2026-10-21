@@ -358,9 +358,9 @@ class AnnotationController{
         .toList();
   }
 
-  Future<void> switchToLocationFloor(String polyId) async {
+  Future<GeoJsonFeature?> switchToLocationFloor(String polyId) async {
     GeoJsonFeature? feature = _venueData.findLocation(polyId);
-    if(feature == null) return;
+    if(feature == null) return null;
 
     int? floor = feature.properties?["floor"];
     String? buildingID = feature.buildingId;
@@ -368,6 +368,7 @@ class AnnotationController{
     if(floor != null && buildingID != null){
       await changeBuildingFloor(buildingID, floor);
     }
+    return feature;
   }
 
   List<int>? returnFocusedBuildingFloors(){

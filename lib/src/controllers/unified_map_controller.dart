@@ -834,16 +834,12 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> selectLocation({required String polyID}) async {
     if (_currentMapController != null) {
-      await _annotationController.switchToLocationFloor(polyID);
-      // Kick off the provider's selection logic (state update + visual push + camera animation)
-      final selectionFuture = currentProviderImplementation.selectLocation(_currentMapController, polyID);
-      
-      // Allow the provider to reach its first internal 'await' (likely the state update)
-      // then notify listeners so the UI can reflect the selection immediately.
+      GeoJsonFeature? feature = await _annotationController.switchToLocationFloor(polyID);
+      print("selectLocation debug feature $feature");
+      if(feature == null) return;
+      final selectionFuture = currentProviderImplementation.selectLocation(_currentMapController, feature.id??polyID);
       await Future.delayed(Duration.zero);
       notifyListeners();
-      
-      // Wait for the full operation (including camera animation) to complete.
       await selectionFuture;
     }
   }

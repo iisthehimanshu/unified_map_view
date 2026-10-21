@@ -359,12 +359,7 @@ class VenueData{
   GeoJsonFeature? findLocation(String polyId){
     GlobalAppGeoJsonDataModel model = GlobalAppGeoJsonDataModel.fromJson(json);
     if (model.data == null) return null;
-    // Stringifies every feature in the venue. This sits on the deep-link
-    // landmark path (selectLocation -> switchToLocationFloor -> findLocation),
-    // so it fires during first paint. Native keeps the dump.
-    if (!kIsWeb) print("model.data $polyId ${model.data}");
-    final feature = model.data!.firstWhere((feature)=>(feature.id == polyId || feature.properties?["polyId"] == polyId));
-
+    final feature = model.data!.firstWhere((feature)=>(feature.id == polyId || feature.properties?["polyId"] == polyId || feature.properties?["clientId"] == polyId));
     return GeoJsonFeature.fromJson(feature.toJson());
   }
 
