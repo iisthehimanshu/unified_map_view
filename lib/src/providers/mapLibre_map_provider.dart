@@ -184,6 +184,10 @@ class MaplibreMapProvider extends BaseMapProvider {
   Timer? _pathShineTimer;
   double _pathShineProgress = 0.0;
   List<Map<String, dynamic>> _allCornerFeatures = [];
+  List<Map<String, dynamic>> _visibleCornerFeatures = [];
+  final Map<String, List<MapLocation>> _cornerRoutes = {};
+  String? _visibleTurnKey;
+  MapLocation? _navigationPosition;
 
   /// The square canvas [UnifiedMarkerCreator.createBentArrow] bakes the big
   /// corner arrow at (its `size` default), and the fraction of that square
@@ -1817,6 +1821,8 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<void> moveUser(controller, String id, MapLocation location, Duration duration) async {
     if (controller is MapLibreMapController) {
       await _animateMarkerToPosition(controller, id, location, duration);
+      _navigationPosition = location;
+      await _refreshUpcomingTurn(controller);
     }
   }
 
@@ -3430,6 +3436,10 @@ class MaplibreMapProvider extends BaseMapProvider {
       MapLibreMapController controller) async {
     try {
       final ids = await controller.getLayerIds();
+      // Furniture can be loaded after the route. Keep both its flat fill and
+      // 3D extrusion below the route's lowest layer so the path stays visible.
+      if (ids.contains(_pathOutlineLayerId)) return _pathOutlineLayerId;
+      if (ids.contains(_pathSolidLayerId)) return _pathSolidLayerId;
       for (final id in ids) {
         if (id is String &&
             (id.contains('marker') || id == _normalCircleLayerId)) {
@@ -3815,6 +3825,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     final cornerFeatures = <Map<String, dynamic>>[];
+    final cornerRoutes = <String, List<MapLocation>>{};
     // A copy, not `_lines` itself: the loop awaits icon bakes, and a polyline
     // added or removed meanwhile threw "Concurrent modification during
     // iteration" out of whichever caller was mid-loop. removePolyline does not
@@ -3826,6 +3837,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       final bool isGreyOverlay = line.properties?['isGreyOverlay'] ?? false;
 
       if (isPath && style == "solid" && !isGreyOverlay && line.points.length >= 3) {
+        cornerRoutes[line.id] = line.points;
         // Detect significant corners (bends)
         for (int i = 1; i < line.points.length - 1; i++) {
           final b1 = _calculateBearing(line.points[i - 1], line.points[i]);
@@ -3864,6 +3876,8 @@ class MaplibreMapProvider extends BaseMapProvider {
                 'bearing': b1, // Rotate icon by incoming bearing so tail aligns
                 'icon': iconId,
                 'turnBubbleIcon': bubbleIconId,
+                'routeId': line.id,
+                'routeIndex': i,
                 'turnSharpness': diff.abs(),
                 'minSegMeters': segIn < segOut ? segIn : segOut,
               }
@@ -3877,6 +3891,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     // current one and this would overwrite it with stale corners.
     if (pass != _cornerPass) return;
     _allCornerFeatures = cornerFeatures;
+    _cornerRoutes..clear()..addAll(cornerRoutes);
+    _visibleTurnKey = null;
+    _navigationPosition = null;
     _cornerFeaturesSignature = routeSignature;
     await _refreshCornerVisibility(controller);
   }
@@ -4035,10 +4052,69 @@ class MaplibreMapProvider extends BaseMapProvider {
       kept.add(feature);
     }
 
+    _visibleCornerFeatures = kept;
+    final upcoming = _upcomingTurnFeature(kept);
+    for (final feature in kept) {
+      feature['properties']['showTurnBubble'] = identical(feature, upcoming);
+    }
+    _visibleTurnKey = _turnKey(upcoming);
     await controller.setGeoJsonSource(_pathCornerSourceId, {
       "type": "FeatureCollection",
       "features": kept,
     });
+  }
+
+  String? _turnKey(Map<String, dynamic>? feature) => feature == null
+      ? null
+      : '${feature['properties']['routeId']}:${feature['properties']['routeIndex']}';
+
+  Map<String, dynamic>? _upcomingTurnFeature([List<Map<String, dynamic>>? candidates]) {
+    final turns = candidates ?? _allCornerFeatures;
+    if (turns.isEmpty) return null;
+    final position = _navigationPosition;
+    if (position == null) {
+      return turns.reduce((a, b) =>
+          (a['properties']['routeIndex'] as int) < (b['properties']['routeIndex'] as int) ? a : b);
+    }
+    String? nearestRoute;
+    double nearestProgress = 0;
+    double nearestDistance = double.infinity;
+    for (final entry in _cornerRoutes.entries) {
+      final points = entry.value;
+      for (var i = 0; i < points.length - 1; i++) {
+        final a = points[i];
+        final b = points[i + 1];
+        final scale = cos(position.latitude * pi / 180);
+        final x = (position.longitude - a.longitude) * scale;
+        final y = position.latitude - a.latitude;
+        final dx = (b.longitude - a.longitude) * scale;
+        final dy = b.latitude - a.latitude;
+        final lengthSquared = dx * dx + dy * dy;
+        final t = lengthSquared == 0 ? 0.0 : ((x * dx + y * dy) / lengthSquared).clamp(0.0, 1.0);
+        final distanceSquared = (x - t * dx) * (x - t * dx) + (y - t * dy) * (y - t * dy);
+        if (distanceSquared < nearestDistance) {
+          nearestDistance = distanceSquared;
+          nearestRoute = entry.key;
+          nearestProgress = i + t;
+        }
+      }
+    }
+    final orderedTurns = [...turns]..sort((a, b) =>
+        (a['properties']['routeIndex'] as int).compareTo(b['properties']['routeIndex'] as int));
+    for (final feature in orderedTurns) {
+      final props = feature['properties'];
+      if (props['routeId'] == nearestRoute &&
+          (props['routeIndex'] as int) > nearestProgress + 0.05) {
+        return feature;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _refreshUpcomingTurn(MapLibreMapController controller) async {
+    if (_allCornerFeatures.isEmpty) return;
+    final nextKey = _turnKey(_upcomingTurnFeature(_visibleCornerFeatures));
+    if (nextKey != _visibleTurnKey) await _refreshCornerVisibility(controller);
   }
 
   Future<Uint8List> _createShineIconBytes() async {
@@ -6852,7 +6928,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       );
 
       // Turn bubble (floating callout with the turn label), anchored to the
-      // corner point. minzoom hides it when zoomed out too far.
+      // next upcoming corner. minzoom hides it when zoomed out too far.
       await _addSymbolLayerSafe(controller,
         _pathCornerSourceId,
         _turnBubbleLayerId,
@@ -6870,6 +6946,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "path"]],
           ["==", ["get", "style"], "solid"],
           ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+          ["to-boolean", ["get", "showTurnBubble"]],
         ],
         minzoom: 19.0,
       );
