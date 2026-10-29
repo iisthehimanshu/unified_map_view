@@ -11,8 +11,7 @@ import 'package:unified_map_view/src/apis/GlobalGeoJSONVenueAPI.dart';
 import 'package:unified_map_view/src/config.dart';
 import 'package:unified_map_view/src/models/venue_data_version.dart';
 import 'package:unified_map_view/src/utils/perf_trace.dart';
-import 'package:unified_map_view/src/database/model/BuildingByVenueAPIModel.dart';
-import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
+import 'package:unified_map_view/src/data/data_repository_bridge.dart';
 
 // Enums
 export 'src/enums/map_provider.dart';
@@ -154,29 +153,19 @@ class UnifiedMapViewPackage {
         (normalized == null || normalized.isEmpty) ? null : normalized;
   }
 
-  static void _registerAdapter<T>(TypeAdapter<T> adapter) {
-    if (Hive.isAdapterRegistered(adapter.typeId)) return;
-    Hive.registerAdapter(adapter);
-  }
-
   static Future<void> _initializeOnce(String venueName) async {
     try {
       PerfTrace.mark('UnifiedMapViewPackage.initialize start');
       // Initialize Hive
       await PerfTrace.timeAsync('Hive.initFlutter', () => Hive.initFlutter());
 
-      // Register adapters
-      _registerAdapter(BuildingByVenueAPIModelAdapter());
-      // On web a non-lazy openBox deserialises every record up front, so this
-      // pays a full decode of the cached venue blob before returning.
-      await PerfTrace.timeAsync('openBox BuildingByVenue',
-          () => Hive.openBox<BuildingByVenueAPIModel>('UNifiedBuildingByVenueAPIModelFile'));
-
-      _registerAdapter(GlobalGeoJSONVenueAPIModelAdapter());
-      await PerfTrace.timeAsync('openBox GlobalGeoJSONVenue',
-          () => Hive.openBox<GlobalGeoJSONVenueAPIModel>('GlobalGeoJSONVenueAPIModelFile'));
-      await PerfTrace.timeAsync('openBox Furniture',
-          () => Hive.openBox(FurnitureAPI.boxName));
+      // Data_Repository opens the venue cache this package reads: the
+      // GeoJSON and 3D model boxes it used to open itself, and the venue's
+      // building list it now shares with navigation_sdk.
+      await PerfTrace.timeAsync('open Data_Repository', () => dataRepository());
+      // This package's own copy of the building list, which the shared one
+      // replaces.
+      await Hive.deleteBoxFromDisk('UNifiedBuildingByVenueAPIModelFile');
       _initialized = true;
 
       await PerfTrace.timeAsync('initialize: fetchBuildingIDS',

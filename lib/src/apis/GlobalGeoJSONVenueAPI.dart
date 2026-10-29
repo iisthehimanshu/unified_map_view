@@ -1,17 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:data_repository/data_repository.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
-import '../config.dart';
-import '../utils/perf_trace.dart';
-import '../apimodels/GlobalAppGeoJsonDataModel.dart';
+import '../data/data_repository_bridge.dart';
 import '../models/venue_data_version.dart';
-import 'package:unified_map_view/src/database/model/GlobalGeoJSONVenueAPIModel.dart';
-import '../services/GlobalGeoJSONStorageService.dart';
 
 class GlobalGeoJSONVenueAPI {
 
@@ -128,27 +123,23 @@ class GlobalGeoJSONVenueAPI {
   }
 
   Future<Map<String, dynamic>?> _load(String venueName) async {
-    final service = await GlobalGeoJSONVenueStorageService();
-    await service.init();
-    final bool dbHasData = service.containsID(venueName) == true;
+    final venue = (await dataRepository()).venue;
 
     // Seed from the bundled asset (if any) so a first run has something to
     // serve below.
-    if (!dbHasData) {
-      await _seedFromAssetIfNeeded(venueName, service);
+    if (venue.cached(VenueData.venueGeoJson, venueName) == null) {
+      await _seedFromAssetIfNeeded(venueName, venue);
     }
 
     // Cached: render from it now and refresh the cache behind it, for the next
     // launch. Waiting on the live fetch here held the whole venue off screen
     // for as long as a multi-MB download took, on every launch, for a response
     // that rarely differs from the cached one.
-    if (service.containsID(venueName)) {
-      final cached = service.getGeoData(venueName)?.responseBody;
-      if (cached != null) {
-        print("GlobalGeoJSONVenueAPI from DataBase");
-        _refreshIfStale(venueName, service, cached[_versionKey] as String?);
-        return cached;
-      }
+    final cached = venue.cached(VenueData.venueGeoJson, venueName);
+    if (cached is Map<String, dynamic>) {
+      print("GlobalGeoJSONVenueAPI from DataBase");
+      _refreshIfStale(venueName, venue, cached[_versionKey] as String?);
+      return cached;
     }
 
     // Being "online" is only a guess — on web it is any Wi-Fi or ethernet
@@ -156,7 +147,7 @@ class GlobalGeoJSONVenueAPI {
     if (await checkInternetConnectivity()) {
       _setFetching(venueName, true);
       try {
-        final fresh = await _fetchFromApi(venueName, service);
+        final fresh = await _fetchFromApi(venueName, venue);
         if (fresh != null) return fresh;
       } finally {
         _setFetching(venueName, false);
@@ -168,8 +159,8 @@ class GlobalGeoJSONVenueAPI {
 
   /// Re-fetches the venue for the next launch when the host's version is not
   /// the one the cache was stored with. An unknown version counts as changed.
-  Future<void> _refreshIfStale(String venueName,
-      GlobalGeoJSONVenueStorageService service, String? cachedVersion) async {
+  Future<void> _refreshIfStale(
+      String venueName, VenueRepository venue, String? cachedVersion) async {
     try {
       final version = await _versionFor(venueName);
       if (version != null && version == cachedVersion) {
@@ -179,7 +170,7 @@ class GlobalGeoJSONVenueAPI {
       if (!await checkInternetConnectivity()) return;
       print("GlobalGeoJSONVenueAPI: version changed — refreshing the cache");
       _setFetching(venueName, true);
-      final fresh = await _fetchFromApi(venueName, service);
+      final fresh = await _fetchFromApi(venueName, venue);
       final n = versionOf(venueName);
       if (fresh != null && version != n.value.showing) {
         n.value = n.value.copyWith(pending: version);
@@ -191,15 +182,14 @@ class GlobalGeoJSONVenueAPI {
     }
   }
 
-  /// Seeds DB from bundled asset. Returns true if successful.
-  Future<bool> _seedFromAssetIfNeeded(String venueName, GlobalGeoJSONVenueStorageService service) async {
+  /// Seeds the cache from a bundled asset. Returns true if successful.
+  Future<bool> _seedFromAssetIfNeeded(String venueName, VenueRepository venue) async {
     try {
       final raw = await rootBundle.loadString(
         'assets/api_data/GeoJsonData${venueName}.json',
       );
       final Map<String, dynamic> responseBody = json.decode(raw);
-      final model = GlobalGeoJSONVenueAPIModel(responseBody: responseBody);
-      service.saveGeoData(model, venueName);
+      await venue.put(VenueData.venueGeoJson, venueName, responseBody);
       print("GlobalGeoJSONVenueAPI seeded from asset.");
       return true;
     } catch (_) {
@@ -208,42 +198,30 @@ class GlobalGeoJSONVenueAPI {
     }
   }
 
-  Future<Map<String, dynamic>?> _fetchFromApi(String venueName, GlobalGeoJSONVenueStorageService service) async {
-    final baseUrl = "${AppConfig.baseUrl}/secured/get-indoor-geojson-venue/$venueName?expand=0.1&api_key=${AppConfig.apiKey}";
-    final response = await http.get(
-      Uri.parse(baseUrl),
-      headers: {'Content-Type': 'application/json'},
-    );
-
-    if (response.statusCode == 200) {
-      final body = PerfTrace.time(
-        'GlobalGeoJSONVenueAPI json.decode (${response.body.length ~/ 1024}KB)',
-        () => json.decode(response.body),
-      );
-      // Stored under the host's version, once that is known; the body goes to
-      // the map without waiting for it.
-      _versionFor(venueName).then((version) {
-        if (version != null) {
-          body[_versionKey] = version;
-          if (identical(_shown[venueName], body)) _showing(venueName, body);
-        }
-        service.saveGeoData(
-            GlobalGeoJSONVenueAPIModel(responseBody: body), venueName);
-      });
-      // Interpolating `body` here stringifies the whole decoded payload — ~2.8MB
-      // for ApolloHospital — on the main thread, and `print` is not stripped from
-      // Flutter web release builds. Native keeps the original log.
-      if (!kIsWeb) print("GlobalGeoJSONVenueAPI from API $body");
-      return body;
-    } else if (response.statusCode == 403) {
-      // Rejected key. Retrying cannot fix that, and retrying with no delay or
-      // limit (as this used to) floods the server until the page is closed.
-      print("getGeoJSONData: api key rejected (403)");
-      return null;
-    } else {
-      print("getGeoJSONData failed: ${response.statusCode} ${response.body}");
+  /// The venue's GeoJSON from the network, or null when the request failed.
+  /// A rejected key is not retried: retrying with no delay or limit (as this
+  /// used to) flooded the server until the page was closed.
+  Future<Map<String, dynamic>?> _fetchFromApi(String venueName, VenueRepository venue) async {
+    // Not stored yet: it is stored under the host's version, below.
+    final body = await venue.fetch(VenueData.venueGeoJson, venueName, store: false);
+    if (body is! Map<String, dynamic>) {
+      print("getGeoJSONData failed for $venueName");
       return null;
     }
+    // Stored under the host's version, once that is known; the body goes to
+    // the map without waiting for it.
+    _versionFor(venueName).then((version) {
+      if (version != null) {
+        body[_versionKey] = version;
+        if (identical(_shown[venueName], body)) _showing(venueName, body);
+      }
+      venue.put(VenueData.venueGeoJson, venueName, body);
+    });
+    // Interpolating `body` here stringifies the whole decoded payload — ~2.8MB
+    // for ApolloHospital — on the main thread, and `print` is not stripped from
+    // Flutter web release builds. Native keeps the original log.
+    if (!kIsWeb) print("GlobalGeoJSONVenueAPI from API $body");
+    return body;
   }
 
   static Future<bool> checkInternetConnectivity() async {

@@ -1,17 +1,13 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
-import '../apimodels/BuildingData.dart';
-import '../config.dart';
+import 'package:data_repository/data_repository.dart';
 import 'package:http/http.dart' as http;
-import '../database/box/BuildingByVenueAPIBOX.dart';
-import '../database/model/BuildingByVenueAPIModel.dart';
+import '../apimodels/BuildingData.dart';
+import '../data/data_repository_bridge.dart';
 
 class BuildingByVenue {
-  final String baseUrl = "${AppConfig.baseUrl}/secured/building/get/venue?api_key=${AppConfig.apiKey}";
-
   /// One load per venue per session, shared by every caller — the same shape
   /// [GlobalGeoJSONVenueAPI] already uses.
   ///
@@ -67,52 +63,50 @@ class BuildingByVenue {
   }
 
   Future<Map<String, dynamic>> _fetchResponse(String id) async {
-    final buildingByVenueBox = BuildingByVenueAPIBOX.getData();
+    final venue = (await dataRepository()).venue;
 
     // Seed from the bundled asset (if any) so a first run has something to
     // serve below.
-    if (!buildingByVenueBox.containsKey(id)) {
-      await _seedFromAssetIfNeeded(id, buildingByVenueBox);
+    if (venue.cached(VenueData.venueBuildings, id) == null) {
+      await _seedFromAssetIfNeeded(id, venue);
     }
 
     // Cached: serve it now and refresh the cache behind it, for the next
     // launch. Waiting on the live fetch here held the whole venue off screen
     // for as long as the network took, on every launch, for a response that
     // rarely differs from the cached one.
-    if (buildingByVenueBox.containsKey(id)) {
-      final responseBody = buildingByVenueBox.get(id)!.responseBody;
+    final cached = venue.cached(VenueData.venueBuildings, id);
+    if (cached != null) {
       print("UNIFIED MAP BUILDINGBYVENUE DATA FROM DATABASE");
-      _refresh(id, buildingByVenueBox);
-      return Map<String, dynamic>.from(responseBody);
+      _refresh(id, venue);
+      return Map<String, dynamic>.from(cached);
     }
 
     if (await checkInternetConnectivity()) {
-      return await _fetchFromApi(id, buildingByVenueBox);
+      return await _fetchFromApi(id, venue);
     }
 
     throw("no preload & no DB data & no internet");
   }
 
   /// Fetches the venue live and stores it for the next launch.
-  Future<void> _refresh(String id, dynamic box) async {
+  Future<void> _refresh(String id, VenueRepository venue) async {
     try {
       if (!await checkInternetConnectivity()) return;
-      await _fetchFromApi(id, box);
+      await _fetchFromApi(id, venue);
     } catch (e) {
       print("UNIFIED MAP BUILDINGBYVENUE background refresh failed: $e");
     }
   }
 
-  /// Seeds DB from bundled asset. Returns true if successful.
-  Future<bool> _seedFromAssetIfNeeded(String id, dynamic box) async {
+  /// Seeds the cache from a bundled asset. Returns true if successful.
+  Future<bool> _seedFromAssetIfNeeded(String id, VenueRepository venue) async {
     try {
       final raw = await rootBundle.loadString(
         'assets/api_data/BuildingByVenue${id}.json',
       );
       final Map<String, dynamic> responseBody = json.decode(raw);
-      final model = BuildingByVenueAPIModel(responseBody: responseBody);
-      box.put(id, model);
-      await model.save();
+      await venue.put(VenueData.venueBuildings, id, responseBody);
       print("UNIFIED MAP BUILDINGBYVENUE seeded from asset.");
       return true;
     } catch (_) {
@@ -121,31 +115,16 @@ class BuildingByVenue {
     }
   }
 
-  Future<Map<String, dynamic>> _fetchFromApi(String id, dynamic box) async {
-    final data = {"venueName": id, "campusIncludes": true};
-    final response = await http.post(
-      Uri.parse(baseUrl),
-      body: json.encode(data),
-      headers: {'Content-Type': 'application/json'},
-    );
-
-    if (response.statusCode == 200) {
-      final Map<String, dynamic> responseBody = json.decode(response.body);
-      // Stringifies the whole decoded payload on the main thread; `print` is not
-      // stripped from Flutter web release builds. Native keeps the original log.
-      if (!kIsWeb) print("UNIFIED MAP BUILDINGBYVENUE DATA FROM API $responseBody");
-      final model = BuildingByVenueAPIModel(responseBody: responseBody);
-      box.put(id, model);
-      await model.save();
-      return responseBody;
-    } else if (response.statusCode == 403) {
-      // Rejected key. Retrying cannot fix that, and retrying with no delay or
-      // limit (as this used to) floods the server until the page is closed.
-      // Thrown, so the caller falls back to the cache like any other failure.
-      throw Exception('building/get/venue: api key rejected (403)');
-    } else {
-      throw Exception('Failed to load building data');
-    }
+  /// Fetches the venue and stores it in the copy navigation_sdk reads too.
+  /// A rejected key is not retried: Data_Repository fails it like any error,
+  /// and the caller falls back to the cache.
+  Future<Map<String, dynamic>> _fetchFromApi(String id, VenueRepository venue) async {
+    final responseBody = await venue.fetch(VenueData.venueBuildings, id);
+    if (responseBody is! Map) throw Exception('Failed to load building data');
+    // Stringifies the whole decoded payload on the main thread; `print` is not
+    // stripped from Flutter web release builds. Native keeps the original log.
+    if (!kIsWeb) print("UNIFIED MAP BUILDINGBYVENUE DATA FROM API $responseBody");
+    return Map<String, dynamic>.from(responseBody);
   }
 
   static Future<bool> checkInternetConnectivity() async {
