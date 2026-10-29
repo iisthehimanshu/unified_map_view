@@ -1,10 +1,4 @@
-import 'package:hive_flutter/adapters.dart';
-part 'GlobalGeoJSONVenueAPIModel.g.dart';
-
-@HiveType(typeId: 10)
-class GlobalGeoJSONVenueAPIModel{
-  @HiveField(0)
-  Map<String, dynamic> responseBody;
-
-  GlobalGeoJSONVenueAPIModel({required this.responseBody});
-}
+// Moved to Data_Repository, unchanged (same typeId and fields). Re-exported
+// here so existing imports keep working.
+export 'package:data_repository/legacy_cache.dart'
+    show GlobalGeoJSONVenueAPIModel, GlobalGeoJSONVenueAPIModelAdapter;

@@ -1,15 +1,10 @@
 
 import 'dart:convert';
-import 'package:hive/hive.dart';
-import 'package:http/http.dart' as http;
-import '../config.dart';
+import 'package:data_repository/data_repository.dart';
+import '../data/data_repository_bridge.dart';
 import '../models/furniture_model.dart';
 
 class FurnitureAPI {
-  /// Hive box holding each venue's last `get-all-threed-models` response,
-  /// keyed by venue name, as `{version, body}` with the raw JSON body.
-  static const boxName = 'UnifiedFurnitureBox';
-
   /// Each venue's data version as handed in by the host, pending until the
   /// host's own versions request answers. Null means the version is unknown.
   static final Map<String, Future<String?>> _versions = {};
@@ -33,65 +28,52 @@ class FurnitureAPI {
     }
   }
 
-  static Box? get _box =>
-      Hive.isBoxOpen(boxName) ? Hive.box(boxName) : null;
-
   /// The venue's 3D models. Cached models are served at once; they are
   /// checked against the host's version behind that and re-fetched for the
   /// next launch when it differs. With nothing cached they are fetched.
   Future<List<FurnitureModel>> fetchFurniture(String venueName) async {
-    final box = _box;
-    final cached = box?.get(venueName) as Map?;
+    final venue = (await dataRepository()).venue;
+    final cached = venue.cached(VenueData.furniture, venueName) as Map?;
 
     if (cached != null) {
-      _refreshIfStale(venueName, cached['version'] as String?, box);
+      _refreshIfStale(venueName, cached['version'] as String?, venue);
       return _parse(cached['body'] as String);
     }
 
-    final body = await _request(venueName);
+    final body = await _request(venueName, venue);
     if (body == null) return [];
-    _store(venueName, body, box);
+    _store(venueName, body, venue);
     return _parse(body);
   }
 
   /// Re-fetches the models when the host's version is not the one the cache
   /// was stored with. An unknown version counts as changed.
-  Future<void> _refreshIfStale(String venueName, String? cachedVersion, Box? box) async {
+  Future<void> _refreshIfStale(String venueName, String? cachedVersion, VenueRepository venue) async {
     final version = await _versionFor(venueName);
     if (version != null && version == cachedVersion) {
       print('3D models: version unchanged ($version) — cache is current');
       return;
     }
     print('3D models: version $cachedVersion -> $version — refreshing the cache');
-    final body = await _request(venueName);
-    if (body != null) await _store(venueName, body, box);
+    final body = await _request(venueName, venue);
+    if (body != null) await _store(venueName, body, venue);
   }
 
   /// Stores [body] under the host's version, once that is known.
-  Future<void> _store(String venueName, String body, Box? box) async {
+  Future<void> _store(String venueName, String body, VenueRepository venue) async {
     final version = await _versionFor(venueName);
-    await box?.put(venueName, {'version': version, 'body': body});
+    await venue.put(VenueData.furniture, venueName, {'version': version, 'body': body});
   }
 
-  /// The raw response body, or null when the request failed.
-  Future<String?> _request(String venueName) async {
-    final url = Uri.parse(
-      '${AppConfig.baseUrl}/secured/get-all-threed-models?venueName=$venueName&api_key=${AppConfig.apiKey}',
-    );
-
-    try {
-      final response = await http.get(url);
-
-      if (response.statusCode == 200) {
-        return response.body;
-      } else {
-        print('Error fetching furniture: ${response.statusCode}');
-        return null;
-      }
-    } catch (e, st) {
-      print('Exception fetching furniture: $e\n$st');
+  /// The response as JSON text, the form the cache has always held it in, or
+  /// null when the request failed.
+  Future<String?> _request(String venueName, VenueRepository venue) async {
+    final json = await venue.fetch(VenueData.furniture, venueName, store: false);
+    if (json == null) {
+      print('Error fetching furniture for $venueName');
       return null;
     }
+    return jsonEncode(json);
   }
 
   List<FurnitureModel> _parse(String responseBody) {

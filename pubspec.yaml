@@ -26,6 +26,14 @@ dependencies:
 #    path: ../turn_highlighter
 
   hive: ^2.2.3
+  # Pinned to a commit: the Hive cache format lives in this package, so a
+  # moving branch could change what's stored on users' devices unannounced.
+  # Keep the same ref as navigation_sdk, or pub can't resolve both.
+  data_repository:
+    git:
+      url: https://github.com/iisthehimanshu/Data_Repository.git
+      ref: 8352edf6de85d7f72285668321deb1ebaddb8b1a
+#    path: ../Data_Repository
   hive_flutter: ^1.1.0
   path_provider: ^2.1.5
 
