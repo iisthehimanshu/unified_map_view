@@ -2060,7 +2060,6 @@ class MaplibreMapProvider extends BaseMapProvider {
       if (_iconRegistrationFailed.add(marker.id)) {
         // Title first: the id is a composite blob, and the only question worth
         // answering from a log is WHICH landmark on screen has no icon.
-        print('NOICON "${marker.title}" asset=${marker.assetPath}');
       }
     }
     return ok;

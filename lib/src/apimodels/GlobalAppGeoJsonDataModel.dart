@@ -15,7 +15,9 @@ class GlobalAppGeoJsonDataModel {
     message = json['message'];
     if (json['data'] != null) {
       data = <GlobalAppGeoData>[];
-      json['data'].forEach((v) { data!.add(new GlobalAppGeoData.fromJson(v)); });
+      json['data'].forEach((v) {
+        data!.add(new GlobalAppGeoData.fromJson(v));
+      });
     }
     if (json['floorConfigs'] != null) {
       floorConfigs = <FloorConfigs>[];

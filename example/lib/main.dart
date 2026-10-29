@@ -169,7 +169,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
           bearing: 0.0,
           tilt: 0.0
         ),
-      onReadyLandmarkSelectionID: "2_MID_193",
+      // onReadyLandmarkSelectionID: "2_MID_193",
       url: "https://maps.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
