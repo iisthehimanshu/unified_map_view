@@ -7,7 +7,8 @@ import '../models/furniture_model.dart';
 import '../utils/renderingUtilities.dart';
 
 class VenueData{
-  VenueData._internal(this.venueName, this.json, this.buildingData, {this.furnitureData = const []}) {
+  VenueData._internal(this.venueName, this.json, this.buildingData,
+      {this.furnitureData = const [], List<FloorConfigs> floorConfigs = const []}) {
     // A building filter that matches nothing leaves the list empty.
     final firstBuilding = buildingData.buildings?.firstOrNull;
     if (firstBuilding != null) {
@@ -18,7 +19,7 @@ class VenueData{
     // round-trip per feature's properties), which froze the UI thread when a
     // lookup happened inside a widget build — see [getFloorRenderLevel].
     _model = GlobalAppGeoJsonDataModel.fromJson(json);
-    _buildFloorConfigIndex();
+    _buildFloorConfigIndex(floorConfigs);
     extractBuildingWiseData(json);
     findBuildingCenters();
   }
@@ -27,13 +28,17 @@ class VenueData{
   static VenueData? _instance;
 
   // Public factory constructor
-  factory VenueData(String venueName, Map<String, dynamic> json, BuildingData buildingData, {List<FurnitureModel> furnitureData = const []}) {
+  /// [floorConfigs] come from `floor-configs-venue` (FloorConfigsAPI); the
+  /// venue GeoJSON no longer carries them.
+  factory VenueData(String venueName, Map<String, dynamic> json, BuildingData buildingData,
+      {List<FurnitureModel> furnitureData = const [], List<FloorConfigs> floorConfigs = const []}) {
     final allowed = UnifiedMapViewPackage.allowedBuildingIds;
     if (allowed != null) {
       buildingData = _restrictBuildings(buildingData, allowed);
       json = _restrictFeatures(json, allowed);
     }
-    _instance = VenueData._internal(venueName, json, buildingData, furnitureData: furnitureData);
+    _instance = VenueData._internal(venueName, json, buildingData,
+        furnitureData: furnitureData, floorConfigs: floorConfigs);
     return _instance!;
   }
 
@@ -79,25 +84,23 @@ class VenueData{
   /// from this instead of calling [GlobalAppGeoJsonDataModel.fromJson] again.
   late final GlobalAppGeoJsonDataModel _model;
 
-  /// buildingId -> (floorRenderLevel -> floorNumber), from `floorConfigs`.
+  /// buildingId -> (floorRenderLevel -> floorNumber), from the floor configs.
   /// The value stays nullable so a config with a null `floorNumber` still
   /// occupies its slot and falls back to the requested floor, exactly as the
   /// previous first-match linear scan did.
   final Map<String, Map<int, int?>> _renderLevelToFloorNumber = {};
 
-  /// buildingId -> (actual floor level -> floorName), from `floorConfigs`.
+  /// buildingId -> (actual floor level -> floorName), from the floor configs.
   /// The level is `floorRenderLevel`, or `floorNumber` when that is unset.
   final Map<String, Map<int, String>> _floorLevelToFloorName = {};
 
-  /// floorNumber -> initialOrientation, from `floorConfigs`.
+  /// floorNumber -> initialOrientation, from the floor configs.
   final Map<int, double> _floorOrientations = {};
 
-  /// Flattens `floorConfigs` into the two lookup maps above. Both keep the
-  /// first matching config for a key, preserving the first-match-wins
-  /// behaviour of the linear scans these replace.
-  void _buildFloorConfigIndex() {
-    final configs = _model.floorConfigs;
-    if (configs == null) return;
+  /// Flattens [configs] into the lookup maps above. Each keeps the first
+  /// matching config for a key, preserving the first-match-wins behaviour of
+  /// the linear scans these replace.
+  void _buildFloorConfigIndex(List<FloorConfigs> configs) {
     for (final f in configs) {
       final buildingId = f.buildingId;
       final renderLevel = f.floorRenderLevel;

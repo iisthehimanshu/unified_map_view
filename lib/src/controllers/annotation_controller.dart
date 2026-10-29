@@ -9,6 +9,7 @@ import '../VenueManager/VenueData.dart';
 import '../apimodels/BuildingData.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import '../apis/BuildingByVenue.dart';
+import '../apis/FloorConfigsAPI.dart';
 import '../apis/FurnitureAPI.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
 import '../config.dart';
@@ -113,6 +114,7 @@ class AnnotationController{
     final buildingDataFuture = BuildingByVenue().fetchBuildingIDS(venueName);
     final apiDataFuture = GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
     final furnitureDataFuture = FurnitureAPI().fetchFurniture(venueName);
+    final floorConfigsFuture = FloorConfigsAPI().fetchFloorConfigs(venueName);
 
     PerfTrace.mark('_setVenue fetches dispatched');
     final buildingData = await PerfTrace.timeAsync(
@@ -130,8 +132,10 @@ class AnnotationController{
     // ENTIRE venue — base map, polygons, everything — off screen. Build and
     // render without it, then fold the models in and render just the furniture
     // once they arrive.
+    // Floor names, render levels and orientations for the floor picker.
+    final floorConfigs = await floorConfigsFuture;
     _venueData = PerfTrace.time('VenueData parse',
-        () => VenueData(venueName, apiData, buildingData));
+        () => VenueData(venueName, apiData, buildingData, floorConfigs: floorConfigs));
     _shareEnabledBuildingIds = {
       for (final building in _venueData.buildingData.buildings ?? <Building>[])
         if (building.features.contains('SHARE_MY_LOCATION')) building.id,
