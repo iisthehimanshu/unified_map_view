@@ -834,16 +834,12 @@ class UnifiedMapController extends ChangeNotifier {
 
   Future<void> selectLocation({required String polyID}) async {
     if (_currentMapController != null) {
-      await _annotationController.switchToLocationFloor(polyID);
-      // Kick off the provider's selection logic (state update + visual push + camera animation)
-      final selectionFuture = currentProviderImplementation.selectLocation(_currentMapController, polyID);
-      
-      // Allow the provider to reach its first internal 'await' (likely the state update)
-      // then notify listeners so the UI can reflect the selection immediately.
+      GeoJsonFeature? feature = await _annotationController.switchToLocationFloor(polyID);
+      print("selectLocation debug feature $feature");
+      if(feature == null) return;
+      final selectionFuture = currentProviderImplementation.selectLocation(_currentMapController, feature.id??polyID);
       await Future.delayed(Duration.zero);
       notifyListeners();
-      
-      // Wait for the full operation (including camera animation) to complete.
       await selectionFuture;
     }
   }
@@ -1015,6 +1011,7 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Annotation Controller
   String? get focusedBuilding => _annotationController.focusedBuilding;
+  bool get focusedBuildingShareEnabled => _annotationController.focusedBuildingShareEnabled;
   String? get focusedBuildingName => _annotationController.focusedBuildingName;
   List<int>? get focusedBuildingAvailableFloors => _annotationController.focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _annotationController.focusBuildingSelectedFloor;
@@ -1025,8 +1022,20 @@ class UnifiedMapController extends ChangeNotifier {
   /// should be displayed to the user, falling back to [floor] when unmapped.
   int getFloorRenderLevel(int floor, String bid) => _annotationController.getFloorRenderLevel(floor, bid);
 
+  /// The `floorName` from the floor config for the actual [floor] level, or
+  /// null when the API did not send one.
+  String? getFloorName(int floor, String bid) => _annotationController.getFloorName(floor, bid);
+
   Future<void> changeBuildingFloor({required String buildingID, required int floor}) async {
     await _annotationController.changeBuildingFloor(buildingID, floor);
+    // With a path drawn, the floor dial lists floors from every building on the
+    // route, so the tapped floor may not even exist in [buildingID]. Switch the
+    // other route buildings that have path on that floor too, otherwise the path
+    // is drawn over a building still showing its previous floor plan.
+    for (final bid in _annotationController.buildingsWithPathOnFloor(floor)) {
+      if (bid == buildingID) continue;
+      await _annotationController.changeBuildingFloor(bid, floor);
+    }
     await _annotationController.annotatePath(floor);
     notifyListeners();
   }
@@ -1095,8 +1104,13 @@ class UnifiedMapController extends ChangeNotifier {
     if (mapFadeOnPath) {
       await currentProviderImplementation.addMapFade(_currentMapController);
     }
+    // Awaited, and through the annotation controller directly: firing
+    // changeBuildingFloor() here without waiting let the floor swap and the
+    // path draw below run interleaved — both rewrite the polyline source —
+    // and that method also redraws the path itself, so the route was drawn
+    // up to three times over a building still mid-swap.
     for (var bid in bids) {
-      changeBuildingFloor(buildingID: bid, floor: sourceFloor);
+      await _annotationController.changeBuildingFloor(bid, sourceFloor);
     }
     await _annotationController.annotatePath(sourceFloor);
     notifyListeners();

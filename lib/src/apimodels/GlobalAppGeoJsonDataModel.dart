@@ -7,7 +7,6 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 class GlobalAppGeoJsonDataModel {
   String? message;
   List<GlobalAppGeoData>? data;
-  List<FloorConfigs>? floorConfigs;
 
   GlobalAppGeoJsonDataModel({this.message, this.data});
 
@@ -15,12 +14,8 @@ class GlobalAppGeoJsonDataModel {
     message = json['message'];
     if (json['data'] != null) {
       data = <GlobalAppGeoData>[];
-      json['data'].forEach((v) { data!.add(new GlobalAppGeoData.fromJson(v)); });
-    }
-    if (json['floorConfigs'] != null) {
-      floorConfigs = <FloorConfigs>[];
-      json['floorConfigs'].forEach((v) {
-        floorConfigs!.add(new FloorConfigs.fromJson(v));
+      json['data'].forEach((v) {
+        data!.add(new GlobalAppGeoData.fromJson(v));
       });
     }
   }
@@ -31,13 +26,11 @@ class GlobalAppGeoJsonDataModel {
     if (this.data != null) {
       data['data'] = this.data!.map((v) => v.toJson()).toList();
     }
-    if (this.floorConfigs != null) {
-      data['floorConfigs'] = this.floorConfigs!.map((v) => v.toJson()).toList();
-    }
     return data;
   }
 }
 
+/// One floor's config from `floor-configs-venue` (see FloorConfigsAPI).
 class FloorConfigs {
   String? sId;
   int? floorNumber;
@@ -55,7 +48,7 @@ class FloorConfigs {
     floorName = json['floorName'];
     initialOrientation = json['initialOrientation'] != null ? (json['initialOrientation'].toDouble()): null;
     floorRenderLevel = json["floorHeight"];
-    buildingId = json["buildingId"];
+    buildingId = json["buildingId"] ?? json["building_ID"];
   }
 
   Map<dynamic, dynamic> toJson() {

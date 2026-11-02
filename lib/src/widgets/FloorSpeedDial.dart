@@ -8,10 +8,16 @@ class FloorSpeedDial extends StatefulWidget {
   final UnifiedMapController controller;
   final Color color;
 
+  /// Called when the user picks a floor from the dial, before the map switches
+  /// to it. Floor changes the host makes through the controller do not fire
+  /// this, so a host can tell the user browsing floors from its own switches.
+  final void Function(String buildingID, int floor)? onFloorSelected;
+
   const FloorSpeedDial({
     super.key,
     required this.controller,
     this.color = Colors.blue,
+    this.onFloorSelected,
   });
 
   @override
@@ -81,9 +87,12 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
 
     return floors.map((floor) {
       final isSelected = controller.focusBuildingSelectedFloor == floor;
+      final floorName = controller.getFloorName(floor, controller.focusedBuilding ?? "");
 
       return SpeedDialChild(
         shape: const CircleBorder(),
+        // Floor name from the API sits as a banner to the left of the number.
+        labelWidget: floorName != null ? _floorNameLabel(floorName) : null,
         child: _floorLabel(
           floor, controller.focusedBuilding??"",
           color: isSelected ? Colors.white : Colors.black,
@@ -92,13 +101,21 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
         onTap: () {
           final bid = controller.focusedBuilding;
           if (bid == null) return;
+          widget.onFloorSelected?.call(bid, floor);
           controller.changeBuildingFloor(buildingID: bid, floor: floor);
         },
       );
     }).toList();
   }
 
-  Widget _buildingNameLabel(String name) {
+  Widget _buildingNameLabel(String name) => _bannerLabel(name);
+
+  Widget _floorNameLabel(String name) => Padding(
+        padding: const EdgeInsets.only(right: 12),
+        child: _bannerLabel(name, fontWeight: FontWeight.w500),
+      );
+
+  Widget _bannerLabel(String text, {FontWeight fontWeight = FontWeight.bold}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
@@ -113,9 +130,9 @@ class _FloorSpeedDialState extends State<FloorSpeedDial> {
         ],
       ),
       child: Text(
-        name,
-        style: const TextStyle(
-          fontWeight: FontWeight.bold,
+        text,
+        style: TextStyle(
+          fontWeight: fontWeight,
           color: Colors.black,
         ),
       ),

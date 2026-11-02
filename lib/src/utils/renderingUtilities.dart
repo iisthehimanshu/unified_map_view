@@ -104,6 +104,13 @@ class RenderingUtilities{
     return Color.fromARGB((argb >> 24) & 0xFF, grey, grey, grey);
   }
 
+  static Color fallbackStrokeColor(Color fill, {double amount = 1.0}) {
+    final hsl = HSLColor.fromColor(fill);
+    return hsl
+        .withLightness((hsl.lightness - amount).clamp(0.0, 1.0))
+        .toColor();
+  }
+
   static String colorToMapplsHex(Color color) {
     return color.value
         .toRadixString(16)
@@ -301,6 +308,19 @@ class RenderingUtilities{
       debugPrint('Error extracting asset name: $e');
       return null;
     }
+  }
+
+  /// Shorter side, in meters, of the smallest rectangle (any orientation)
+  /// that encloses [polygon]. Null for a degenerate polygon.
+  double? shortestSideMeters(List<MapLocation> polygon) {
+    if (polygon.length < 3) return null;
+    final centroid = _getCentroid(polygon);
+    final hull = _convexHull(
+        polygon.map((p) => _latLngToLocal(p, centroid)).toList());
+    if (hull.length < 3) return null;
+    final rect = _minAreaRectangle(hull);
+    final side = min(rect.width, rect.height);
+    return side.isFinite && side > 0 ? side : null;
   }
 
   RectangleResult findBestFitRectangleBearing(List<MapLocation> polygon) {

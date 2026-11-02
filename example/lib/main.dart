@@ -76,7 +76,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
 
   // ── layer-policy test harness ──────────────────────────────────────────────
   String _lastTap = 'no tap yet';
-  int _tapCount = 0;
   String _activePreset = 'all';
   double _subSectionOpacity = 1.0;
   bool _subSectionOverridden = false;
@@ -163,36 +162,18 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     super.initState();
     _unifiedMapController = UnifiedMapController(
         initialProvider: MapProvider.mapLibre,
-        venueName: 'ApolloHospital',
+        venueName: 'DLF Mall of India',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
           zoom: 3.0,
           bearing: 0.0,
           tilt: 0.0
         ),
-      onPolygon: ({required String polygonId,
-          required List<MapLocation> coordinates}) {
-        setState(() {
-          _tapCount++;
-          _lastTap = 'POLYGON #$_tapCount  $polygonId';
-        });
-        print('HARNESS onPolygonTap -> $polygonId');
-      },
-      onMarker: ({required String markerId,
-          required MapLocation coordinates}) {
-        setState(() {
-          _tapCount++;
-          _lastTap = 'MARKER #$_tapCount  $markerId';
-        });
-        print('HARNESS onMarkerTap -> $markerId');
-      },
+      // onReadyLandmarkSelectionID: "2_MID_193",
       url: "https://maps.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
           MapProvider.mappls: MapplsMapProvider()},
-      // The whole config file in one argument: per-layer settings seed the
-      // layers as they are created, and the global immersive / greyscale /
-      // fade / symbol modes are pushed as soon as there is a map controller.
       styleConfig: widget.styleConfig,
     );
 
@@ -304,7 +285,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   // }
 
   void localizeUser(){
-    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.716439358009897, longitude: 77.1109546329173), "65d88662db333f894570bad3", 0));
+    _unifiedMapController.localizeUser(User(MapLocation(latitude: 28.54285326658291, longitude: 77.19308899898738), "6821ce4f9d3f927cab064e8a", 0));
   }
 
   void moveUser() {
@@ -659,13 +640,6 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                     child: const Text('clear', style: TextStyle(fontSize: 11)),
                   ),
                 ]),
-                Text('tap: $_lastTap',
-                    style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: _tapCount == 0
-                            ? Colors.grey
-                            : Colors.green.shade800)),
               ],
             ),
           ),

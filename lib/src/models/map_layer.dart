@@ -181,7 +181,6 @@ enum MapLayer {
 /// loader can warn on a misspelled key rather than silently ignoring it, and an
 /// id missing from here is still applied — it is a warning list, not a gate.
 abstract final class MapStyleLayers {
-  static const String collisionDotMarkers = 'collision-dot-markers-layer';
   static const String normalTextMarkers = 'normalText-markers-layer';
   static const String normalIconMarkersWithSectionId =
       'normalIcon-markers-layer-withSectionId';
@@ -230,7 +229,6 @@ abstract final class MapStyleLayers {
   static const String baseMapRaster = 'osm-tiles-layer';
 
   static const Set<String> known = {
-    collisionDotMarkers,
     normalTextMarkers,
     normalIconMarkersWithSectionId,
     normalIconMarkersWithoutSectionId,

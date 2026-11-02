@@ -565,7 +565,19 @@ class UnifiedMarkerCreator {
       final paint = Paint()
         ..isAntiAlias = true
         ..filterQuality = FilterQuality.high;
-      canvas.drawImage(markerImage, Offset(imageX, imageY), paint);
+      // Into the fitted rect, not at the decoded size: the decode above only
+      // caps the WIDTH at the box's larger edge, so an image narrower than the
+      // box's aspect (a square logo in a wide box, a portrait photo in a
+      // square one) comes back taller than the box and was drawn overflowing
+      // the canvas — i.e. cropped.
+      canvas.drawImageRect(
+        markerImage,
+        Rect.fromLTWH(0, 0, markerImage.width.toDouble(),
+            markerImage.height.toDouble()),
+        Rect.fromLTWH(imageX, imageY, actualImageSizePx.width,
+            actualImageSizePx.height),
+        paint,
+      );
 
       // canvas.drawRect(
       //   Rect.fromLTWH(imageX, imageY, actualImageSizePx.width, actualImageSizePx.height),
@@ -638,6 +650,46 @@ class UnifiedMarkerCreator {
     final Uint8List pngBytes = pngBytesData.buffer.asUint8List();
 
     return MarkerIconWithAnchor(pngBytes, finalAnchor);
+  }
+
+  /// Bakes a bare logo: the image scaled so its LONGER edge is exactly [edge]
+  /// logical dp, on a canvas of exactly that size — no label, pill or padding.
+  ///
+  /// The tight canvas is the point. The renderer sizes these against a
+  /// polygon on the ground, so it has to know how big the picture is, and
+  /// "longer edge == [edge]" holds for every aspect ratio.
+  Future<MarkerIconWithAnchor> createLogoMarker({
+    required Uint8List imageBytes,
+    required double edge,
+  }) async {
+    final double edgePx = edge * markerBakeRatio;
+    // Width-capped decode keeps the aspect ratio; a portrait logo comes back
+    // taller than the cap and is scaled down by the draw below.
+    final codec = await ui.instantiateImageCodec(imageBytes,
+        targetWidth: edgePx.round().clamp(1, 10000));
+    final ui.Image logo = (await codec.getNextFrame()).image;
+    final double srcW = logo.width.toDouble();
+    final double srcH = logo.height.toDouble();
+    final double scale = edgePx / max(srcW, srcH);
+    final int canvasW = max(1, (srcW * scale).round());
+    final int canvasH = max(1, (srcH * scale).round());
+
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawImageRect(
+      logo,
+      Rect.fromLTWH(0, 0, srcW, srcH),
+      Rect.fromLTWH(0, 0, canvasW.toDouble(), canvasH.toDouble()),
+      Paint()
+        ..isAntiAlias = true
+        ..filterQuality = FilterQuality.high,
+    );
+    final image = await recorder.endRecording().toImage(canvasW, canvasH);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) {
+      throw Exception('Failed to encode logo marker to PNG.');
+    }
+    return MarkerIconWithAnchor(
+        byteData.buffer.asUint8List(), const Offset(0.5, 0.5));
   }
 
   String formatText(String text, TextFormat format) {

@@ -768,7 +768,9 @@ class MapplsMapProvider extends BaseMapProvider {
           strokeColorHex.isNotEmpty)
           ? RenderingUtilities.hexToColor(strokeColorHex)
           : RenderingUtilities.polygonColorMap[type]?["strokeColor"] ??
-          const Color(0xffD3D3D3);
+          (type == 'wall'
+              ? const Color(0xffD3D3D3)
+              : RenderingUtilities.fallbackStrokeColor(fillColor));
 
 
       final Color fillColorSecondary = (fillColorSecondaryHex != null &&

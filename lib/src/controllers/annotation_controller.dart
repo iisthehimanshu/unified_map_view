@@ -1,5 +1,4 @@
 import 'package:turn_highlighter/turn_highlighter.dart';
-import 'package:unified_map_view/src/utils/geoJson/predefined_circles.dart';
 import 'package:unified_map_view/src/utils/mapCalculations.dart';
 import 'package:unified_map_view/src/utils/renderingUtilities.dart';
 import 'package:unified_map_view/src/utils/perf_trace.dart';
@@ -7,8 +6,10 @@ import 'dart:math' as math;
 import 'dart:developer' as dev;
 import '../../unified_map_view.dart';
 import '../VenueManager/VenueData.dart';
+import '../apimodels/BuildingData.dart';
 import '../apimodels/GlobalAppGeoJsonDataModel.dart';
 import '../apis/BuildingByVenue.dart';
+import '../apis/FloorConfigsAPI.dart';
 import '../apis/FurnitureAPI.dart';
 import '../apis/GlobalGeoJSONVenueAPI.dart';
 import '../config.dart';
@@ -37,17 +38,31 @@ class AnnotationController{
   bool _furnitureDataReady = false;
 
   String? _focusedBuilding;
+  Set<String> _shareEnabledBuildingIds = const {};
   List<int>? _focusedBuildingAvailableFloors;
   int? _focusBuildingSelectedFloor;
 
   String? get focusedBuilding => _focusedBuilding;
+  bool get focusedBuildingShareEnabled =>
+      _focusedBuilding != null && _shareEnabledBuildingIds.contains(_focusedBuilding);
   String? get focusedBuildingName => _venueData.buildingNameForId(_focusedBuilding);
   List<int>? get focusedBuildingAvailableFloors => _focusedBuildingAvailableFloors;
   int? get focusBuildingSelectedFloor => _focusBuildingSelectedFloor;
   Map<String, int> get selectedFloor => _venueData.selectedFloor;
   List<int> get floorsContainingPath => extractFloorsContainingPath(_path).toList();
 
+  /// Buildings (excluding the campus) whose drawn path has a segment on [floor].
+  List<String> buildingsWithPathOnFloor(int floor) {
+    if (_path == null) return [];
+    final campusId = _venueData.campusBuildingId;
+    return _path!.entries
+        .where((e) => e.key != campusId && e.value.containsKey(floor))
+        .map((e) => e.key)
+        .toList();
+  }
+
   int getFloorRenderLevel(int floor, String bid) => _venueData.getFloorRenderLevel(floor, bid);
+  String? getFloorName(int floor, String bid) => _venueData.getFloorName(floor, bid);
 
   Map<String, Map<int, List<List<Cell>>>>? _path;
   List<Map<String, Map<int, List<Cell>>>>? _multiPath;
@@ -99,6 +114,7 @@ class AnnotationController{
     final buildingDataFuture = BuildingByVenue().fetchBuildingIDS(venueName);
     final apiDataFuture = GlobalGeoJSONVenueAPI().getGeoJSONData(venueName);
     final furnitureDataFuture = FurnitureAPI().fetchFurniture(venueName);
+    final floorConfigsFuture = FloorConfigsAPI().fetchFloorConfigs(venueName);
 
     PerfTrace.mark('_setVenue fetches dispatched');
     final buildingData = await PerfTrace.timeAsync(
@@ -116,10 +132,20 @@ class AnnotationController{
     // ENTIRE venue — base map, polygons, everything — off screen. Build and
     // render without it, then fold the models in and render just the furniture
     // once they arrive.
+    // Floor names, render levels and orientations for the floor picker.
+    final floorConfigs = await floorConfigsFuture;
     _venueData = PerfTrace.time('VenueData parse',
-        () => VenueData(venueName, apiData, buildingData));
+        () => VenueData(venueName, apiData, buildingData, floorConfigs: floorConfigs));
+    _shareEnabledBuildingIds = {
+      for (final building in _venueData.buildingData.buildings ?? <Building>[])
+        if (building.features.contains('SHARE_MY_LOCATION')) building.id,
+    };
     _venueDataReady = true;
     await PerfTrace.timeAsync('renderVenue', () => renderVenue());
+    // A cached venue can finish loading without another camera-move event.
+    // Seed the same focused-building state used by FloorSpeedDial once now;
+    // later camera moves keep updating it through onCameraMove as usual.
+    _unifiedMapController.onCameraMove(_unifiedMapController.cameraPosition);
     if (PerfTrace.enabled) print(PerfTrace.report());
 
     furnitureDataFuture.then((furnitureData) async {
@@ -212,6 +238,29 @@ class AnnotationController{
     }
   }
 
+  /// Removes everything drawn for [buildingID]'s current floor, keeping its
+  /// persistent boundary.
+  ///
+  /// A failure here must not stop the caller: by this point the building is
+  /// already recorded as showing the new floor, so bailing out left it with
+  /// the old floor (partly) removed and the new one never added — a blank
+  /// building under a correct floor label — and no later switch to the same
+  /// floor would redraw it.
+  Future<void> _clearBuildingFloor(String buildingID) async {
+    try {
+      await Future.wait([
+        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
+        _unifiedMapController.removePolyline(buildingID),
+        _unifiedMapController.removeMarker(buildingID),
+        _unifiedMapController.removeCircle(buildingID),
+        _unifiedMapController.removeFurniture(buildingID),
+      ]);
+    } catch (e) {
+      print("floor swap: clearing $buildingID failed, drawing the new floor "
+          "anyway: $e");
+    }
+  }
+
   Future<void> changeBuildingFloor(String buildingID, int floor) async {
     if(_venueData.selectedFloor[buildingID] == floor) return;
     _focusBuildingSelectedFloor = floor;
@@ -223,26 +272,17 @@ class AnnotationController{
       // (which the new floor shares), that either wiped the just-added content
       // or, if it lost the race entirely, left the previous floor's markers and
       // furniture on the map stacked under the new ones.
-      await Future.wait([
-        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
-        _unifiedMapController.removePolyline(buildingID),
-        _unifiedMapController.removeMarker(buildingID),
-        _unifiedMapController.removeCircle(buildingID),
-        _unifiedMapController.removeFurniture(buildingID),
-      ]);
+      await _clearBuildingFloor(buildingID);
       await _unifiedMapController.addGeoJsonFeatures(GeoJsonFeatureCollection(features: floorData));
     }
     if(_user != null && _user!.bid == buildingID && _user!.floor == floor){
       String id = GeoJsonUtils.buildKey(buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
       await _unifiedMapController.removeMarker("user");
-      await _unifiedMapController.removeCircle("user");
       // Style read at the point of use — see the note in localizeUser.
       GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
           _user!.location, id,
           style: _unifiedMapController.userMarkerStyle);
-      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(_user!.location, id);
       await _unifiedMapController.addUserMarker(userMarker);
-      await _unifiedMapController.addCircle(userCircle);
       localizeUser(_user!);
     }else{
       // removeMarker(buildingID) above also deletes the user puck: its id is
@@ -278,13 +318,7 @@ class AnnotationController{
       // Awaited (see changeBuildingFloor): an unawaited removal can land after
       // the new floor was added and, matching by buildingID, wipe the new
       // content or leave the old floor stacked underneath.
-      await Future.wait([
-        _unifiedMapController.removePolygon(buildingID, exclude: 'boundary'),
-        _unifiedMapController.removePolyline(buildingID),
-        _unifiedMapController.removeMarker(buildingID),
-        _unifiedMapController.removeCircle(buildingID),
-        _unifiedMapController.removeFurniture(buildingID),
-      ]);
+      await _clearBuildingFloor(buildingID);
 
       final featuresToRender =
           floorData.isNotEmpty ? floorData : _floorFallbackBoundary(buildingID);
@@ -298,15 +332,11 @@ class AnnotationController{
         String id = GeoJsonUtils.buildKey(
             buildingID: _user!.bid, floor: _user!.floor.toString(), id: "user");
         await _unifiedMapController.removeMarker("user");
-        await _unifiedMapController.removeCircle("user");
         // Style read at the point of use — see the note in localizeUser.
         GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
             _user!.location, id,
             style: _unifiedMapController.userMarkerStyle);
-        GeoJsonCircle userCircle =
-            PredefinedCircles.getGenericMarker(_user!.location, id);
         await _unifiedMapController.addUserMarker(userMarker);
-        await _unifiedMapController.addCircle(userCircle);
         localizeUser(_user!);
       }
     }
@@ -332,9 +362,9 @@ class AnnotationController{
         .toList();
   }
 
-  Future<void> switchToLocationFloor(String polyId) async {
+  Future<GeoJsonFeature?> switchToLocationFloor(String polyId) async {
     GeoJsonFeature? feature = _venueData.findLocation(polyId);
-    if(feature == null) return;
+    if(feature == null) return null;
 
     int? floor = feature.properties?["floor"];
     String? buildingID = feature.buildingId;
@@ -342,6 +372,7 @@ class AnnotationController{
     if(floor != null && buildingID != null){
       await changeBuildingFloor(buildingID, floor);
     }
+    return feature;
   }
 
   List<int>? returnFocusedBuildingFloors(){
@@ -849,7 +880,6 @@ class AnnotationController{
       await changeBuildingFloor(user.bid, user.floor);
     }
     await _unifiedMapController.removeMarker("user");
-    await _unifiedMapController.removeCircle("user");
     if(!_userFloorIsRendered(user)){
       final campusId = _venueData.campusBuildingId;
       print("puck: localizeUser skipped the add — venue shows floor "
@@ -869,9 +899,7 @@ class AnnotationController{
       // at the point of use makes the last write win instead of the first.
       GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(user.location, id,
           style: _unifiedMapController.userMarkerStyle);
-      GeoJsonCircle userCircle = PredefinedCircles.getGenericMarker(user.location, id);
       await _unifiedMapController.addUserMarker(userMarker);
-      await _unifiedMapController.addCircle(userCircle);
     }
   }
 
@@ -897,12 +925,8 @@ class AnnotationController{
     final GeoJsonMarker userMarker = PredefinedMarkers.getUserMarker(
         user.location, id,
         style: _unifiedMapController.userMarkerStyle);
-    final GeoJsonCircle userCircle =
-        PredefinedCircles.getGenericMarker(user.location, id);
     await _unifiedMapController.removeMarker("user");
-    await _unifiedMapController.removeCircle("user");
     await _unifiedMapController.addUserMarker(userMarker);
-    await _unifiedMapController.addCircle(userCircle);
   }
 
   Future<void> clearUser() async {
