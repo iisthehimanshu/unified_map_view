@@ -3553,7 +3553,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     final scale = modelScale.isFinite && modelScale > 0 ? modelScale : 1.0;
     final parsedOriginX = double.tryParse('${props['3dModelOriginX']}');
     final parsedOriginY = double.tryParse('${props['3dModelOriginY']}');
-    print("parsedOriginX,parsedOriginY $parsedOriginX,$parsedOriginY");
     final originX = parsedOriginX != null && parsedOriginX.isFinite
         ? parsedOriginX
         : 0.0;
@@ -3563,6 +3562,14 @@ class MaplibreMapProvider extends BaseMapProvider {
 
     final anchorLatRad = anchorLat * pi / 180.0;
     final metersPerDegLng = _metersPerDegLat * cos(anchorLatRad);
+    final placedLng = anchorLng + originX * 0.000000275 * 360.0;
+    final mercatorY =
+        (1.0 - log(tan(anchorLatRad) + 1.0 / cos(anchorLatRad)) / pi) / 2.0;
+    final placedMercatorY = mercatorY + originY * 0.000000347;
+    final placedLat =
+        (2.0 * atan(exp(pi * (1.0 - 2.0 * placedMercatorY))) - pi / 2.0) *
+            180.0 /
+            pi;
 
     final parts = (ref['3d'] as List?) ?? const [];
     final result = <Map<String, dynamic>>[];
@@ -3589,13 +3596,12 @@ class MaplibreMapProvider extends BaseMapProvider {
       if (localCorners.isEmpty) continue;
 
       final ring = localCorners.map((c) {
-        // Place the optional local origin at the feature's map coordinates.
-        final x = (c[0] - originX) * scale;
-        final z = (c[1] - originY) * scale;
+        final x = c[0] * scale;
+        final z = c[1] * scale;
         final rx = x * cosT - z * sinT;
         final rz = x * sinT + z * cosT;
-        final lng = anchorLng + rx / metersPerDegLng;
-        final lat = anchorLat + rz / _metersPerDegLat;
+        final lng = placedLng + rx / metersPerDegLng;
+        final lat = placedLat + rz / _metersPerDegLat;
         return [lng, lat];
       }).toList();
       ring.add(ring.first); // close the ring
