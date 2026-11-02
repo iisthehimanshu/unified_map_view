@@ -3551,6 +3551,14 @@ class MaplibreMapProvider extends BaseMapProvider {
     final sinT = sin(rotationRad);
     final modelScale = double.tryParse("${props['3dModelScale']}") ?? 1.0;
     final scale = modelScale.isFinite && modelScale > 0 ? modelScale : 1.0;
+    final parsedOriginX = double.tryParse('${props['3dModelOriginX']}');
+    final parsedOriginY = double.tryParse('${props['3dModelOriginY']}');
+    final originX = parsedOriginX != null && parsedOriginX.isFinite
+        ? parsedOriginX
+        : 0.0;
+    final originY = parsedOriginY != null && parsedOriginY.isFinite
+        ? parsedOriginY
+        : 0.0;
 
     final anchorLatRad = anchorLat * pi / 180.0;
     final metersPerDegLng = _metersPerDegLat * cos(anchorLatRad);
@@ -3580,11 +3588,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       if (localCorners.isEmpty) continue;
 
       final ring = localCorners.map((c) {
-        final x = c[0] * scale;
-        final z = c[1] * scale;
-        // Rotate around the item's own anchor point (matches how
-        // rotation_y rotates the whole part group in a three.js-style
-        // scene graph).
+        // Place the optional local origin at the feature's map coordinates.
+        final x = (c[0] - originX) * scale;
+        final z = (c[1] - originY) * scale;
         final rx = x * cosT - z * sinT;
         final rz = x * sinT + z * cosT;
         final lng = anchorLng + rx / metersPerDegLng;
