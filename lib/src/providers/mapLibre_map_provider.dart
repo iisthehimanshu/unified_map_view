@@ -3553,6 +3553,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     final scale = modelScale.isFinite && modelScale > 0 ? modelScale : 1.0;
     final parsedOriginX = double.tryParse('${props['3dModelOriginX']}');
     final parsedOriginY = double.tryParse('${props['3dModelOriginY']}');
+    print("parsedOriginX,parsedOriginY $parsedOriginX,$parsedOriginY");
     final originX = parsedOriginX != null && parsedOriginX.isFinite
         ? parsedOriginX
         : 0.0;
