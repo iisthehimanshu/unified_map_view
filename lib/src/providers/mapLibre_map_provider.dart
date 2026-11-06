@@ -3538,14 +3538,10 @@ class MaplibreMapProvider extends BaseMapProvider {
     final anchorLat = double.tryParse('${coords[1]}');
     if (anchorLng == null || anchorLat == null) return const [];
 
-    // Placement rotation comes from "3dModelAngle" (sits alongside
-    // "3dRef" in properties) rather than "3dRef.rotation_y", which is
-    // just the 3d object's own default/reference orientation.
-    // "3dModelAngle" is defined 180deg opposite to the rotation
-    // convention used below (every object was showing back-to-front),
-    // so the offset corrects for that.
+
     final rotationDeg =
-        (double.tryParse('${props['3dModelAngle'] ?? 0}') ?? 0.0) + 180.0;
+        (double.tryParse('${props['3dModelAngle'] ?? 0}') ?? 0.0) +
+        (double.tryParse('${ref['rotation_y'] ?? 0}') ?? 0.0);
     final rotationRad = rotationDeg * pi / 180.0;
     final cosT = cos(rotationRad);
     final sinT = sin(rotationRad);
@@ -3598,8 +3594,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       final ring = localCorners.map((c) {
         final x = c[0] * scale;
         final z = c[1] * scale;
-        final rx = x * cosT - z * sinT;
-        final rz = x * sinT + z * cosT;
+        // Three.js uses Rz(angle) * Rx(90deg), followed by a Mercator
+        // Y reflection. In east/north metres this is (x*cos+z*sin,
+        // x*sin-z*cos); in particular, local +Z points south at angle 0.
+        final rx = x * cosT + z * sinT;
+        final rz = x * sinT - z * cosT;
         final lng = placedLng + rx / metersPerDegLng;
         final lat = placedLat + rz / _metersPerDegLat;
         return [lng, lat];
@@ -3697,7 +3696,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     ].map((c) {
       final x = c[0];
       final z = c[1];
-      return [ox + x * cosR - z * sinR, oz + x * sinR + z * cosR];
+      // Three.js positive Y rotation maps (x, z) to
+      // (x*cos+z*sin, -x*sin+z*cos).
+      return [ox + x * cosR + z * sinR, oz - x * sinR + z * cosR];
     }).toList();
   }
 
