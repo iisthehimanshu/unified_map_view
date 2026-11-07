@@ -113,7 +113,7 @@ class MaplibreMapProvider extends BaseMapProvider {
       'packages/unified_map_view/assets/markers/room_dot.png';
 
   /// Map image id for the path direction arrow.
-  static const String _kPathArrowImageId = '__path_arrow__'; 
+  static const String _kPathArrowImageId = '__path_arrow__';
   static const String _kPathBigArrowImageId = '__path_big_arrow__';
 
   /// Marker ids for which icon/text overlap is temporarily forced on. These
@@ -1326,7 +1326,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           _furnitureFillLayerId,
           _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
             fillColor: ['get', 'color'],
-            fillOutlineColor: ['get', 'color'],
+            fillOutlineColor: [
+              'interpolate', ['linear'], 0.8,
+              0, '#000000',
+              1, ['get', 'color'],
+            ],
             visibility: _visibility(_furnitureFillLayerId,
                 internalVisible: !isEnabled),
             fillOpacity: _hiddenUnderSectionOpacity(op),
@@ -3604,7 +3608,11 @@ class MaplibreMapProvider extends BaseMapProvider {
       _furnitureFillLayerId,
       _layerProps(_furnitureFillLayerId, (op) => FillLayerProperties(
         fillColor: ['get', 'color'],
-        fillOutlineColor: ['get', 'color'],
+        fillOutlineColor: [
+          'interpolate', ['linear'], 0.8,
+          0, '#000000',
+          1, ['get', 'color'],
+        ],
         // The flat footprint is the 2D counterpart of the extrusion, so the
         // renderer hides it in 3D. A policy can hide it further, not force it on.
         visibility: _visibility(_furnitureFillLayerId,
