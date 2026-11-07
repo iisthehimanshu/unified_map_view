@@ -743,13 +743,29 @@ class MaplibreMapProvider extends BaseMapProvider {
                 // Only query layers whose group still accepts taps. Hidden
                 // layers are already excluded by MapLibre's own query, so
                 // `visible: false` implies untappable for free.
+                //
+                // Zoom-aware: while the section patches are up, the markers
+                // grouped under a sectionId are faded to 0 but still placed, so
+                // they are left out of the query (the text layer mixes both
+                // kinds, so its sectioned features are filtered out below), and
+                // the section labels — not otherwise tappable — are added.
+                final zoom = controller.cameraPosition?.zoom;
+                final sectionShown = _sectionShownAt(zoom);
+                final sectionIdHidden = _sectionIdMarkersHiddenAt(zoom);
+                // Zoomed out under the boundary patch, every venue marker has
+                // faded out too; only the location pucks stay tappable.
+                final underPatch = _underBoundaryPatchAt(zoom);
                 final tappableMarkerLayers = <String>[
-                  _normalTextMarkerLayerId,
-                  "$_normalIconMarkerLayerId-withSectionId",
-                  "$_normalIconMarkerLayerId-withoutSectionId",
-                  _fixedMarkerLayerId,
-                  _customRenderingMarkerLayerId,
-                  _priorityMarkerLayerId,
+                  if (!sectionIdHidden && !underPatch) _normalTextMarkerLayerId,
+                  if (!sectionIdHidden && !underPatch)
+                    "$_normalIconMarkerLayerId-withSectionId",
+                  if (sectionShown) _sectionMarkerLayerId,
+                  if (!underPatch) ...[
+                    "$_normalIconMarkerLayerId-withoutSectionId",
+                    _fixedMarkerLayerId,
+                    _customRenderingMarkerLayerId,
+                    _priorityMarkerLayerId,
+                  ],
                   _rotationMarkerLayerId,
                   _faceUserMarkerLayerId,
                 ].where(_tapAllowedForLayer).toList();
@@ -757,13 +773,28 @@ class MaplibreMapProvider extends BaseMapProvider {
                 // An empty layer list is NOT "query nothing" — MapLibre drops
                 // the `layers` option entirely and queries the whole style,
                 // basemap raster included. Skip the call instead.
-                final markerFeatures = tappableMarkerLayers.isEmpty
+                final layerFeatures = tappableMarkerLayers.isEmpty
                     ? const <dynamic>[]
                     : await controller.queryRenderedFeatures(
                         point,
                         tappableMarkerLayers,
                         null,
                       );
+                // The text layer's unsectioned markers stay tappable. Queried
+                // on its own because a query filter applies to every layer in
+                // the call, and the other layers' sectionId markers (fixed,
+                // custom-rendering, …) are not hidden. It is the top-most
+                // marker layer, so its hits go first.
+                final textFeatures = sectionIdHidden &&
+                        !underPatch &&
+                        _tapAllowedForLayer(_normalTextMarkerLayerId)
+                        ? await controller.queryRenderedFeatures(
+                            point,
+                            [_normalTextMarkerLayerId],
+                            ["!", ["to-boolean", ["get", "sectionId"]]],
+                          )
+                        : const <dynamic>[];
+                final markerFeatures = [...textFeatures, ...layerFeatures];
 
                 print("queryRenderedFeatures count: ${markerFeatures.length}");
 
@@ -781,6 +812,31 @@ class MaplibreMapProvider extends BaseMapProvider {
                     return;
                   }
                 }
+
+                // While the section patches are up they are drawn over every
+                // flat polygon, so they take the tap ahead of the rooms below.
+                if (sectionShown) {
+                  final tappedSection = _hitTestPolygons(
+                    coordinates.latitude,
+                    coordinates.longitude,
+                    allow: (p) => _tapAllowedForGroup(_polygonGroupFor(p)),
+                    sectionsOnly: true,
+                  );
+                  final sectionId = tappedSection == null
+                      ? null
+                      : _extractPolygonIdFromTap(tappedSection.id);
+                  if (sectionId != null) {
+                    _selectFromTap(controller, sectionId,
+                        _polygonGroupFor(tappedSection!));
+                    return;
+                  }
+                }
+
+                // Under the boundary patch the rooms have faded out with the
+                // markers, but the hit test runs on the in-memory shapes, not on
+                // what is drawn — so stop here, before both polygon paths below
+                // (the hit test and the rendered-feature fallthrough).
+                if (underPatch) return;
 
                 final tappedPolygon = _hitTestPolygons(
                   coordinates.latitude,
@@ -1238,8 +1294,11 @@ class MaplibreMapProvider extends BaseMapProvider {
         _layerProps(
             _fixedMarkerLayerId,
             (op) => _fixedMarkerLayerProps(
-                  iconOpacity: op(_kDefaultMarkerOpacity),
-                  textOpacity: op(null),
+                  // Same fade as _refreshMarkerLayerMinZooms pushes; this
+                  // used to reset it to the creation ramp / none on every
+                  // 2D/3D toggle.
+                  iconOpacity: op(_markerVenueFade()),
+                  textOpacity: op(_markerVenueFade()),
                   visibility: _visibility(_fixedMarkerLayerId,
                       internalVisible: !isEnabled),
                 )),
@@ -1270,7 +1329,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             fillOutlineColor: ['get', 'color'],
             visibility: _visibility(_furnitureFillLayerId,
                 internalVisible: !isEnabled),
-            fillOpacity: op(null),
+            fillOpacity: _hiddenUnderSectionOpacity(op),
           )),
         );
       } catch (_) {}
@@ -1421,6 +1480,149 @@ class MaplibreMapProvider extends BaseMapProvider {
       c, 1.0,
       d, 0.0,
     ];
+  }
+
+  /// Inverse of the section fill's zoom-out ramp: 0 while the section patches
+  /// are drawn, rising to the layer's normal opacity as they fade away.
+  ///
+  /// Flat polygons sit below the section layer, so the opaque patch covers
+  /// them by itself. The furniture 3D models and the icon markers grouped
+  /// under a `sectionId` sit ABOVE it and would otherwise draw on top of the
+  /// patch, so they fade out on this curve instead. Mirrors the stops pushed
+  /// by [_refreshPatchAboveOpacity] (`fadeOutZoom + 1.5 → + 2.0`); before
+  /// that has run it mirrors the section layer's creation ramp (17 → 17.5).
+  ///
+  /// `op` sits on the top stop only, like the section layer, so a host opacity
+  /// override sets the strength once the section is gone without making the
+  /// layer show through the patch. With the zoom fade off the section ramp is
+  /// flattened too, so there is nothing to fade against and the layer stays up.
+  Object? _hiddenUnderSectionOpacity(_OpacityResolver op) {
+    final window = _sectionHideWindow();
+    if (window == null) return op(1.0);
+    final (start, end) = window;
+    return [
+      "interpolate", ["linear"], ["zoom"],
+      start, 0.0,
+      end, op(1.0),
+    ];
+  }
+
+  /// The zoom span over which the section patch fades out (and the layers
+  /// hidden under it fade in), or null when the zoom fade is off.
+  (double, double)? _sectionHideWindow() {
+    if (!_fadeEnabled) return null;
+    final z = _fadeOutZoom;
+    return z == null ? (17.0, 17.5) : (z + 1.5, z + 2.0);
+  }
+
+  /// Fade tying a layer to the boundary patch ("patch above"): 0 once the
+  /// patch is fully drawn (`fadeOutZoom - 0.5`), rising to [base] where the
+  /// patch has gone (`fadeOutZoom`) — the patch's own ramp, inverted. Below
+  /// the venue fit zoom the venue reads as the single patch, so the polygons
+  /// and markers it replaces fade out as it fades in, instead of showing
+  /// through or around it.
+  ///
+  /// `op` wraps [base], the top of the ramp, so an override sets how strong
+  /// the layer is above the patch without bringing it back under it. Before
+  /// the fit zoom is known, or with the zoom fade off (the patch's ramp is
+  /// flattened too), the layer keeps [base] at every zoom.
+  Object? _underPatchOpacity(_OpacityResolver op, Object? base) {
+    final z = _fadeOutZoom;
+    if (!_fadeEnabled || z == null) return op(base);
+    return [
+      "interpolate", ["linear"], ["zoom"],
+      z - 0.5, 0.0,
+      z, op(base),
+    ];
+  }
+
+  /// Whether the markers faded by [_hiddenUnderSectionOpacity] /
+  /// [_withSectionIdHidden] are (mostly) invisible at [zoom], so taps should
+  /// pass through them. An opacity-0 symbol is still placed and still returned
+  /// by queryRenderedFeatures, so the fade alone does not stop the tap.
+  /// Switches at the midpoint of the fade window.
+  bool _sectionIdMarkersHiddenAt(double? zoom) {
+    final window = _sectionHideWindow();
+    if (window == null || zoom == null) return false;
+    final (start, end) = window;
+    return zoom < (start + end) / 2;
+  }
+
+  /// Whether the section patches and their labels are on screen at [zoom], so
+  /// tapping one should select it. The upper edge is the same midpoint as
+  /// [_sectionIdMarkersHiddenAt]; below the venue fit zoom the boundary patch
+  /// is drawn over the sections, so they stop taking taps there too. With the
+  /// zoom fade off the section ramp is flat, so they are always tappable.
+  bool _sectionShownAt(double? zoom) {
+    final window = _sectionHideWindow();
+    if (window == null) return true;
+    if (zoom == null) return false;
+    final (start, end) = window;
+    if (zoom >= (start + end) / 2) return false;
+    final fit = _fadeOutZoom;
+    return fit == null || zoom >= fit - 0.25;
+  }
+
+  /// [base] — a constant or a linear zoom `interpolate` — with features
+  /// flagged `sectionId` additionally hidden under the section patch.
+  ///
+  /// For layers that mix sectioned and unsectioned markers (the text-only
+  /// layer), where the whole-layer [_hiddenUnderSectionOpacity] would hide
+  /// every marker. `zoom` may only appear in a top-level interpolate, so the
+  /// two curves cannot be combined with a `case` around two ramps; instead
+  /// both are sampled at the union of their stops and each stop's output picks
+  /// per feature. Unsectioned features get exactly [base], `op`-wrapped as
+  /// before; sectioned ones get it scaled by the section-hide curve, which
+  /// keeps an override from making them show through the patch.
+  Object? _withSectionIdHidden(_OpacityResolver op, Object base) {
+    final window = _sectionHideWindow();
+    if (window == null) return op(base);
+    final (start, end) = window;
+
+    final baseStops = <(double, double)>[];
+    if (base is List && base.isNotEmpty && base[0] == "interpolate") {
+      for (var i = 3; i + 1 < base.length; i += 2) {
+        baseStops.add(((base[i] as num).toDouble(), (base[i + 1] as num).toDouble()));
+      }
+    } else {
+      baseStops.add((0.0, (base as num).toDouble()));
+    }
+    double eval(List<(double, double)> stops, double z) {
+      if (z <= stops.first.$1) return stops.first.$2;
+      for (var i = 1; i < stops.length; i++) {
+        final (z1, v1) = stops[i];
+        if (z <= z1) {
+          final (z0, v0) = stops[i - 1];
+          return v0 + (v1 - v0) * (z - z0) / (z1 - z0);
+        }
+      }
+      return stops.last.$2;
+    }
+    final sectionStops = [(start, 0.0), (end, 1.0)];
+
+    final zooms = {
+      for (final s in baseStops) s.$1,
+      start,
+      end,
+    }.toList()
+      ..sort();
+    final expr = <dynamic>["interpolate", ["linear"], ["zoom"]];
+    double? last;
+    for (final z in zooms) {
+      if (last != null && z - last < 1e-6) continue;
+      last = z;
+      final b = eval(baseStops, z);
+      final h = eval(sectionStops, z);
+      final Object? sectioned = h <= 0.0
+          ? 0.0
+          : h >= 1.0
+              ? op(b)
+              : ["*", h, op(b)];
+      expr
+        ..add(z)
+        ..add(["case", ["to-boolean", ["get", "sectionId"]], sectioned, op(b)]);
+    }
+    return expr;
   }
 
   /// Animation played when a marker is tapped / selected. Defaults to
@@ -3407,9 +3609,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         // renderer hides it in 3D. A policy can hide it further, not force it on.
         visibility: _visibility(_furnitureFillLayerId,
             internalVisible: !_config.immersive),
-        // Named so a furniture opacity override has somewhere to land; op(null)
-        // serialises exactly as before when no override is set.
-        fillOpacity: op(null),
+        // Hidden while the section patch is up — see _hiddenUnderSectionOpacity.
+        fillOpacity: _hiddenUnderSectionOpacity(op),
       )),
       minzoom: _furnitureMinZoom,
       belowLayerId: await _furnitureBelowLayerId(controller),
@@ -3461,8 +3662,9 @@ class MaplibreMapProvider extends BaseMapProvider {
         // Every other extrusion layer in this file pins this explicitly;
         // leaving it unset here was the one inconsistency letting the
         // renderer fall back to an implicit default instead of a
-        // guaranteed-opaque layer.
-        fillExtrusionOpacity: op(1.0),
+        // guaranteed-opaque layer. Fades out under the section patch — see
+        // _hiddenUnderSectionOpacity.
+        fillExtrusionOpacity: _hiddenUnderSectionOpacity(op),
       )),
       minzoom: _furnitureMinZoom,
       belowLayerId: await _furnitureBelowLayerId(controller),
@@ -3480,7 +3682,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               fillExtrusionColor: ['get', 'color'],
               fillExtrusionBase: ['get', 'base'],
               fillExtrusionHeight: ['get', 'height'],
-              fillExtrusionOpacity: op(1.0),
+              fillExtrusionOpacity: _hiddenUnderSectionOpacity(op),
             )),
         minzoom: _furnitureMinZoom,
         belowLayerId: await _furnitureBelowLayerId(controller),
@@ -5616,7 +5818,9 @@ class MaplibreMapProvider extends BaseMapProvider {
           _normalTextMarkerLayerId,
           _layerProps(
               _normalTextMarkerLayerId,
-              (op) => _normalTextLayerProps(op(_kDefaultMarkerOpacity),
+              (op) => _normalTextLayerProps(
+                  // Text markers with a sectionId hide under their section.
+                  _withSectionIdHidden(op, _kDefaultMarkerOpacity),
                   visibility: _visibility(_normalTextMarkerLayerId))),
           filter: [
             "all",
@@ -5644,7 +5848,8 @@ class MaplibreMapProvider extends BaseMapProvider {
             "$_normalIconMarkerLayerId-withSectionId",
             (op) => _normalIconLayerProps(
                 sortBase: 3000,
-                opacity: op(_kDefaultMarkerOpacity),
+                // Hidden while its section patch is drawn.
+                opacity: _hiddenUnderSectionOpacity(op),
                 visibility:
                     _visibility("$_normalIconMarkerLayerId-withSectionId"))),
         filter: [
@@ -5941,8 +6146,10 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconSize: 1.5 * _kIconScale,
           iconAllowOverlap: true,
           textAllowOverlap: false,
-          iconOpacity: op(null),
-          textOpacity: op(null),
+          // Fades under the boundary patch like the other venue markers;
+          // see _patchMarkerOpacity.
+          iconOpacity: op(_patchMarkerOpacity()),
+          textOpacity: op(_patchMarkerOpacity()),
         )),
         filter: ["to-boolean", ["get", "isPriority"]],
         enableInteraction: true,
@@ -5978,8 +6185,9 @@ class MaplibreMapProvider extends BaseMapProvider {
           ],
           iconAllowOverlap: false,
           textAllowOverlap: false,
-          iconOpacity: op(null),
-          textOpacity: op(null),
+          // Fades under the boundary patch; see _patchMarkerOpacity.
+          iconOpacity: op(_patchMarkerOpacity()),
+          textOpacity: op(_patchMarkerOpacity()),
         )),
         filter: [
           "all",
@@ -6150,7 +6358,8 @@ class MaplibreMapProvider extends BaseMapProvider {
         'features': [],
       });
 
-      /// 1️⃣ SECTION (TOP-MOST among polygon layers)
+      /// 1️⃣ SECTION (top-most among the unselected polygon layers; only the
+      /// selected highlight and the boundary patch draw above it)
       await controller.addFillLayer(
         _polygonSourceId,
         _sectionPolygonLayerId,
@@ -6189,7 +6398,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _layerProps(_subSectionPolygonLayerId, (op) => FillLayerProperties(
           visibility: _visibility(_subSectionPolygonLayerId),
           fillColor: ["get", "fillColor"],
-          fillOpacity: op(const ["get", "fillOpacity"]),
+          fillOpacity: _underPatchOpacity(op, const ["get", "fillOpacity"]),
           fillOutlineColor: ["get", "strokeColor"],
         )),
         filter: [
@@ -6205,14 +6414,19 @@ class MaplibreMapProvider extends BaseMapProvider {
         belowLayerId: await _webSafeBelowLayerId(controller, _sectionPolygonLayerId),
       );
 
-      /// 3️⃣ SELECTED
+      /// 3️⃣ SELECTED — ABOVE the section layer. The opaque section patch
+      /// covers every polygon under it, which hid the highlight of a tapped
+      /// section or room until the camera zoomed past the section. Anchored on
+      /// the polyline layer like the section itself: added after it, so it
+      /// lands directly above it, and the boundary patch added later still
+      /// goes on top.
       await controller.addFillLayer(
         _polygonSourceId,
         _selectedPlainPolygonLayerId,
         _layerProps(_selectedPlainPolygonLayerId, (op) => FillLayerProperties(
           visibility: _visibility(_selectedPlainPolygonLayerId),
           fillColor: "#4CAF50",
-          fillOpacity: op(0.6),
+          fillOpacity: _underPatchOpacity(op, 0.6),
           fillOutlineColor: "#4CAF50",
         )),
         filter: [
@@ -6221,9 +6435,11 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "isSelected"]],
         ],
         enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
+        belowLayerId: await _webSafeBelowLayerId(controller, _polylineLayerId),
       );
 
+      // Above the section layer too, for the same reason (a selected room
+      // with a height is highlighted here, not in the flat layer above).
       await controller.addFillExtrusionLayer(
         _polygonSourceId,
         _selectedExtrudedPolygonLayerId,
@@ -6236,7 +6452,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           // Zeroed in 2D by the renderer to suppress residual shading. That is
           // an internal off, so it wins over a host override — otherwise
           // dimming this group would resurrect extrusions in 2D.
-          fillExtrusionOpacity: _config.immersive ? op(1.0) : 0.0,
+          fillExtrusionOpacity: _config.immersive ? _underPatchOpacity(op, 1.0) : 0.0,
         )),
         filter: [
           "all",
@@ -6244,7 +6460,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           ["to-boolean", ["get", "isSelected"]],
         ],
         enableInteraction: true,
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
+        belowLayerId: await _webSafeBelowLayerId(controller, _polylineLayerId),
       );
       _layerReAdders[_selectedExtrudedPolygonLayerId] = () async {
         await controller.removeLayer(_selectedExtrudedPolygonLayerId);
@@ -6258,7 +6474,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                     fillExtrusionHeight: ["get", "height"],
                     fillExtrusionBase: ["get", "base_height"],
                     fillExtrusionOpacity:
-                        _config.immersive ? op(1.0) : 0.0,
+                        _config.immersive ? _underPatchOpacity(op, 1.0) : 0.0,
                   )),
           filter: [
             "all",
@@ -6266,8 +6482,11 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["to-boolean", ["get", "isSelected"]],
           ],
           enableInteraction: true,
+          // Re-added at runtime, when the boundary patch exists: directly
+          // below it, which keeps it above the section and the flat selected
+          // highlight, as at creation.
           belowLayerId: await _webSafeBelowLayerId(
-              controller, _subSectionPolygonLayerId),
+              controller, _patchAbovePolygonLayerId),
         );
       };
 
@@ -6281,14 +6500,16 @@ class MaplibreMapProvider extends BaseMapProvider {
           fillExtrusionColor: ["get", "fillColor"],
           fillExtrusionHeight: ["get", "height"],
           fillExtrusionBase: ["get", "base_height"],
-          fillExtrusionOpacity: _config.immersive ? op(1.0) : 0.0,
+          fillExtrusionOpacity: _config.immersive ? _underPatchOpacity(op, 1.0) : 0.0,
         )),
         filter: [
           "all",
           ['has', 'height'],
           ["!", ["to-boolean", ["get", "hasPattern"]]],
         ],
-        belowLayerId: await _webSafeBelowLayerId(controller, _selectedPlainPolygonLayerId),
+        // Under the subsection layer — the slot it held when it was anchored
+        // under the selected layer, before that moved above the section.
+        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
       );
       _layerReAdders[_extrudedPolygonLayerId] = () async {
         await controller.removeLayer(_extrudedPolygonLayerId);
@@ -6302,7 +6523,7 @@ class MaplibreMapProvider extends BaseMapProvider {
                     fillExtrusionHeight: ["get", "height"],
                     fillExtrusionBase: ["get", "base_height"],
                     fillExtrusionOpacity:
-                        _config.immersive ? op(1.0) : 0.0,
+                        _config.immersive ? _underPatchOpacity(op, 1.0) : 0.0,
                   )),
           filter: [
             "all",
@@ -6310,7 +6531,7 @@ class MaplibreMapProvider extends BaseMapProvider {
             ["!", ["to-boolean", ["get", "hasPattern"]]],
           ],
           belowLayerId: await _webSafeBelowLayerId(
-              controller, _selectedPlainPolygonLayerId),
+              controller, _subSectionPolygonLayerId),
         );
       };
 
@@ -6321,7 +6542,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _layerProps(_normalPolygonLayerId, (op) => FillLayerProperties(
           visibility: _visibility(_normalPolygonLayerId),
           fillColor: ["get", "fillColor"],
-          fillOpacity: op(const ["get", "fillOpacity"]),
+          fillOpacity: _underPatchOpacity(op, const ["get", "fillOpacity"]),
           fillOutlineColor: ["get", "strokeColor"],
         )),
         filter: [
@@ -6343,7 +6564,7 @@ class MaplibreMapProvider extends BaseMapProvider {
         _layerProps(_patternPolygonLayerId, (op) => FillLayerProperties(
           visibility: _visibility(_patternPolygonLayerId),
           fillColor: ["get", "fillColor"],
-          fillOpacity: op(const ["get", "fillOpacity"]),
+          fillOpacity: _underPatchOpacity(op, const ["get", "fillOpacity"]),
           fillOutlineColor: ["get", "strokeColor"],
           fillPattern: ["get", "pattern"],
         )),
@@ -6505,8 +6726,13 @@ class MaplibreMapProvider extends BaseMapProvider {
       _layerProps(
           _sectionPolygonLayerId,
           (op) => _sectionPolygonProps(
+                // Fades in as the boundary patch fades out (bottom two stops,
+                // see _underPatchOpacity) and out where the buildings take
+                // over (top two).
                 _fadeRamp(op, () => [
                   "interpolate", ["linear"], ["zoom"],
+                  fadeOutZoom - 0.5, 0.0,
+                  fadeOutZoom, op(1.0),
                   fadeOutZoom + 1.5, op(1.0),
                   fadeOutZoom + 2.0, 0.0,
                 ]),
@@ -6522,6 +6748,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           (op) => _sectionMarkerProps(
                 opacity: _fadeRamp(op, () => op([
                   "interpolate", ["linear"], ["zoom"],
+                  fadeOutZoom - 0.5, 0.0,
+                  fadeOutZoom, 1.0,
                   fadeOutZoom + 1.5, 1.0,
                   fadeOutZoom + 2.0, 0.0,
                 ])),
@@ -6533,6 +6761,32 @@ class MaplibreMapProvider extends BaseMapProvider {
     );
 
     await _refreshMarkerLayerMinZooms(controller, fadeOutZoom);
+
+    // The flat and extruded polygon layers fade against the boundary patch
+    // (_underPatchOpacity), whose zoom was just recomputed. Same chain and
+    // forced-rebuild reasoning as the furniture below.
+    _reAddedState
+      ..remove(_extrudedPolygonLayerId)
+      ..remove(_selectedExtrudedPolygonLayerId);
+    await _applyLayerPolicy(controller, force: true, only: [
+      _normalPolygonLayerId,
+      _patternPolygonLayerId,
+      _subSectionPolygonLayerId,
+      _selectedPlainPolygonLayerId,
+      _extrudedPolygonLayerId,
+      _selectedExtrudedPolygonLayerId,
+    ]);
+
+    // Furniture fades against the section ramp just retuned above. The fill
+    // takes a property push; the extrusion only changes by being rebuilt, and
+    // the policy chain skips a rebuild when the host state is unchanged, so
+    // drop the cached state to force it. Going through the chain keeps this
+    // from interleaving with a policy apply (see _policyApplyChain).
+    if (_isFurnitureLayerEnabled) {
+      _reAddedState.remove(_furnitureLayerId);
+      await _applyLayerPolicy(controller,
+          only: [_furnitureFillLayerId, _furnitureLayerId], force: true);
+    }
 
     // The two label layers above were torn down and re-added, so re-arm the
     // policy on them — a re-added layer is born from the builder, but a host
@@ -6558,24 +6812,53 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
   }
 
+  /// The venue marker fade for fit zoom [fadeOutZoom]: 0 at
+  /// `fadeOutZoom - 0.5`, 1 at `fadeOutZoom`.
+  ///
+  /// Markers fade out over the same span the boundary patch fades in (see
+  /// [_underPatchOpacity]), so they are gone once the patch is fully drawn.
+  /// Was a full zoom level (→ -1), which left them drawn over the opaque patch
+  /// for half a level. Before the fit zoom is known this is the creation ramp.
+  ///
+  /// Collapsed rather than routed through [_fadeRamp]: every use is
+  /// `op(expression)` — the resolver always wraps the whole value — so it
+  /// yields a flat 1.0 with the fade off.
+  Object _markerVenueFade([double? fadeOutZoom]) {
+    if (!_fadeEnabled) return 1.0;
+    final z = fadeOutZoom ?? _fadeOutZoom;
+    if (z == null) return _kDefaultMarkerOpacity;
+    return [
+      "interpolate", ["linear"], ["zoom"],
+      z - 0.5, 0.0,
+      z, 1.0,
+    ];
+  }
+
+  /// [_markerVenueFade] for layers that had NO zoom fade before it: null
+  /// (fully drawn, as before) until the fit zoom is known, rather than the
+  /// 12 → 14 creation ramp the other marker layers start on.
+  Object? _patchMarkerOpacity() =>
+      _fadeOutZoom == null ? null : _markerVenueFade();
+
+  /// Whether [zoom] is far enough under the venue fit zoom that the boundary
+  /// patch covers the venue and the venue markers have (mostly) faded out —
+  /// past the midpoint of [_markerVenueFade]. Faded symbols are still placed
+  /// and still returned by queryRenderedFeatures, so taps must skip them.
+  bool _underBoundaryPatchAt(double? zoom) {
+    final z = _fadeOutZoom;
+    if (!_fadeEnabled || z == null || zoom == null) return false;
+    return zoom < z - 0.25;
+  }
+
   Future<void> _refreshMarkerLayerMinZooms(
       MapLibreMapController controller,
       double fadeOutZoom,
       ) async {
-    final fadeInEnd = fadeOutZoom;
-    fadeOutZoom --;
-
-    // Collapsed rather than routed through [_fadeRamp]: every use below is
-    // `op(opacityExpression)` — the resolver always wraps the whole value here —
-    // so flattening the shared expression once gives the same `op(1.0)` at all
-    // eleven call sites without threading a closure through each.
-    final Object opacityExpression = _fadeEnabled
-        ? [
-            "interpolate", ["linear"], ["zoom"],
-            fadeOutZoom, 0.0,
-            fadeInEnd,   1.0,
-          ]
-        : 1.0;
+    // Markers fade out over the same span the boundary patch fades in
+    // (fadeOutZoom → fadeOutZoom - 0.5, see _underPatchOpacity), so they are
+    // gone once the patch is fully drawn. Was a full zoom level (→ -1), which
+    // left them drawn over the opaque patch for half a level.
+    final Object opacityExpression = _markerVenueFade(fadeOutZoom);
 
     // ── BOTH PLATFORMS ──────────────────────────────────────────────────────
     //
@@ -6602,7 +6885,9 @@ class MaplibreMapProvider extends BaseMapProvider {
       _normalTextMarkerLayerId,
       _layerProps(
           _normalTextMarkerLayerId,
-          (op) => _normalTextLayerProps(op(opacityExpression),
+          (op) => _normalTextLayerProps(
+              // Text markers with a sectionId hide under their section.
+              _withSectionIdHidden(op, opacityExpression),
               visibility: _visibility(_normalTextMarkerLayerId))),
     );
 
@@ -6612,7 +6897,9 @@ class MaplibreMapProvider extends BaseMapProvider {
           "$_normalIconMarkerLayerId-withSectionId",
           (op) => _normalIconLayerProps(
               sortBase: 3000,
-              opacity: op(opacityExpression),
+              // Not the venue fade-in: these stay hidden until the section
+              // patch they belong to has faded out.
+              opacity: _hiddenUnderSectionOpacity(op),
               visibility:
                   _visibility("$_normalIconMarkerLayerId-withSectionId"))),
     );
@@ -6636,15 +6923,22 @@ class MaplibreMapProvider extends BaseMapProvider {
               visibility: _visibility(_customRenderingMarkerLayerId))),
     );
 
-    // icon-opacity keeps the layer's own creation ramp: the partial call this
-    // stands in for only ever retuned text-opacity for the fixed markers.
-    // Both are wrapped, so a host override collapses them to the same value.
+    // Their builders read the fit zoom themselves (_patchMarkerOpacity), so
+    // re-running them through the policy chain picks up the new fade.
+    await _applyLayerPolicy(controller,
+        force: true,
+        only: [_priorityMarkerLayerId, _overlapOverrideMarkerLayerId]);
+
+    // Icon and label share the venue fade. Both are wrapped, so a host
+    // override collapses them to the same value.
     await controller.setLayerProperties(
       _fixedMarkerLayerId,
       _layerProps(
           _fixedMarkerLayerId,
           (op) => _fixedMarkerLayerProps(
-                iconOpacity: op(_kDefaultMarkerOpacity),
+                // Was the creation ramp (12 → 14), independent of the venue;
+                // it now fades under the boundary patch like its label.
+                iconOpacity: op(opacityExpression),
                 textOpacity: op(opacityExpression),
                 visibility: _visibility(_fixedMarkerLayerId,
                     internalVisible: !_config.immersive),
@@ -7128,15 +7422,23 @@ class MaplibreMapProvider extends BaseMapProvider {
   /// Ray-casts the in-memory polygons, which is independent of what is actually
   /// rendered — so [allow] is how a policy keeps hidden or untappable polygons
   /// from being "tapped".
+  ///
+  /// Sections (and sub sections, boundaries) are skipped by default — they
+  /// cover whole groups of rooms. [sectionsOnly] hit-tests the section
+  /// polygons alone instead, for while their patches are on screen.
   GeoJsonPolygon? _hitTestPolygons(double lat, double lng,
-      {bool Function(GeoJsonPolygon)? allow}) {
+      {bool Function(GeoJsonPolygon)? allow, bool sectionsOnly = false}) {
     final hits = _polygons.where((p) {
       // `properties` or `type` being absent used to throw NoSuchMethodError
       // here, which the caller's catch swallowed — silently killing the whole
       // polygon tap path for that tap.
       final type = p.properties?['type']?.toString().toLowerCase() ?? '';
       if (p.id.toLowerCase().contains("boundary")) return false;
-      if (type.contains("boundary") || type.contains("section")) return false;
+      if (sectionsOnly) {
+        if (type != "section") return false;
+      } else if (type.contains("boundary") || type.contains("section")) {
+        return false;
+      }
       if (allow != null && !allow(p)) return false;
       return _pointInPolygon(lat, lng, p.points);
     }).toList();
@@ -7203,7 +7505,16 @@ class MaplibreMapProvider extends BaseMapProvider {
       try {
         if (_symbols.isNotEmpty) {
           marker = _findMarkerById(polyID);
-          if (marker == null) throw Exception('Marker not found');
+          // A section polygon is tappable on its own and need not carry a
+          // label marker; let it through to the polygon lookup below.
+          if (marker == null &&
+              _findPolygonById(polyID, polyID)
+                      ?.properties?['type']
+                      ?.toString()
+                      .toLowerCase() !=
+                  'section') {
+            throw Exception('Marker not found');
+          }
         }
       } catch (e) {
         print('No marker found for polyID: $polyID - $e');
