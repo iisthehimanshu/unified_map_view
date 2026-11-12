@@ -1036,6 +1036,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               await enablePolylineLayers(_controller!);
               await enableCircleLayers(_controller!);
               await enableMarkerLayers(_controller!);
+              await _addTurnBubbleLayer(_controller!);
 
               // enableMarkerLayers re-pushes _symbols, but not _rotatingSymbols
               if (_rotatingSymbols.isNotEmpty) {
@@ -4233,8 +4234,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     // A path segment meeting the bend shorter than the arrow's own on-screen
     // length — a tight route near the destination — would have the arrow
     // overrun the turn and read as floating free of the path. Flag those per
-    // corner so the arrow layer can drop just the arrow (the turn bubble has
-    // no such filter and still shows).
+    // corner, while keeping the upcoming turn's arrow with its callout.
     //
     // The 0.5 factor (some overhang allowed, not an exact fit) is load-
     // bearing, not cosmetic: because the arrow's size and a segment's on-
@@ -4249,9 +4249,16 @@ class MaplibreMapProvider extends BaseMapProvider {
     // show no arrows anywhere no matter how far you zoomed in.
     final double arrowFitMinSegPixels = arrowFootprintPx * 0.5;
 
+    // Reserve the actual next turn before decluttering nearby corner arrows.
+    // Otherwise a sharper later bend can replace the turn named by the callout.
+    final upcoming = _upcomingTurnFeature();
     final sorted = [..._allCornerFeatures]
-      ..sort((a, b) => (b['properties']['turnSharpness'] as double)
-          .compareTo(a['properties']['turnSharpness'] as double));
+      ..sort((a, b) {
+        if (identical(a, upcoming)) return -1;
+        if (identical(b, upcoming)) return 1;
+        return (b['properties']['turnSharpness'] as double)
+            .compareTo(a['properties']['turnSharpness'] as double);
+      });
 
     final kept = <Map<String, dynamic>>[];
     for (final feature in sorted) {
@@ -4270,13 +4277,12 @@ class MaplibreMapProvider extends BaseMapProvider {
 
       final segMeters =
           (feature['properties']['minSegMeters'] as num?)?.toDouble();
-      feature['properties']['arrowFits'] = segMeters == null ||
+      feature['properties']['arrowFits'] = identical(feature, upcoming) || segMeters == null ||
           segMeters / metersPerPixel >= arrowFitMinSegPixels;
       kept.add(feature);
     }
 
     _visibleCornerFeatures = kept;
-    final upcoming = _upcomingTurnFeature(kept);
     for (final feature in kept) {
       feature['properties']['showTurnBubble'] = identical(feature, upcoming);
     }
@@ -4336,7 +4342,7 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Future<void> _refreshUpcomingTurn(MapLibreMapController controller) async {
     if (_allCornerFeatures.isEmpty) return;
-    final nextKey = _turnKey(_upcomingTurnFeature(_visibleCornerFeatures));
+    final nextKey = _turnKey(_upcomingTurnFeature());
     if (nextKey != _visibleTurnKey) await _refreshCornerVisibility(controller);
   }
 
@@ -7225,9 +7231,8 @@ class MaplibreMapProvider extends BaseMapProvider {
           // filter and still shows.)
           ["to-boolean", ["get", "arrowFits"]],
         ],
-        // Only once the route is clearly zoomed in — below this the fixed-size
-        // arrow dwarfs the thinned path and stops reading as "on" it.
-        minzoom: 20.0,
+        // Match the callout's zoom range so its turn arrow remains visible.
+        minzoom: 19.0,
       );
 
       // Moving shine that travels along the active path.
@@ -7240,30 +7245,6 @@ class MaplibreMapProvider extends BaseMapProvider {
           iconAllowOverlap: true,
           iconIgnorePlacement: true,
         ),
-      );
-
-      // Turn bubble (floating callout with the turn label), anchored to the
-      // next upcoming corner. minzoom hides it when zoomed out too far.
-      await _addSymbolLayerSafe(controller,
-        _pathCornerSourceId,
-        _turnBubbleLayerId,
-        const SymbolLayerProperties(
-          symbolSortKey: ["*", ["get", "turnSharpness"], -1],
-          iconImage: ["get", "turnBubbleIcon"],
-          iconAnchor: "bottom",
-          iconOffset: [0, -24],
-          iconAllowOverlap: false,
-          iconIgnorePlacement: false,
-          iconPadding: 8,
-        ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "path"]],
-          ["==", ["get", "style"], "solid"],
-          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
-          ["to-boolean", ["get", "showTurnBubble"]],
-        ],
-        minzoom: 19.0,
       );
 
       // Dashed path lines
@@ -7317,6 +7298,32 @@ class MaplibreMapProvider extends BaseMapProvider {
       print('Error enabling polyline layers: $e');
       print('Stack trace: $stack');
     }
+  }
+
+  Future<void> _addTurnBubbleLayer(MapLibreMapController controller) async {
+    // Add after marker layers so route labels and landmark icons cannot draw
+    // over the callout. Its source is created by enablePolylineLayers.
+    await _addSymbolLayerSafe(controller,
+      _pathCornerSourceId,
+      _turnBubbleLayerId,
+      const SymbolLayerProperties(
+        symbolSortKey: ["*", ["get", "turnSharpness"], -1],
+        iconImage: ["get", "turnBubbleIcon"],
+        iconAnchor: "bottom",
+        iconOffset: [0, -8],
+        iconAllowOverlap: true,
+        iconIgnorePlacement: true,
+        iconPadding: 8,
+      ),
+      filter: [
+        "all",
+        ["to-boolean", ["get", "path"]],
+        ["==", ["get", "style"], "solid"],
+        ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
+        ["to-boolean", ["get", "showTurnBubble"]],
+      ],
+      minzoom: 19.0,
+    );
   }
 
   // ---------------------------------------------------------------------------
