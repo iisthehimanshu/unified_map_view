@@ -542,12 +542,20 @@ class AnnotationController{
           }
 
           // Draw last segment
+          if (segmentPoints.length == 1 && path.length > 1 &&
+              path.last.floorChangeCallout != null) {
+            segmentPoints.insert(0, MapLocation(
+              latitude: path[path.length - 2].lat,
+              longitude: path[path.length - 2].lng,
+            ));
+          }
           if (segmentPoints.length > 1 && currentColor != null) {
             await _drawSegmentPolyline(
               bid,
               floor,
               segmentPoints,
               currentColor,
+              floorChangeCallout: path.last.floorChangeCallout,
             );
           }
 
@@ -741,6 +749,7 @@ class AnnotationController{
       int floor,
       List<MapLocation> points,
       String color,
+      {String? floorChangeCallout}
       ) async {
     if (points.length < 2) return;
 
@@ -755,7 +764,8 @@ class AnnotationController{
         "fillColor": color,
         "width": 8.0,
         "fillOpacity": 1.0,
-        'style': "solid"
+        'style': "solid",
+        if (floorChangeCallout != null) 'floorChangeCallout': floorChangeCallout,
       },
     );
 

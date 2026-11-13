@@ -184,6 +184,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   Timer? _pathShineTimer;
   double _pathShineProgress = 0.0;
   List<Map<String, dynamic>> _allCornerFeatures = [];
+  List<Map<String, dynamic>> _floorChangeFeatures = [];
   List<Map<String, dynamic>> _visibleCornerFeatures = [];
   final Map<String, List<MapLocation>> _cornerRoutes = {};
   String? _visibleTurnKey;
@@ -1087,7 +1088,7 @@ class MaplibreMapProvider extends BaseMapProvider {
           onCameraIdle: () async {
             if (_controller != null) {
               try {
-                if (_allCornerFeatures.isNotEmpty && _controller != null) {
+                if (_allCornerFeatures.isNotEmpty || _floorChangeFeatures.isNotEmpty) {
                   _refreshCornerVisibility(_controller!);
                 }
                 // The puck glide defers its source pushes while the camera moves
@@ -4035,7 +4036,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               line.properties?['style'] == "solid" &&
               !(line.properties?['isGreyOverlay'] ?? false);
         })
-        .map((line) => "${line.id}:${line.points.length}")
+        .map((line) => "${line.id}:${line.points.length}:${line.properties?['floorChangeCallout']}")
         .join("|");
 
     // Newest pass wins. Several run at once whenever polylines change in quick
@@ -4049,6 +4050,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     }
 
     final cornerFeatures = <Map<String, dynamic>>[];
+    final floorChangeFeatures = <Map<String, dynamic>>[];
     final cornerRoutes = <String, List<MapLocation>>{};
     // A copy, not `_lines` itself: the loop awaits icon bakes, and a polyline
     // added or removed meanwhile threw "Concurrent modification during
@@ -4059,6 +4061,28 @@ class MaplibreMapProvider extends BaseMapProvider {
       final bool isPath = line.properties?['path'] ?? line.id.toLowerCase().contains("path");
       final String? style = line.properties?['style'];
       final bool isGreyOverlay = line.properties?['isGreyOverlay'] ?? false;
+
+      final floorChangeLabel = line.properties?['floorChangeCallout'];
+      if (isPath && style == 'solid' && !isGreyOverlay &&
+          floorChangeLabel is String && floorChangeLabel.isNotEmpty &&
+          line.points.isNotEmpty) {
+        final end = line.points.last;
+        final bubbleIconId = await _ensureTurnBubbleImage(controller, floorChangeLabel);
+        floorChangeFeatures.add({
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [end.longitude, end.latitude],
+          },
+          'properties': {
+            'path': true,
+            'style': 'solid',
+            'turnSharpness': 0.0,
+            'turnBubbleIcon': bubbleIconId,
+            'showFloorChangeBubble': true,
+          },
+        });
+      }
 
       if (isPath && style == "solid" && !isGreyOverlay && line.points.length >= 3) {
         cornerRoutes[line.id] = line.points;
@@ -4115,6 +4139,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     // current one and this would overwrite it with stale corners.
     if (pass != _cornerPass) return;
     _allCornerFeatures = cornerFeatures;
+    _floorChangeFeatures = floorChangeFeatures;
     _cornerRoutes..clear()..addAll(cornerRoutes);
     _visibleTurnKey = null;
     _navigationPosition = null;
@@ -4189,7 +4214,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _refreshCornerVisibility(MapLibreMapController controller) async {
-    if (_allCornerFeatures.isEmpty) {
+    if (_allCornerFeatures.isEmpty && _floorChangeFeatures.isEmpty) {
       await controller.setGeoJsonSource(_pathCornerSourceId, {
         "type": "FeatureCollection",
         "features": [],
@@ -4289,7 +4314,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     _visibleTurnKey = _turnKey(upcoming);
     await controller.setGeoJsonSource(_pathCornerSourceId, {
       "type": "FeatureCollection",
-      "features": kept,
+      "features": [...kept, ..._floorChangeFeatures],
     });
   }
 
@@ -4341,7 +4366,7 @@ class MaplibreMapProvider extends BaseMapProvider {
   }
 
   Future<void> _refreshUpcomingTurn(MapLibreMapController controller) async {
-    if (_allCornerFeatures.isEmpty) return;
+    if (_allCornerFeatures.isEmpty && _floorChangeFeatures.isEmpty) return;
     final nextKey = _turnKey(_upcomingTurnFeature());
     if (nextKey != _visibleTurnKey) await _refreshCornerVisibility(controller);
   }
@@ -7320,7 +7345,10 @@ class MaplibreMapProvider extends BaseMapProvider {
         ["to-boolean", ["get", "path"]],
         ["==", ["get", "style"], "solid"],
         ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
-        ["to-boolean", ["get", "showTurnBubble"]],
+        ["any",
+          ["to-boolean", ["get", "showTurnBubble"]],
+          ["to-boolean", ["get", "showFloorChangeBubble"]],
+        ],
       ],
       minzoom: 19.0,
     );
