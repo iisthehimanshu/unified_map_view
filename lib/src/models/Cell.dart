@@ -22,6 +22,7 @@ class Cell{
   bool isDestination;
   bool isFloorConnection;
   String? connectorType;
+  String? floorChangeCallout;
   double? destinationLat;
   double? destinationLng;
   String? name;
@@ -29,7 +30,7 @@ class Cell{
   List<String>? stopItems;
   bool pathStop;
 
-  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.pathStop = false, this.stopItems, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType, this.color, this.destinationLat, this.destinationLng, this.name, this.stopName});
+  Cell(this.node, this.x, this.y, this.move, this.lat, this.lng,this.bid, this.floor, this.numCols, {this.ttsEnabled = true, this.imaginedCell = false, this.imaginedIndex, this.position, this.pathStop = false, this.stopItems, this.masterGraph = false, this.isSource = false, this.isDestination = false, this.isFloorConnection = false, this.connectorType, this.floorChangeCallout, this.color, this.destinationLat, this.destinationLng, this.name, this.stopName});
 
   Map<String, dynamic> toJson() => {
     'node': node,
@@ -57,6 +58,7 @@ class Cell{
     'isDestination': isDestination,
     'isFloorConnection': isFloorConnection,
     'connectorType': connectorType,
+    'floorChangeCallout': floorChangeCallout,
     'color': color,
     'destinationLat':destinationLat,
     'destinationLng':destinationLng,
@@ -100,6 +102,7 @@ class Cell{
       isDestination: json['isDestination'],
       isFloorConnection: json['isFloorConnection'],
         connectorType: json['connectorType'],
+      floorChangeCallout: json['floorChangeCallout'],
       color: json['color'],
       destinationLat: json['destinationLat'],
       destinationLng: json['destinationLng'],
