@@ -3532,7 +3532,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     _pathBigArrowLayerId,
     _pathShineLayerId,
     _turnBubbleLayerId,
-    _dotMarkerLayerId,
     _normalTextMarkerLayerId,
     '$_normalIconMarkerLayerId-withSectionId',
     '$_normalIconMarkerLayerId-withoutSectionId',
@@ -3689,24 +3688,6 @@ class MaplibreMapProvider extends BaseMapProvider {
     if (_config.immersive) {
       await _addFurnitureExtrusionLayer(controller);
     }
-  }
-
-  Future<String?> _furnitureBelowLayerId(
-      MapLibreMapController controller) async {
-    try {
-      final ids = await controller.getLayerIds();
-      // Furniture can be loaded after the route. Keep both its flat fill and
-      // 3D extrusion below the route's lowest layer so the path stays visible.
-      if (ids.contains(_pathOutlineLayerId)) return _pathOutlineLayerId;
-      if (ids.contains(_pathSolidLayerId)) return _pathSolidLayerId;
-      for (final id in ids) {
-        if (id is String &&
-            (id.contains('marker') || id == _normalCircleLayerId)) {
-          return id;
-        }
-      }
-    } catch (_) {}
-    return null;
   }
 
   /// Adds the furniture fill-extrusion layer (3D). No-op if already present

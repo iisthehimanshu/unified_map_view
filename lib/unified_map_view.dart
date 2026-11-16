@@ -26,6 +26,7 @@ export 'src/models/user_marker_style.dart';
 export 'src/models/CameraBound.dart';
 export 'src/models/map_layer.dart';
 export 'src/models/map_style_config.dart';
+export 'src/models/iway_options.dart';
 export 'src/models/venue_data_version.dart';
 export 'src/utils/LandmarkAssetType.dart';
 export 'src/models/marker_type_info.dart';

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:mappls_gl/mappls_gl.dart';
 import 'package:unified_map_view/maplibre.dart';
+import 'package:unified_map_view/iway.dart';
 import 'package:unified_map_view/mappls.dart';
 import 'package:unified_map_view/unified_map_view.dart';
 // import 'package:mappls_gl/mappls_gl.dart';
@@ -161,7 +162,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   void initState() {
     super.initState();
     _unifiedMapController = UnifiedMapController(
-        initialProvider: MapProvider.mapLibre,
+        initialProvider: MapProvider.iway,
         venueName: 'Apollo-Gurugram',
         initialLocation: UnifiedCameraPosition(
           mapLocation: MapLocation(latitude: 21.7679, longitude: 78.8718), // Delhi
@@ -173,6 +174,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
       url: "https://maps.iwayplus.in",
       languageCode: "hi",
         providers: {MapProvider.mapLibre: MaplibreMapProvider(),
+          MapProvider.iway: IwayMapProvider(),
           MapProvider.mappls: MapplsMapProvider()},
       styleConfig: widget.styleConfig,
     );

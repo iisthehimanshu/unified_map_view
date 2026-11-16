@@ -1,5 +1,6 @@
 // lib/src/providers/base_map_provider.dart
 
+import '../models/iway_options.dart';
 import 'package:flutter/widgets.dart';
 import '../../unified_map_view.dart';
 import '../models/CameraBound.dart';
@@ -95,6 +96,10 @@ abstract class BaseMapProvider {
   ///
   /// Providers without a fade ramp inherit a no-op.
   Future<void> setFade(dynamic controller, bool enabled) async {}
+
+  /// Apply options for iway_indoor_map features (the config file's `iway:`
+  /// block). Only the iway provider implements this; others inherit a no-op.
+  Future<void> applyIwayOptions(dynamic controller, IwayOptions options) async {}
 
   /// Apply a layer policy: per-group and per-style-layer visibility, opacity,
   /// tappability and raw style properties.

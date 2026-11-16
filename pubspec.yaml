@@ -49,6 +49,10 @@ dev_dependencies:
   mapbox_maps_flutter:
   mappls_gl: ^1.2.0
   maplibre_gl: ^0.26.1
+  # Native indoor map package (same API as maplibre_gl).
+  # Local checkout for now (has the rebuild fixes); git: https://github.com/Kanika1609/iway_indoor_map.git
+  iway_indoor_map:
+    path: ../iway_indoor_map
   webview_flutter: ^4.14.1
 
   flutter_test:

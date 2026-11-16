@@ -219,6 +219,12 @@ class UnifiedMapController extends ChangeNotifier {
         await currentProviderImplementation.setMarkerTypeFilter(
             _currentMapController, _markerTypeFilter);
       }
+      final iway = _styleConfig?.iway;
+      if (iway != null) {
+        await currentProviderImplementation.applyIwayOptions(
+            _currentMapController, iway);
+        notifyListeners();
+      }
     }
 
     apply().catchError((Object e) {
@@ -528,6 +534,12 @@ class UnifiedMapController extends ChangeNotifier {
     if (config.greyscale != null) await setGreyscale(config.greyscale!);
     if (config.fade != null) await setFade(config.fade!);
     if (config.symbolsSpecified) await showMarkerTypes(config.symbolTypes);
+    if (config.iway != null && _currentMapController != null) {
+      await currentProviderImplementation.applyIwayOptions(
+          _currentMapController, config.iway!);
+      // Zoom limits and gestures are map-widget options: rebuild it.
+      notifyListeners();
+    }
   }
 
   /// Which map content is currently drawn, how strongly, and what responds to

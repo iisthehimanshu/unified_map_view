@@ -13,6 +13,9 @@ enum MapProvider {
 
   /// MapLibre Maps provider
   mapLibre,
+
+  /// iway_indoor_map provider (native, same API as MapLibre)
+  iway,
 }
 
 extension MapProviderExtension on MapProvider {
@@ -26,6 +29,8 @@ extension MapProviderExtension on MapProvider {
         return 'Mappls';
       case MapProvider.mapLibre:
         return 'MapLibre';
+      case MapProvider.iway:
+        return 'Iway';
     }
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:yaml/yaml.dart';
 
+import 'iway_options.dart';
 import 'map_layer.dart';
 
 /// A whole map's render configuration, parsed from a file the developer
@@ -71,6 +72,11 @@ class MapStyleConfig {
   /// that would rather fail loudly can assert this is empty.
   final List<String> warnings;
 
+  /// Options for iway_indoor_map features (room labels, light, 3D tilt,
+  /// zoom limits, gestures), from the `iway:` block; null when the file has
+  /// none. Only the iway provider applies them. See [IwayOptions].
+  final IwayOptions? iway;
+
   const MapStyleConfig({
     this.layers = MapLayerPolicy.all,
     this.immersive,
@@ -79,6 +85,7 @@ class MapStyleConfig {
     this.symbolTypes,
     this.symbolsSpecified = false,
     this.warnings = const [],
+    this.iway,
   });
 
   /// A config that changes nothing.
@@ -89,6 +96,7 @@ class MapStyleConfig {
       immersive == null &&
       greyscale == null &&
       fade == null &&
+      iway == null &&
       !symbolsSpecified;
 
   /// Parse a YAML (or JSON — YAML is a superset) config document.
@@ -188,6 +196,15 @@ class MapStyleConfig {
       warnings.add('layers: expected a mapping, got "$layers"');
     }
 
+    // ---- iway ---------------------------------------------------------------
+    IwayOptions? iway;
+    final iwayBlock = map['iway'];
+    if (iwayBlock is Map) {
+      iway = IwayOptions.fromMap(iwayBlock.cast<String, Object?>(), warnings);
+    } else if (iwayBlock != null) {
+      warnings.add('iway: expected a mapping, got "$iwayBlock"');
+    }
+
     for (final key in map.keys) {
       if (!_knownTopLevelKeys.contains(key)) {
         warnings.add('$key: unknown top-level key — ignored');
@@ -202,6 +219,7 @@ class MapStyleConfig {
       symbolTypes: symbolTypes,
       symbolsSpecified: symbolsSpecified,
       warnings: List.unmodifiable(warnings),
+      iway: iway,
     );
     if (kDebugMode) {
       for (final warning in warnings) {
@@ -217,6 +235,7 @@ class MapStyleConfig {
     'fade',
     'symbols',
     'layers',
+    'iway',
   };
 
   /// The three semantic fields plus every remaining key as a raw style
