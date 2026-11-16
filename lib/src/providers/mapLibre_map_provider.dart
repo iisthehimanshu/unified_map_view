@@ -3142,7 +3142,15 @@ class MaplibreMapProvider extends BaseMapProvider {
       return;
     }
 
-    final features = _polygons.map((polygon) {
+    final features = _polygons.where((polygon) {
+      // In 2D, hide beams that are associated with other polygons.
+      // set3DViewEnabled re-runs this on every toggle, so they come back in 3D.
+      if (_config.immersive) return true;
+      final rawType =
+          polygon.properties?["type"] ?? polygon.properties?["polygonType"];
+      final isBeam = rawType?.toString().toLowerCase() == 'beam';
+      return !(isBeam && polygon.associatedPolygonIds.isNotEmpty);
+    }).map((polygon) {
       final String? rawType =
           polygon.properties?["type"] ?? polygon.properties?["polygonType"];
       final String? type = rawType?.toLowerCase();
