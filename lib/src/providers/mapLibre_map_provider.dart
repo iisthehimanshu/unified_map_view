@@ -4560,6 +4560,11 @@ class MaplibreMapProvider extends BaseMapProvider {
 
   Future<Uint8List> _createTurnBubbleBytes(String label) async {
     const double ratio = 2.0;
+    
+    /// Scale factor to reduce the entire bubble size (including text, padding, and dimensions)
+    /// Reduce to 50% of original size for better visual appearance on both web and native
+    const double bubbleScaleFactor = 0.5;
+    
     final textPainter = TextPainter(
       text: TextSpan(
         text: label,
@@ -4573,14 +4578,17 @@ class MaplibreMapProvider extends BaseMapProvider {
     )..layout();
 
     const paddingH = 16.0, paddingV = 10.0, tailH = 10.0;
-    final w = textPainter.width + paddingH * 2 * ratio;
-    final bubbleH = textPainter.height + paddingV * 2 * ratio;
-    final h = bubbleH + tailH * ratio;
+    final w = (textPainter.width + paddingH * 2 * ratio) * bubbleScaleFactor;
+    final bubbleH = (textPainter.height + paddingV * 2 * ratio) * bubbleScaleFactor;
+    final h = (textPainter.height + paddingV * 2 * ratio + tailH * ratio) * bubbleScaleFactor;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
+    
+    // Scale the canvas to reduce the entire bubble
+    canvas.scale(bubbleScaleFactor);
 
-    final bubbleRect = Rect.fromLTWH(0, 0, w, bubbleH);
+    final bubbleRect = Rect.fromLTWH(0, 0, w / bubbleScaleFactor, bubbleH / bubbleScaleFactor);
     final rrect = RRect.fromRectAndRadius(bubbleRect, Radius.circular(10 * ratio));
 
     canvas.drawRRect(
@@ -4594,9 +4602,9 @@ class MaplibreMapProvider extends BaseMapProvider {
     canvas.drawRRect(rrect, bgPaint);
 
     final tailPath = Path()
-      ..moveTo(w / 2 - 6 * ratio, bubbleH - 1)
-      ..lineTo(w / 2 + 6 * ratio, bubbleH - 1)
-      ..lineTo(w / 2, h)
+      ..moveTo(w / bubbleScaleFactor / 2 - 6 * ratio, bubbleH / bubbleScaleFactor - 1)
+      ..lineTo(w / bubbleScaleFactor / 2 + 6 * ratio, bubbleH / bubbleScaleFactor - 1)
+      ..lineTo(w / bubbleScaleFactor / 2, h / bubbleScaleFactor)
       ..close();
     canvas.drawPath(tailPath, bgPaint);
 
