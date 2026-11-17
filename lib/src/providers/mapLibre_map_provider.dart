@@ -4537,7 +4537,12 @@ class MaplibreMapProvider extends BaseMapProvider {
     final int rounded = (diff / 5).round() * 5;
     final String id = _cornerArrowImageId(rounded);
     if (!_registeredCornerArrowAngles.contains(rounded)) {
-      final bytes = await creator.createBentArrow(angle: rounded.toDouble());
+      /// Reduce arrow size on web only (was too large); native apps look fine at original size
+      final double arrowSize = kIsWeb ? 128.0 : 256.0;
+      final bytes = await creator.createBentArrow(
+        angle: rounded.toDouble(),
+        size: arrowSize,
+      );
       await _addImageSafe(controller, id, bytes);
       _registeredCornerArrowAngles.add(rounded);
     }
@@ -4561,9 +4566,9 @@ class MaplibreMapProvider extends BaseMapProvider {
   Future<Uint8List> _createTurnBubbleBytes(String label) async {
     const double ratio = 2.0;
     
-    /// Scale factor to reduce the entire bubble size (including text, padding, and dimensions)
-    /// Reduce to 50% of original size for better visual appearance on both web and native
-    const double bubbleScaleFactor = 0.5;
+    /// Scale factor to reduce the entire bubble size on web (was too large there)
+    /// Native apps look fine at full size, so we only scale on web
+    final double bubbleScaleFactor = kIsWeb ? 0.5 : 1.0;
     
     final textPainter = TextPainter(
       text: TextSpan(
@@ -4585,7 +4590,7 @@ class MaplibreMapProvider extends BaseMapProvider {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     
-    // Scale the canvas to reduce the entire bubble
+    // Scale the canvas to reduce the entire bubble (web only)
     canvas.scale(bubbleScaleFactor);
 
     final bubbleRect = Rect.fromLTWH(0, 0, w / bubbleScaleFactor, bubbleH / bubbleScaleFactor);
