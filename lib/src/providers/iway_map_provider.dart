@@ -191,6 +191,9 @@ class IwayMapProvider extends BaseMapProvider {
   final String _sectionPolygonLayerId = 'section-polygon-layer';
   final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
+  /// 3D rooms inside a section: their own layer so they can hide while the
+  /// section patch is drawn (the renderer fades whole layers, not features).
+  final String _extrudedSectionPolygonLayerId = 'extruded-section-polygon-layer';
 
   /// The basemap raster layer declared in [osmRasterStyle]. Named here so
   /// greyscale can set raster-saturation on it.
@@ -336,6 +339,7 @@ class IwayMapProvider extends BaseMapProvider {
     // _patchBelowPolygonLayerId: MapLayer.venueBoundary,
     // _patchAbovePolygonLayerId: MapLayer.venueBoundary,
     _extrudedPolygonLayerId: MapLayer.extrusions,
+    _extrudedSectionPolygonLayerId: MapLayer.extrusions,
     // polylines
     _pathSolidLayerId: MapLayer.routeLine,
     _pathOutlineLayerId: MapLayer.routeLine,
@@ -1910,6 +1914,7 @@ class IwayMapProvider extends BaseMapProvider {
                 'iconScaleFactor': scale,
                 'iconShake': shakeDeg,
                 'labelScale': labelScale,
+                'iconH': _markerIconHeightPx[marker.id] ?? _kDefaultIconHeightPx,
                 // Custom-rendering markers bake their label into the icon, so
                 // the animated layer must not draw ["get","title"] on top of
                 // it — same duplicate-label glitch as the selected layer.
@@ -2026,6 +2031,7 @@ class IwayMapProvider extends BaseMapProvider {
       } catch (e) {
         print("error adding marker $e");
       }
+      unawaited(_refreshRoomLabelsForIcons(controller));
     }
   }
 
@@ -2046,7 +2052,10 @@ class IwayMapProvider extends BaseMapProvider {
       print('PROFILE: skipping ${markers.length} markers (SKIP_MARKERS=true)');
       return;
     }
-    return _addMarkers(controller, markers);
+    await _addMarkers(controller, markers);
+    if (controller is IwayMapController) {
+      await _refreshRoomLabelsForIcons(controller);
+    }
   }
 
   Future<void> _addMarkers(controller, List<GeoJsonMarker> markers) async {
@@ -2054,6 +2063,9 @@ class IwayMapProvider extends BaseMapProvider {
     // times per render, so this stringifies the whole marker set repeatedly.
     if (!kIsWeb) print("markers $markers");
     if (controller is IwayMapController) {
+      // A boundary (venue-name) marker kept through a floor swap is replaced
+      // by the new floor's copy rather than doubled.
+      _replaceKeptBoundaryMarkers(markers);
       final animalMarkers = <GeoJsonMarker>[];
       final otherMarkers = <GeoJsonMarker>[];
       for (var marker in markers) {
@@ -2502,6 +2514,15 @@ class IwayMapProvider extends BaseMapProvider {
         // marker cannot divide by zero.
         final biasDenominator = list.isEmpty ? 1 : list.length;
 
+        // Section patches. A marker sitting inside one is treated as
+        // sectioned (hidden while the patch is drawn) even when the data gives
+        // it no `sectionId` — otherwise lift/washroom icons and their names
+        // drew on top of the patch.
+        final sectionPatches = _polygons
+            .where((p) =>
+                p.properties?['type']?.toString().toLowerCase() == 'section' &&
+                p.points.length >= 3)
+            .toList();
         return list.indexed.map((entry) {
           final (index, marker) = entry;
           // The tap animation scales and rotates about the icon centre, so the
@@ -2513,6 +2534,13 @@ class IwayMapProvider extends BaseMapProvider {
                   ? "center"
                   : "bottom";
           bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
+          if (!hasSectionId && sectionPatches.isNotEmpty) {
+            final mType = marker.properties?['type']?.toString().toLowerCase() ?? '';
+            if (mType != 'section' && mType != 'sub section' && mType != 'boundary') {
+              hasSectionId = sectionPatches.any((p) => _pointInPolygon(
+                  marker.position.latitude, marker.position.longitude, p.points));
+            }
+          }
           double? entryDirection;
           if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null){
             entryDirection = (marker.properties?['entryDirection'] as num).toDouble();
@@ -2564,6 +2592,7 @@ class IwayMapProvider extends BaseMapProvider {
                   ? 0.0
                   : (marker.properties?["bearing"] ?? 0.0),
               'iconAnchor': anchor,
+              'iconH': _markerIconHeightPx[marker.id] ?? _kDefaultIconHeightPx,
               'section': marker.properties?['type'] == "Section",
               'subSection': marker.properties?['type'] == "Sub Section",
               'sectionId': hasSectionId,
@@ -2577,6 +2606,7 @@ class IwayMapProvider extends BaseMapProvider {
               if (marker.isExhibitorLogo && _hasUsableIcon(marker))
                 'logoScale': _exhibitorLogoScale(marker),
               'customRendering':marker.customRendering,
+              'hasFlatLabel': _hasFlatRoomLabel(marker),
               // POI markers bake a separate '<id>-selected' highlight image; this
               // flag tells the selected-marker layer to use it.
               'hasSelectedIcon': RenderingTheme.current.isMuseum &&
@@ -3128,12 +3158,36 @@ class IwayMapProvider extends BaseMapProvider {
     await setGeoJsonSource(controller, _symbols, _clusterSourceId);
   }
 
+  bool _isBoundaryMarker(GeoJsonMarker m) =>
+      m.properties?['type']?.toString().toLowerCase() == 'boundary';
+
+  /// Drops kept boundary markers that [incoming] replaces: same building and
+  /// same name, different id (each floor's data carries its own copy).
+  void _replaceKeptBoundaryMarkers(Iterable<GeoJsonMarker> incoming) {
+    for (final m in incoming) {
+      if (!_isBoundaryMarker(m)) continue;
+      final b = GeoJsonUtils.extractKeyValueMap(m.id)['buildingID'];
+      _symbols.removeWhere((o) =>
+          o.id != m.id &&
+          _isBoundaryMarker(o) &&
+          o.title == m.title &&
+          GeoJsonUtils.extractKeyValueMap(o.id)['buildingID'] == b);
+    }
+  }
+
   @override
   Future<void> removeMarker(dynamic controller, String markerId) async {
     if (controller is IwayMapController) {
       try {
-        _symbols.removeWhere(
-                (marker) => marker.id.toLowerCase().contains(markerId));
+        // A building-wide removal (a floor swap clears the old floor by
+        // building id) keeps the building's boundary marker — the venue name
+        // — the same way the boundary polygon is kept (exclude: 'boundary').
+        // Removing and re-adding it made the name blink out on every floor
+        // switch. An explicit removal of the boundary itself still removes it.
+        final targetsBoundary = markerId.toLowerCase().contains('boundary');
+        _symbols.removeWhere((marker) =>
+            marker.id.toLowerCase().contains(markerId) &&
+            (targetsBoundary || !_isBoundaryMarker(marker)));
         _rotatingSymbols.forEach((symbol) {
           print("_rotatingSymbols ${symbol.id}");
         });
@@ -3151,6 +3205,7 @@ class IwayMapProvider extends BaseMapProvider {
 
         setGeoJsonSource(controller, _symbols, _clusterSourceId);
         setGeoJsonSource(controller, _rotatingSymbols, _rotationSourceId);
+        unawaited(_refreshRoomLabelsForIcons(controller));
       } catch (e) {
         print('Error removing marker: $e');
       }
@@ -3172,6 +3227,7 @@ class IwayMapProvider extends BaseMapProvider {
         _bakedIconCache.clear();
         await setGeoJsonSource(controller, [], _clusterSourceId);
         await setGeoJsonSource(controller, [], _rotationSourceId);
+        unawaited(_refreshRoomLabelsForIcons(controller));
       } catch (e) {
         print('Error clearing markers: $e');
       }
@@ -3234,6 +3290,25 @@ class IwayMapProvider extends BaseMapProvider {
     }
 
     final roomLabels = _roomLabels(_polygons);
+    // Section patches: a labelled room inside one is flagged `sectionId` so
+    // its flat name hides while the patch is drawn (_roomLabelOpacity).
+    final sectionPolygons = _polygons
+        .where((p) =>
+            p.properties?['type']?.toString().toLowerCase() == 'section' &&
+            p.points.length >= 3)
+        .toList();
+    bool underSection(GeoJsonPolygon room) {
+      final sid = room.properties?['sectionId']?.toString() ?? '';
+      if (sid.isNotEmpty && sid.toLowerCase() != 'null') return true;
+      if (sectionPolygons.isEmpty) return false;
+      final lat = room.points.map((p) => p.latitude).reduce((a, b) => a + b) / room.points.length;
+      final lng = room.points.map((p) => p.longitude).reduce((a, b) => a + b) / room.points.length;
+      return sectionPolygons.any((s) => _pointInPolygon(lat, lng, s.points));
+    }
+    _flatLabelledRoomIds
+      ..clear()
+      ..addAll(roomLabels.keys
+          .map((id) => _extractPolygonIdFromTap(id) ?? id));
     final features = _polygons.map((polygon) {
       final String? rawType =
           polygon.properties?["type"] ?? polygon.properties?["polygonType"];
@@ -3309,6 +3384,8 @@ class IwayMapProvider extends BaseMapProvider {
           'fillOpacity': fillColor.a,
           'isSelected': selectPolygonIds?.contains(polygon.id) ?? false,
           if (roomLabels[polygon.id] != null) 'label': roomLabels[polygon.id],
+          if (type != 'section' && type != 'sub section' && type != 'boundary')
+            'sectionId': underSection(polygon),
           'boundary': polygon.properties?['type'] == "Boundary",
           'section': polygon.properties?['type'] == "Section",
           'subsection': polygon.properties?['type'] == "Sub Section",
@@ -3357,6 +3434,49 @@ class IwayMapProvider extends BaseMapProvider {
   /// venue push past the style load and tripped it. Deriving the thresholds
   /// from the data whenever the data lands removes the ordering dependency
   /// instead of trying to preserve it.
+  /// Fit zoom per venue (keyed by its boundary name / building), fixed at
+  /// the first value worked out for it. Floors of one venue carry different
+  /// boundary outlines (or none), and recomputing from whichever floor was
+  /// loaded made the fade zoom flip on every floor switch (17.68 ↔ 18.26 on
+  /// Apollo Gurugram) — so the venue name and the patches appeared and
+  /// vanished at the same zoom.
+  final Map<String, double> _venueFitZoom = {};
+
+  /// The map's size for fit-zoom maths: the measured one, else the device's
+  /// logical screen size. Never the 400×800 fallback, which gave a different
+  /// zoom on the first push than on every later one.
+  Size _fitScreenSize() {
+    if (_screenSize != null) return _screenSize!;
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    return view.physicalSize / view.devicePixelRatio;
+  }
+
+  /// The boundary-patch fade zoom for the loaded venue, stable across floors;
+  /// null when it cannot be worked out yet (keep whatever is in use).
+  double? _computeFadeOutZoom() {
+    final boundaries = _polygons
+        .where((p) => p.properties?['type']?.toString().toLowerCase() == 'boundary')
+        .toList();
+    if (boundaries.isEmpty) {
+      // A floor without a boundary keeps the venue's value instead of fitting
+      // to its own rooms (a different, jumpy number).
+      if (_fadeOutZoom != null) return _fadeOutZoom;
+      if (_polygons.isEmpty) return null;
+      return _calculateFitZoom(_polygons, screenSize: _fitScreenSize()) - 2.0;
+    }
+    final first = boundaries.first;
+    final key = (first.properties?['name']?.toString() ??
+            GeoJsonUtils.extractKeyValueMap(first.id)['buildingID']?.toString() ??
+            first.id)
+        .trim()
+        .toLowerCase();
+    // Locked to the first value worked out for the venue: later floors with a
+    // different outline must not move it (any move is a visible jump of the
+    // venue name and patches at the same zoom).
+    return _venueFitZoom.putIfAbsent(key,
+        () => _calculateFitZoom(boundaries, screenSize: _fitScreenSize()) - 2.0);
+  }
+
   Future<void> _refreshPatchFadeIfStale(
       IwayMapController controller) async {
     if (!_isPolygonLayersEnabled) return;
@@ -3371,13 +3491,9 @@ class IwayMapProvider extends BaseMapProvider {
     // re-push — i.e. the venue renders with no markers at all.
     // Nothing is lost by waiting: enableMarkerLayers calls back in when done.
     if (!_isClusteringEnabled) return;
-    final boundaryPolygons = _polygons.where((p) =>
-        p.properties?['type']?.toString().toLowerCase() == 'boundary').toList();
-    final basis = boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons;
     // Nothing to derive from yet; the next push will call back in.
-    if (basis.isEmpty) return;
-    final fitZoom =
-        _calculateFitZoom(basis, screenSize: _screenSize) - 2.0;
+    final fitZoom = _computeFadeOutZoom();
+    if (fitZoom == null) return;
     // Unchanged (or first run) → only pay for the layer rebuild when it moves.
     if (_fadeOutZoom != null && (_fadeOutZoom! - fitZoom).abs() < 0.01) return;
     print('patch fade stale: recomputing (was $_fadeOutZoom, now $fitZoom)');
@@ -4788,6 +4904,69 @@ class IwayMapProvider extends BaseMapProvider {
   /// than recomputed.
   final Map<String, Offset> _markerIconAnchorCache = {};
 
+  /// Own ids of the rooms whose name is drawn flat by [_roomNameLayerId].
+  /// A selected text-only marker for one of these must not draw its title in
+  /// the selected-marker layer too, or the name shows twice.
+  final Set<String> _flatLabelledRoomIds = {};
+
+  /// Whether [marker] is a text-only room label whose room already shows its
+  /// name flat on the floor.
+  bool _hasFlatRoomLabel(GeoJsonMarker marker) {
+    if (!_flatRoomLabels || _hasUsableIcon(marker)) return false;
+    final id = _extractPolygonIdFromTap(marker.id);
+    return id != null && _flatLabelledRoomIds.contains(id);
+  }
+
+  /// Pixel height of each plain icon image registered at pixelRatio 1, keyed
+  /// by marker id. Written to the feature as `iconH` so the label layers can
+  /// push the text below the icon's real bottom edge instead of a fixed
+  /// 1.2em — an 80px round icon (lift, stairs) is ~32pt tall-half at the
+  /// resting 0.8 size, far more than 1.2em (16.8pt), which drew the label
+  /// inside the icon.
+  final Map<String, double> _markerIconHeightPx = {};
+
+  /// Height assumed for an icon that could not be measured — the size almost
+  /// every bundled landmark PNG is.
+  static const double _kDefaultIconHeightPx = 80.0;
+
+  /// Gap, in screen points, between an icon's bottom edge and its label.
+  static const double _kIconLabelGapPt = 3.0;
+
+  /// Height in pixels of a raster [bytes] image; null when it can't be read
+  /// (e.g. SVG). PNG is read straight from the IHDR header, anything else is
+  /// decoded.
+  Future<double?> _imagePixelHeight(Uint8List bytes) async {
+    try {
+      if (bytes.length >= 24 &&
+          bytes[0] == 0x89 && bytes[1] == 0x50 &&
+          bytes[2] == 0x4E && bytes[3] == 0x47) {
+        final h = ByteData.sublistView(bytes, 20, 24).getUint32(0);
+        return h > 0 ? h.toDouble() : null;
+      }
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final h = frame.image.height.toDouble();
+      frame.image.dispose();
+      codec.dispose();
+      return h > 0 ? h : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// `text-radial-offset` (ems) that puts a label [_kIconLabelGapPt] below a
+  /// center-anchored icon drawn at [iconSize] with text of [textSize].
+  /// Both arguments may be expressions.
+  dynamic _labelBelowIconOffset(dynamic iconSize, dynamic textSize) => [
+        "/",
+        [
+          "+",
+          ["*", ["to-number", ["get", "iconH"], _kDefaultIconHeightPx], iconSize, 0.5],
+          _kIconLabelGapPt,
+        ],
+        textSize,
+      ];
+
   /// Shared "no label" icon ids already registered with the current style.
   ///
   /// The zoomed-out variant of a custom-rendering marker is the same photo
@@ -5334,6 +5513,8 @@ class IwayMapProvider extends BaseMapProvider {
         // the style is not ready yet, which left the marker invisible).
         await _addImageSafe(controller, marker.id, marker.imageBytes!);
         await _addImageSafe(controller, '${marker.id}-small', marker.imageBytes!);
+        final h = await _imagePixelHeight(marker.imageBytes!);
+        if (h != null) _markerIconHeightPx[marker.id] = h;
         return true;
       } catch (e) {
         print('_loadMarkerIcon(imageBytes) ' + e.toString());
@@ -5566,6 +5747,8 @@ class IwayMapProvider extends BaseMapProvider {
         if (iconBytes != null && iconBytes.isNotEmpty) {
           await _addImageSafe(controller, _dbgReg(marker.id), iconBytes);
           _registeredMarkerIconIds.add(marker.id);
+          final h = await _imagePixelHeight(iconBytes);
+          if (h != null) _markerIconHeightPx[marker.id] = h;
           return true;
         }
       }
@@ -5637,6 +5820,16 @@ class IwayMapProvider extends BaseMapProvider {
   /// the source is the real one.
   static final double _kIconScale = kIsWeb ? 0.5 : 1.0;
 
+  /// Resting size of the icon markers (lift, stairs, washroom, exits …) as a
+  /// share of their image. Was 0.8; reduced on request so the icons sit
+  /// lighter on the plan. Label spacing below the icon follows it.
+  static const double _kMarkerIconSize = 0.4;
+
+  /// Base size of a selected icon marker before the selection bump
+  /// ([_kSelectedMarkerRestScale]); kept the same step above the resting
+  /// size it always was (0.9 vs 0.8).
+  static const double _kSelectedMarkerIconSize = _kMarkerIconSize + 0.1;
+
   /// Default zoom fade used when the layers are first created; replaced at
   /// runtime by [_refreshMarkerLayerMinZooms] once the real fade zoom is known.
   static const List<dynamic> _kDefaultMarkerOpacity = [
@@ -5684,7 +5877,7 @@ class IwayMapProvider extends BaseMapProvider {
         iconImage: ["get", "icon"],
         // Covers the ordinary landmark icons — lift, entry, washroom and the
         // rest — for both the with/without-sectionId layers.
-        iconSize: 0.8 * _kIconScale,
+        iconSize: _kMarkerIconSize * _kIconScale,
         iconAnchor: ["get", "iconAnchor"],
         textField: ["get", "title"],
         textSize: 14,
@@ -5699,6 +5892,16 @@ class IwayMapProvider extends BaseMapProvider {
           ["==", ["get", "iconAnchor"], "center"],
           ["literal", [0, 1.2]],
           ["literal", [0, 1.2]]
+        ],
+        // Overrides textOffset above: the label sits just below the icon's
+        // real bottom edge, sized from the feature's `iconH`. A bottom-anchored
+        // icon already has its bottom on the point, so 0 there falls back to
+        // textOffset's [0, 0].
+        textRadialOffset: [
+          "case",
+          ["==", ["get", "iconAnchor"], "bottom"],
+          0,
+          _labelBelowIconOffset(_kMarkerIconSize * _kIconScale, 14),
         ],
         textAllowOverlap: false,
         iconAllowOverlap: false,
@@ -5737,7 +5940,9 @@ class IwayMapProvider extends BaseMapProvider {
         visibility: visibility,
         fillColor: ["get", "fillColor"],
         fillOpacity: fillOpacity,
-        fillOutlineColor: ["get", "strokeColor"],
+        // Outline in the patch's own colour: the data's dark strokeColor drew
+        // black borders round and between the (now solid) section patches.
+        fillOutlineColor: ["get", "fillColor"],
       );
 
   /// Full property set for the boundary / venue-name marker layer.
@@ -6419,7 +6624,7 @@ class IwayMapProvider extends BaseMapProvider {
           visibility: _visibility(_overlapOverrideMarkerLayerId),
           symbolSortKey: ["+", 15000, _kSortKeyExpression],
           iconImage: ["get", "icon"],
-          iconSize: 0.8 * _kIconScale, // overlap-override markers
+          iconSize: _kMarkerIconSize * _kIconScale, // overlap-override markers
           iconAnchor: ["get", "iconAnchor"],
           textField: ["get", "title"],
           textSize: 14,
@@ -6434,6 +6639,12 @@ class IwayMapProvider extends BaseMapProvider {
             ["==", ["get", "iconAnchor"], "center"],
             ["literal", [0, 1.2]],
             ["literal", [0, 1.2]]
+          ],
+          textRadialOffset: [
+            "case",
+            ["==", ["get", "iconAnchor"], "bottom"],
+            0,
+            _labelBelowIconOffset(_kMarkerIconSize * _kIconScale, 14),
           ],
           iconAllowOverlap: false,
           textAllowOverlap: false,
@@ -6496,7 +6707,7 @@ class IwayMapProvider extends BaseMapProvider {
               "case",
               ["to-boolean", ["get", "customRendering"]],
               1.0 * _kAnimalWebIconScale,
-              0.9 * _kIconScale,
+              _kSelectedMarkerIconSize * _kIconScale,
             ],
             ["get", "iconScaleFactor"],
           ],
@@ -6511,6 +6722,10 @@ class IwayMapProvider extends BaseMapProvider {
           textField: [
             "case",
             ["to-boolean", ["get", "customRendering"]],
+            "",
+            // The room's name is already drawn flat on the floor by the
+            // room-name layer; drawing it here too showed it twice.
+            ["to-boolean", ["get", "hasFlatLabel"]],
             "",
             ["get", "title"],
           ],
@@ -6527,6 +6742,15 @@ class IwayMapProvider extends BaseMapProvider {
             ["to-boolean", ["get", "icon"]],
             ["literal", [0, 1.2]],
             ["literal", [0, 0]],
+          ],
+          // Clears the ENLARGED selected icon (same size expression as
+          // iconSize above) so the bigger label isn't drawn inside it.
+          textRadialOffset: [
+            "case",
+            ["to-boolean", ["get", "icon"]],
+            _labelBelowIconOffset(
+                ["*", _kSelectedMarkerIconSize * _kIconScale, ["get", "iconScaleFactor"]], 14 * 1.3),
+            0,
           ],
           iconAllowOverlap: true,
           textAllowOverlap: true,
@@ -6565,7 +6789,7 @@ class IwayMapProvider extends BaseMapProvider {
         _animatedMarkerLayerId,
         SymbolLayerProperties(
           iconImage: ["get", "icon"],
-          iconSize: ["*", 0.8, ["get", "iconScaleFactor"]],
+          iconSize: ["*", _kMarkerIconSize, ["get", "iconScaleFactor"]],
           iconRotate: ["get", "iconShake"],
           iconRotationAlignment: "viewport",
           iconAnchor: "center",
@@ -6576,6 +6800,9 @@ class IwayMapProvider extends BaseMapProvider {
           textHaloWidth: 1.5,
           textAnchor: "top",
           textOffset: ["literal", [0, 1.2]],
+          textRadialOffset: _labelBelowIconOffset(
+              ["*", _kMarkerIconSize, ["get", "iconScaleFactor"]],
+              ["*", 14, ["get", "labelScale"]]),
           iconAllowOverlap: true,
           textAllowOverlap: true,
           iconIgnorePlacement: true,
@@ -6635,10 +6862,65 @@ class IwayMapProvider extends BaseMapProvider {
     return false;
   }
 
+  /// Own polygon ids of rooms that already show an icon marker (lift,
+  /// washroom, a café logo …). Those rooms get no flat floor name: the icon
+  /// carries the name under it, and drawing both showed every such room twice.
+  ///
+  /// Matched by the marker's `polyId`, or — for a marker not tied to a polygon
+  /// id — by the marker sitting inside a room of the same name.
+  Set<String> _iconRoomIds(List<GeoJsonPolygon> polygons) {
+    final ids = <String>{};
+    final unlinked = <GeoJsonMarker>[];
+    for (final m in _symbols) {
+      if (!_hasUsableIcon(m)) continue;
+      final type = m.properties?['type']?.toString().toLowerCase() ?? '';
+      if (type == 'section' || type == 'sub section' || type == 'boundary') continue;
+      final polyId = GeoJsonUtils.extractKeyValueMap(m.id)['polyId'];
+      if (polyId != null && polyId.toString().isNotEmpty) {
+        ids.add(polyId.toString());
+      } else {
+        unlinked.add(m);
+      }
+    }
+    if (unlinked.isEmpty) return ids;
+    String norm(String? t) => (t ?? '').split('|').first.trim().toLowerCase();
+    for (final polygon in polygons) {
+      final name = norm(polygon.properties?['name']?.toString());
+      if (name.isEmpty || polygon.points.length < 3) continue;
+      for (final m in unlinked) {
+        if (norm(m.title) == name &&
+            _pointInPolygon(m.position.latitude, m.position.longitude, polygon.points)) {
+          final own = _extractPolygonIdFromTap(polygon.id);
+          if (own != null) ids.add(own);
+          break;
+        }
+      }
+    }
+    return ids;
+  }
+
+  /// Signature of the last [_iconRoomIds] the polygon source was built with,
+  /// so a marker change re-pushes room names only when it matters.
+  String _iconRoomSignature = '';
+
+  /// Re-pushes the room names when the set of rooms that show an icon has
+  /// changed since they were last built (markers usually land after rooms).
+  Future<void> _refreshRoomLabelsForIcons(IwayMapController controller) async {
+    if (!_isPolygonLayersEnabled || _polygons.isEmpty) return;
+    final sig = (_iconRoomIds(_polygons).toList()..sort()).join(',');
+    if (sig == _iconRoomSignature) return;
+    await _updatePolygonSource(controller,
+        selectPolygonIds: selectedLocation?.polygon == null
+            ? null
+            : _selectionGroupFor(selectedLocation!.polygon!));
+  }
+
   /// The flat label of each named room, by polygon id.
   Map<String, String> _roomLabels(List<GeoJsonPolygon> polygons) {
     const sameTextRadiusM = 12.0;
     const differentTextRadiusM = 1.5;
+    final iconRooms = _iconRoomIds(polygons);
+    _iconRoomSignature = (iconRooms.toList()..sort()).join(',');
     final out = <String, String>{};
     final kept = <(String, double, double)>[]; // text, lat, lng
     for (final polygon in polygons) {
@@ -6655,6 +6937,9 @@ class IwayMapProvider extends BaseMapProvider {
       // "English | हिन्दी" -> the first part.
       final text = raw.split('|').map((p) => p.trim()).firstWhere((p) => p.isNotEmpty, orElse: () => raw.trim());
       if (text.toLowerCase() == 'wall' || _isPinnedRoom(text, type)) continue;
+      // The room shows an icon marker (with its name under it) — no floor name too.
+      final ownId = _extractPolygonIdFromTap(polygon.id) ?? polygon.id;
+      if (iconRooms.contains(ownId)) continue;
       final lat = polygon.points.map((p) => p.latitude).reduce((a, b) => a + b) / polygon.points.length;
       final lng = polygon.points.map((p) => p.longitude).reduce((a, b) => a + b) / polygon.points.length;
       const mPerDegLat = 111320.0;
@@ -6671,12 +6956,37 @@ class IwayMapProvider extends BaseMapProvider {
     return out;
   }
 
+  /// Tallest a flat room name's letters may get, in metres (native default
+  /// 1.6). Higher lets big rooms carry big names; small rooms are limited by
+  /// their own size anyway.
+  static const double _kRoomLabelMaxHeightM = 3.0;
+
+  /// Share of a room a flat name may cover (native default 0.55). High so
+  /// small rooms get big, stacked names.
+  static const double _kRoomLabelFill = 0.85;
+
+  /// Flat room-name opacity: the boundary-patch fade ([_underPatchOpacity]'s
+  /// ramp) for every name, and additionally the section-patch fade
+  /// ([_withSectionIdHidden]) for names of rooms inside a section — the
+  /// polygon feature carries `sectionId` for those (see _updatePolygonSource).
+  Object? _roomLabelOpacity(_OpacityResolver op) {
+    final z = _fadeOutZoom;
+    final Object base = (!_fadeEnabled || z == null)
+        ? 1.0
+        : ["interpolate", ["linear"], ["zoom"], z - 0.5, 0.0, z, 1.0];
+    return _withSectionIdHidden(op, base);
+  }
+
   /// The flat room-name layer's properties (IwayplusVenue._roomNameProperties).
   SymbolLayerProperties _roomNameLayerProps(_OpacityResolver op) => SymbolLayerProperties(
         visibility: _visibility(_roomNameLayerId, internalVisible: _flatRoomLabels),
         textField: ['get', 'label'],
+        // Bigger names in bigger rooms; small rooms wrap onto two lines
+        // (decided natively, whichever gives the larger letters).
+        textRoomMaxHeight: _kRoomLabelMaxHeightM,
+        textRoomFill: _kRoomLabelFill,
         textPitchAlignment: 'map',
-        textRotationAlignment: 'viewport',
+        textRotationAlignment: 'map',
         // Each name is sized inside its own room, so they never hide each other.
         textAllowOverlap: true,
         // true = flip 180° to stay readable when the map turns; false = fixed.
@@ -6684,8 +6994,10 @@ class IwayMapProvider extends BaseMapProvider {
         textColor: '#000000',
         textHaloColor: '#f8f9fa',
         textHaloWidth: 1.5,
-        // Fades out with the rooms under the section patch.
-        textOpacity: _underPatchOpacity(op, 1.0),
+        // Never drawn over a patch, same as the MapLibre provider's markers:
+        // hidden under the venue boundary patch (zoomed far out) and, for
+        // rooms inside a section, under that section's patch too.
+        textOpacity: _roomLabelOpacity(op),
       );
 
   Future<void> _addRoomNameLayer(IwayMapController controller) async {
@@ -6698,6 +7010,46 @@ class IwayMapProvider extends BaseMapProvider {
       _layerProps(_roomNameLayerId, _roomNameLayerProps),
       filter: ['has', 'label'],
       enableInteraction: false,
+    );
+  }
+
+  /// Adds (or re-adds) a 3D room layer. [sectioned] rooms are those inside a
+  /// section patch (`sectionId`, set in _updatePolygonSource): they stay
+  /// hidden while the patch is drawn, so its colour is not broken up by room
+  /// blocks poking through it. MapLibre gets the same result by drawing the
+  /// opaque section fill above the rooms; here rooms are 3D blocks in one
+  /// depth-tested scene, so they have to fade out instead.
+  Future<void> _addExtrudedRoomLayer(IwayMapController controller,
+      {required bool sectioned}) async {
+    final id = sectioned ? _extrudedSectionPolygonLayerId : _extrudedPolygonLayerId;
+    try {
+      await controller.removeLayer(id);
+    } catch (_) {}
+    await controller.addFillExtrusionLayer(
+      _polygonSourceId,
+      id,
+      _layerProps(id, (op) => FillExtrusionLayerProperties(
+            visibility: _visibility(id),
+            fillExtrusionColor: ["get", "fillColor"],
+            fillExtrusionHeight: ["get", "height"],
+            fillExtrusionBase: ["get", "base_height"],
+            // Sectioned rooms come back only once the section patch has
+            // faded out (which is also after the boundary patch has gone).
+            fillExtrusionOpacity: sectioned
+                ? _hiddenUnderSectionOpacity(op)
+                : _underPatchOpacity(op, 1.0),
+          )),
+      filter: [
+        "all",
+        ['has', 'height'],
+        ["!", ["to-boolean", ["get", "hasPattern"]]],
+        sectioned
+            ? ["to-boolean", ["get", "sectionId"]]
+            : ["!", ["to-boolean", ["get", "sectionId"]]],
+      ],
+      // Under the subsection layer — the slot it held when it was anchored
+      // under the selected layer, before that moved above the section.
+      belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
     );
   }
 
@@ -6840,50 +7192,15 @@ class IwayMapProvider extends BaseMapProvider {
         );
       };
 
-      /// 4️⃣ EXTRUDED
-      await controller.addFillExtrusionLayer(
-        _polygonSourceId,
-        _extrudedPolygonLayerId,
-        _layerProps(_extrudedPolygonLayerId,
-            (op) => FillExtrusionLayerProperties(
-          visibility: _visibility(_extrudedPolygonLayerId),
-          fillExtrusionColor: ["get", "fillColor"],
-          fillExtrusionHeight: ["get", "height"],
-          fillExtrusionBase: ["get", "base_height"],
-          fillExtrusionOpacity: _underPatchOpacity(op, 1.0),
-        )),
-        filter: [
-          "all",
-          ['has', 'height'],
-          ["!", ["to-boolean", ["get", "hasPattern"]]],
-        ],
-        // Under the subsection layer — the slot it held when it was anchored
-        // under the selected layer, before that moved above the section.
-        belowLayerId: await _webSafeBelowLayerId(controller, _subSectionPolygonLayerId),
-      );
-      _layerReAdders[_extrudedPolygonLayerId] = () async {
-        await controller.removeLayer(_extrudedPolygonLayerId);
-        await controller.addFillExtrusionLayer(
-          _polygonSourceId,
-          _extrudedPolygonLayerId,
-          _layerProps(_extrudedPolygonLayerId,
-              (op) => FillExtrusionLayerProperties(
-                    visibility: _visibility(_extrudedPolygonLayerId),
-                    fillExtrusionColor: ["get", "fillColor"],
-                    fillExtrusionHeight: ["get", "height"],
-                    fillExtrusionBase: ["get", "base_height"],
-                    fillExtrusionOpacity:
-                        _underPatchOpacity(op, 1.0),
-                  )),
-          filter: [
-            "all",
-            ['has', 'height'],
-            ["!", ["to-boolean", ["get", "hasPattern"]]],
-          ],
-          belowLayerId: await _webSafeBelowLayerId(
-              controller, _subSectionPolygonLayerId),
-        );
-      };
+      /// 4️⃣ EXTRUDED — rooms outside any section, and (separately) rooms
+      /// inside one, which hide under the section patch like MapLibre's
+      /// layers above it.
+      await _addExtrudedRoomLayer(controller, sectioned: false);
+      _layerReAdders[_extrudedPolygonLayerId] =
+          () => _addExtrudedRoomLayer(controller, sectioned: false);
+      await _addExtrudedRoomLayer(controller, sectioned: true);
+      _layerReAdders[_extrudedSectionPolygonLayerId] =
+          () => _addExtrudedRoomLayer(controller, sectioned: true);
 
       /// 5️⃣ NORMAL
       await controller.addFillLayer(
@@ -7017,14 +7334,11 @@ class IwayMapProvider extends BaseMapProvider {
     // applied.
     if (!_isClusteringEnabled) return;
 
-    final boundaryPolygons = _polygons.where((p) =>
-    p.properties?['type']?.toString().toLowerCase() == 'boundary'
-    ).toList();
-
-    final fitZoom = _calculateFitZoom(
-      boundaryPolygons.isNotEmpty ? boundaryPolygons : _polygons,
-      screenSize: screenSize,
-    ) - 2.0;
+    // Same stable, per-venue value as _refreshPatchFadeIfStale (see
+    // _computeFadeOutZoom) — computing it here from screenSize/_polygons
+    // directly is what let the two callers disagree and flip the fade zoom.
+    if (screenSize != null) _screenSize = screenSize;
+    final fitZoom = _computeFadeOutZoom() ?? _fadeOutZoom ?? 17.0;
 
     final fadeOutZoom = fitZoom;
     final fadeInZoom  = fitZoom - 0.5;
@@ -7057,6 +7371,9 @@ class IwayMapProvider extends BaseMapProvider {
       _layerProps(
           _patchAboveMarkerLayerId,
           (op) => _patchAboveMarkerProps(
+                // The venue name belongs to the whole-venue (boundary) patch:
+                // shown over it, and fading out with it as the section
+                // patches come in — not shown on the section overview.
                 opacity: _fadeRamp(op, () => op([
                   "interpolate", ["linear"], ["zoom"],
                   fadeInZoom, 1.0,
@@ -7121,13 +7438,18 @@ class IwayMapProvider extends BaseMapProvider {
     // forced-rebuild reasoning as the furniture below.
     _reAddedState
       ..remove(_extrudedPolygonLayerId)
-      ..remove(_selectedExtrudedPolygonLayerId);
+      ..remove(_extrudedSectionPolygonLayerId)
+      ..remove(_selectedExtrudedPolygonLayerId)
+      ..remove(_roomNameLayerId);
     await _applyLayerPolicy(controller, force: true, only: [
       _normalPolygonLayerId,
       _patternPolygonLayerId,
       _subSectionPolygonLayerId,
+      // Room names fade against the same boundary/section windows.
+      _roomNameLayerId,
       _selectedPlainPolygonLayerId,
       _extrudedPolygonLayerId,
+      _extrudedSectionPolygonLayerId,
       _selectedExtrudedPolygonLayerId,
     ]);
 
@@ -7814,6 +8136,44 @@ class IwayMapProvider extends BaseMapProvider {
     return flat.isNotEmpty ? flat.first : hits.first;
   }
 
+  /// An icon's polygon larger than this (longest side, metres) is treated as
+  /// "not a room" for the camera, and a box of [_kIconFocusBoxHalfM] around
+  /// the icon is fitted instead (see selectLocation).
+  static const double _kIconFocusMaxPolygonSpanM = 15.0;
+
+  /// Half-size (metres) of the box fitted around a tapped icon whose polygon
+  /// is missing or too large. Smaller = closer zoom.
+  static const double _kIconFocusBoxHalfM = 5.0;
+
+  static const double _kMetersPerDegLat = 111320.0;
+
+  double _polygonMaxSpanMeters(GeoJsonPolygon polygon) {
+    double minLat = double.infinity, maxLat = -double.infinity;
+    double minLng = double.infinity, maxLng = -double.infinity;
+    for (final p in polygon.points) {
+      minLat = min(minLat, p.latitude);
+      maxLat = max(maxLat, p.latitude);
+      minLng = min(minLng, p.longitude);
+      maxLng = max(maxLng, p.longitude);
+    }
+    final midLat = (minLat + maxLat) / 2;
+    final h = (maxLat - minLat) * _kMetersPerDegLat;
+    final w = (maxLng - minLng) * _kMetersPerDegLat * cos(midLat * pi / 180);
+    return max(h, w);
+  }
+
+  CameraBound _boxAroundMeters(MapLocation c, double halfMeters) {
+    final dLat = halfMeters / _kMetersPerDegLat;
+    final dLng =
+        halfMeters / (_kMetersPerDegLat * cos(c.latitude * pi / 180));
+    return CameraBound(
+      southwest: MapLocation(
+          latitude: c.latitude - dLat, longitude: c.longitude - dLng),
+      northeast: MapLocation(
+          latitude: c.latitude + dLat, longitude: c.longitude + dLng),
+    );
+  }
+
   CameraBound? calculateBounds(
       controller, List<MapLocation> allPoints) {
     double minLat = allPoints.first.latitude;
@@ -8015,6 +8375,20 @@ class IwayMapProvider extends BaseMapProvider {
       } else if (marker != null) {
         center = marker.position;
         targetZoom = 19;
+      }
+
+      // Icon markers (lift, washroom, stairs, escalator …) should all get the
+      // same "fit a small room" zoom-in. Lift/washroom polygons are small, so
+      // fitting them zooms in; a stair/escalator polygon is often long (or
+      // missing, which fell back to a flat zoom 19), so the same fit zoomed the
+      // map OUT. When the icon's polygon is missing or larger than a room, fit
+      // a room-sized box around the icon instead — same animation, same feel.
+      if (marker != null &&
+          marker.assetPath != null &&
+          !_isAnimalMarker(marker) &&
+          (polygon == null ||
+              _polygonMaxSpanMeters(polygon) > _kIconFocusMaxPolygonSpanM)) {
+        bounds = _boxAroundMeters(marker.position, _kIconFocusBoxHalfM);
       }
 
       // 3. Start camera animation
