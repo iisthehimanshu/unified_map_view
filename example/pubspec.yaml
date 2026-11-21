@@ -51,6 +51,12 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
 
+# Fork of maplibre_gl 0.26.2 that adds wall images (native custom layer that
+# draws an image upright on a vertical wall). See third_party/maplibre_gl.
+dependency_overrides:
+  maplibre_gl:
+    path: ../third_party/maplibre_gl
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

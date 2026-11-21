@@ -74,6 +74,9 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
   late UnifiedMapController _unifiedMapController;
   bool _isLoading = false;
 
+  /// Kept so the harness can call MapLibre-only features such as wall images.
+  final MaplibreMapProvider _maplibreProvider = MaplibreMapProvider();
+
   // ── layer-policy test harness ──────────────────────────────────────────────
   String _lastTap = 'no tap yet';
   String _activePreset = 'all';
@@ -172,7 +175,7 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
       // onReadyLandmarkSelectionID: "2_MID_193",
       url: "https://dev.iwayplus.in",
       languageCode: "hi",
-        providers: {MapProvider.mapLibre: MaplibreMapProvider(),
+        providers: {MapProvider.mapLibre: _maplibreProvider,
           MapProvider.mappls: MapplsMapProvider()},
       styleConfig: widget.styleConfig,
     );
@@ -184,6 +187,10 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
     _configWarnings = widget.styleConfig.warnings;
 
     _unifiedMapController.setMapStyle("assets/mapstyle.json");
+
+    // Draw the iWayPlus logo on every wall (MapLibre, Android/iOS).
+    rootBundle.load('assets/wall_image.png').then(
+        (data) => _maplibreProvider.setWallImage(data.buffer.asUint8List()));
     // TEST: drop a lone plain-asset icon marker to isolate icon rendering in maplibre 0.26
     // Future.delayed(const Duration(seconds: 6), () {
     //   _addTestMarker();
@@ -576,6 +583,20 @@ class _GeoJsonMapScreenState extends State<GeoJsonMapScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.description, size: 14),
                     label: const Text('reload config',
+                        style: TextStyle(fontSize: 11)),
+                  ),
+                  // Wall images stand upright, so they're edge-on from above:
+                  // tilt and zoom in where the camera is looking.
+                  TextButton.icon(
+                    onPressed: () {
+                      final cam = _unifiedMapController.cameraPosition;
+                      _unifiedMapController.animateCamera(cam.mapLocation,
+                          zoom: cam.zoom < 19.5 ? 19.5 : cam.zoom,
+                          bearing: cam.bearing,
+                          tilt: 60);
+                    },
+                    icon: const Icon(Icons.view_in_ar, size: 14),
+                    label: const Text('walls view',
                         style: TextStyle(fontSize: 11)),
                   ),
                 ]),

@@ -159,6 +159,15 @@ class MaplibreMapProvider extends BaseMapProvider {
   final String _subSectionPolygonLayerId = 'subSection-polygon-layer';
   final String _extrudedPolygonLayerId = 'extruded-polygon-layer';
 
+  /// Native custom layer that draws [_wallImageBytes] on every wall face.
+  /// See [setWallImage].
+  final String _wallImageLayerId = 'wall-images-layer';
+  Uint8List? _wallImageBytes;
+  double _wallImageAspect = 1; // width / height
+  /// What the wall-image layer was last built from; skips identical rebuilds
+  /// when the polygon source updates for other reasons (selection, fades).
+  String? _wallImagesKey;
+
   /// The basemap raster layer declared in [osmRasterStyle]. Named here so
   /// greyscale can set raster-saturation on it.
   final String _baseMapRasterLayerId = 'osm-tiles-layer';
@@ -902,6 +911,7 @@ class MaplibreMapProvider extends BaseMapProvider {
               // block async GeoJSON pushes for the whole rebuild window.
               _markerSourcesReady = false;
               _isPolygonLayersEnabled = false;
+              _wallImagesKey = null; // custom layers are gone too
               _isPolylineLayersEnabled = false;
               // Registered placeholder images are wiped too; allow re-registration.
               _registeredDotImageIds.clear();
@@ -3249,9 +3259,165 @@ class MaplibreMapProvider extends BaseMapProvider {
       },
     );
 
+    await _syncWallImages(controller);
+
     // The venue's fade thresholds are derived from these very polygons, so they
     // have to be recomputed whenever the polygon set changes.
     await _refreshPatchFadeIfStale(controller);
+  }
+
+  /// Draws [imageBytes] (an encoded PNG or JPEG) standing upright on every
+  /// wall of the current floor, or removes the wall images when null.
+  ///
+  /// Each wall polygon edge at least [_minWallFaceMeters] long gets one copy,
+  /// centred on the edge, facing out of the wall, keeping the image's aspect
+  /// ratio. Walls are the polygons whose `type`/`polygonType` is `Wall`; their
+  /// `baseHeight`/`height` properties give the vertical extent (3 m when
+  /// missing). The images follow floor changes and style reloads.
+  ///
+  /// Android and iOS only; ignored on web.
+  Future<void> setWallImage(Uint8List? imageBytes) async {
+    if (kIsWeb) return;
+    if (imageBytes != null) {
+      final codec = await ui.instantiateImageCodec(imageBytes);
+      final frame = await codec.getNextFrame();
+      _wallImageAspect = frame.image.width / frame.image.height;
+      frame.image.dispose();
+      codec.dispose();
+    }
+    _wallImageBytes = imageBytes;
+    _wallImagesKey = null;
+    final controller = _controller;
+    if (controller != null) await _syncWallImages(controller);
+  }
+
+  static const double _minWallFaceMeters = 1.0;
+  static const double _wallImageOffsetMeters = 0.05; // off the face, avoids z-fighting
+  static const double _defaultWallHeightMeters = 3.0;
+
+  static bool _isWallPolygon(GeoJsonPolygon polygon) {
+    final type = polygon.properties?['type'] ?? polygon.properties?['polygonType'];
+    return type?.toString().toLowerCase() == 'wall';
+  }
+
+  static double? _parseMeters(dynamic value) {
+    if (value == null) return null;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value.toString());
+  }
+
+  Future<void> _syncWallImages(MapLibreMapController controller) async {
+    if (kIsWeb) return;
+    final bytes = _wallImageBytes;
+    final walls = bytes == null ? const <GeoJsonPolygon>[] : _polygons.where(_isWallPolygon).toList();
+    final key = '${identityHashCode(bytes)}|${Object.hashAll(walls.map((w) => w.id))}';
+    if (key == _wallImagesKey) return;
+    _wallImagesKey = key;
+
+    try {
+      final placements = walls.isEmpty ? const <WallImagePlacement>[] : _wallImagePlacements(walls);
+      if (bytes == null || placements.isEmpty) {
+        await controller.removeWallImage(_wallImageLayerId);
+        return;
+      }
+      await controller.addWallImages(
+        id: _wallImageLayerId,
+        walls: placements,
+        imageBytes: bytes,
+        doubleSided: false,
+        belowLayerId: await _layerAboveBuildings(controller),
+      );
+      debugPrint('wall images: ${placements.length} faces on ${walls.length} walls');
+    } catch (e) {
+      _wallImagesKey = null; // retry on the next polygon update
+      debugPrint('wall images: failed: $e');
+    }
+  }
+
+  /// The layer right above the polygon and extrusion layers, so wall images
+  /// draw after the buildings (for depth) but under markers and labels.
+  Future<String?> _layerAboveBuildings(MapLibreMapController controller) async {
+    final ids = (await controller.getLayerIds()).map((e) => e.toString()).toList();
+    final buildingLayers = {
+      _normalPolygonLayerId,
+      _patternPolygonLayerId,
+      _extrudedPolygonLayerId,
+      _selectedPlainPolygonLayerId,
+      _selectedExtrudedPolygonLayerId,
+      _furnitureLayerId,
+      _furnitureFillLayerId,
+    };
+    var last = -1;
+    for (var i = 0; i < ids.length; i++) {
+      if (buildingLayers.contains(ids[i])) last = i;
+    }
+    if (last < 0 || last + 1 >= ids.length) return null;
+    final next = ids[last + 1];
+    return next == _wallImageLayerId ? (last + 2 < ids.length ? ids[last + 2] : null) : next;
+  }
+
+  List<WallImagePlacement> _wallImagePlacements(List<GeoJsonPolygon> walls) {
+    final placements = <WallImagePlacement>[];
+    for (final wall in walls) {
+      final pts = wall.points;
+      if (pts.length < 3) continue;
+
+      final wallBase = _parseMeters(wall.properties?['baseHeight']) ?? 0;
+      final wallHeight = _parseMeters(wall.properties?['height']) ?? _defaultWallHeightMeters;
+      if (wallHeight <= 0) continue;
+
+      // Local metres around the first point.
+      final lat0 = pts.first.latitude, lng0 = pts.first.longitude;
+      const mPerDegLat = 111320.0;
+      final mPerDegLng = mPerDegLat * cos(lat0 * pi / 180);
+      final xy = [
+        for (final p in pts) [(p.longitude - lng0) * mPerDegLng, (p.latitude - lat0) * mPerDegLat],
+      ];
+      if (xy.length > 3 &&
+          (xy.first[0] - xy.last[0]).abs() < 1e-6 &&
+          (xy.first[1] - xy.last[1]).abs() < 1e-6) {
+        xy.removeLast(); // closed ring
+      }
+      if (xy.length < 3) continue;
+
+      // Shoelace: positive area means counter-clockwise.
+      var area2 = 0.0;
+      for (var i = 0; i < xy.length; i++) {
+        final a = xy[i], b = xy[(i + 1) % xy.length];
+        area2 += a[0] * b[1] - b[0] * a[1];
+      }
+      final ccw = area2 > 0;
+      MapLocation toLatLng(double x, double y) =>
+          MapLocation(latitude: lat0 + y / mPerDegLat, longitude: lng0 + x / mPerDegLng);
+
+      for (var i = 0; i < xy.length; i++) {
+        final p = xy[i], q = xy[(i + 1) % xy.length];
+        final dx = q[0] - p[0], dy = q[1] - p[1];
+        final len = sqrt(dx * dx + dy * dy);
+        if (len < _minWallFaceMeters) continue;
+        final ux = dx / len, uy = dy / len;
+        // Outward normal: right of the edge for a counter-clockwise ring.
+        final ox = ccw ? uy : -uy, oy = ccw ? -ux : ux;
+
+        final imageHeight = min(wallHeight * 0.6, len * 0.8 / _wallImageAspect);
+        final imageWidth = imageHeight * _wallImageAspect;
+        final base = wallBase + (wallHeight - imageHeight) / 2;
+        final cx = (p[0] + q[0]) / 2 + ox * _wallImageOffsetMeters;
+        final cy = (p[1] + q[1]) / 2 + oy * _wallImageOffsetMeters;
+        // Seen from outside, the start is on the left: along the edge for a
+        // counter-clockwise ring, against it for a clockwise one.
+        final sx = ccw ? ux : -ux, sy = ccw ? uy : -uy;
+        final start = toLatLng(cx - sx * imageWidth / 2, cy - sy * imageWidth / 2);
+        final end = toLatLng(cx + sx * imageWidth / 2, cy + sy * imageWidth / 2);
+        placements.add(WallImagePlacement(
+          start: LatLng(start.latitude, start.longitude),
+          end: LatLng(end.latitude, end.longitude),
+          baseMeters: base,
+          heightMeters: imageHeight,
+        ));
+      }
+    }
+    return placements;
   }
 
   /// Recomputes the patch/section fade zooms when the polygons they are derived

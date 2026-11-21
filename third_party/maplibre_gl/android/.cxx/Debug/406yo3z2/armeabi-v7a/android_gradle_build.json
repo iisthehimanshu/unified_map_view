@@ -1,0 +1,38 @@
+{
+  "buildFiles": [
+    "/Users/himanshu/StudioProjects/unified_map_view/third_party/maplibre_gl/android/src/main/cpp/CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "/Users/himanshu/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+      "-C",
+      "/Users/himanshu/StudioProjects/unified_map_view/third_party/maplibre_gl/android/.cxx/Debug/406yo3z2/armeabi-v7a",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "/Users/himanshu/Library/Android/sdk/cmake/3.22.1/bin/ninja",
+    "-C",
+    "/Users/himanshu/StudioProjects/unified_map_view/third_party/maplibre_gl/android/.cxx/Debug/406yo3z2/armeabi-v7a",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "maplibregl_wallimage::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "armeabi-v7a",
+      "artifactName": "maplibregl_wallimage",
+      "output": "/Users/himanshu/StudioProjects/unified_map_view/example/build/maplibre_gl/intermediates/cxx/Debug/406yo3z2/obj/armeabi-v7a/libmaplibregl_wallimage.so",
+      "runtimeFiles": []
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "/Users/himanshu/Library/Android/sdk/ndk/28.1.13356709/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang.lld",
+      "cppCompilerExecutable": "/Users/himanshu/Library/Android/sdk/ndk/28.1.13356709/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++.lld"
+    }
+  },
+  "cFileExtensions": [],
+  "cppFileExtensions": [
+    "cpp"
+  ]
+}
