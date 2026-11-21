@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show EdgeInsets;
-import 'package:unified_map_view/src/enums/Theme.dart';
 import 'package:unified_map_view/src/utils/perf_trace.dart';
 import '../../unified_map_view.dart';
 import '../config.dart';
@@ -1059,20 +1058,19 @@ class UnifiedMapController extends ChangeNotifier {
 
   /// Whether drawing a path dims the rest of the map.
   ///
-  /// Null means "use the venue's default", which is the historical behaviour:
-  /// on for zoo themes, off everywhere else. Set it explicitly to override that
-  /// per venue.
+  /// Null means "use the default", which is on for every venue. (It used to be
+  /// on for zoo themes only.) Set it explicitly to override that per venue.
   bool? _mapFadeOnPath;
 
-  /// Whether [annotatePath] will dim the map, taking the host override into
-  /// account and otherwise falling back to the theme default.
-  bool get mapFadeOnPath => _mapFadeOnPath ?? RenderingTheme.current.isZoo;
+  /// Whether [annotatePath] will dim the map: the host override if one is set,
+  /// otherwise on.
+  bool get mapFadeOnPath => _mapFadeOnPath ?? true;
 
   /// Turn the path map-fade on or off.
   ///
   /// The fade dims everything outside the drawn route so the path reads
   /// clearly; it is applied by [annotatePath] and lifted by [clearPath]. Pass
-  /// null to hand the decision back to the venue's theme default.
+  /// null to hand the decision back to the default (on).
   ///
   /// Takes effect on the NEXT [annotatePath]; it does not add or remove the
   /// fade on a route that is already drawn — use [setMapFade] for that.
