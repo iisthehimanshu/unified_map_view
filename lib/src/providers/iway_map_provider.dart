@@ -952,6 +952,12 @@ class IwayMapProvider extends BaseMapProvider {
               _isPolylineLayersEnabled = false;
               // Registered placeholder images are wiped too; allow re-registration.
               _registeredDotImageIds.clear();
+              // Roof logo images go with the style; re-add on the next push.
+              _registeredRoofLogos.clear();
+              // So do the wall logo source and layer.
+              _wallLogoLayerAdded = false;
+              _wallLogoFeaturesJson = null;
+              _wallLogoOpacityJson = null;
               _registeredCornerArrowAngles.clear();
               // Corner arrow/bubble images are wiped with the style, so the next
               // _updatePolylineSource must re-run the full corner pass (which
@@ -3384,6 +3390,10 @@ class IwayMapProvider extends BaseMapProvider {
           'fillOpacity': fillColor.a,
           'isSelected': selectPolygonIds?.contains(polygon.id) ?? false,
           if (roomLabels[polygon.id] != null) 'label': roomLabels[polygon.id],
+          // An image pasted on the roof instead of the name (roofLogosByRoomName).
+          if (_roofLogoFor(polygon) != null && type != 'section' &&
+              type != 'sub section' && type != 'boundary')
+            'roofImage': _roofLogoImageId(_roofLogoFor(polygon)!),
           if (type != 'section' && type != 'sub section' && type != 'boundary')
             'sectionId': underSection(polygon),
           'boundary': polygon.properties?['type'] == "Boundary",
@@ -3404,6 +3414,8 @@ class IwayMapProvider extends BaseMapProvider {
         .map((f) => (f['properties'] as Map)['pattern'])
         .toList();
 
+    // Roof logo images first, so the rooms using them can draw straight away.
+    await _registerRoofLogos(controller);
     await controller.setGeoJsonSource(
       _polygonSourceId,
       {
@@ -3415,6 +3427,305 @@ class IwayMapProvider extends BaseMapProvider {
     // The venue's fade thresholds are derived from these very polygons, so they
     // have to be recomputed whenever the polygon set changes.
     await _refreshPatchFadeIfStale(controller);
+    // The logo on the outer walls of wallLogosByRoomName (pushed only when it moves).
+    await _updateWallLogos(controller);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Roof logos
+  // ---------------------------------------------------------------------------
+
+  static const String _kRoofLogoAsset =
+      'packages/unified_map_view/assets/logos/iwayplus_logo.png';
+
+  /// Rooms that show an image pasted flat on their roof instead of their
+  /// name: lowercased room name → image asset path. Demo set; edit to put
+  /// logos on any room. Drawn by the room-name layer (`textRoomImage`), so
+  /// it lies on the roof, sized, centred and kept inside the room like a name.
+  Map<String, String> roofLogosByRoomName = {
+    'pharmacy': _kRoofLogoAsset,
+    'mri': _kRoofLogoAsset,
+    'kitchen area': _kRoofLogoAsset,
+    'cssd hod room': _kRoofLogoAsset,
+  };
+
+  final Set<String> _registeredRoofLogos = {};
+
+  /// The logo asset for [polygon], or null when it has none.
+  String? _roofLogoFor(GeoJsonPolygon polygon) {
+    final raw = polygon.properties?['name']?.toString();
+    if (raw == null) return null;
+    final name = raw.split('|').first.trim().toLowerCase();
+    return roofLogosByRoomName[name];
+  }
+
+  /// Image id a roof logo asset is registered under.
+  String _roofLogoImageId(String asset) => 'roof-logo:$asset';
+
+  /// Registers the roof logo images with the current style (once each).
+  Future<void> _registerRoofLogos(IwayMapController controller) async {
+    for (final asset in roofLogosByRoomName.values.toSet()) {
+      if (_registeredRoofLogos.contains(asset)) continue;
+      try {
+        final bytes = (await rootBundle.load(asset)).buffer.asUint8List();
+        await _addImageSafe(controller, _roofLogoImageId(asset), bytes);
+        _registeredRoofLogos.add(asset);
+      } catch (e) {
+        print('roof logo $asset: $e');
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wall logos
+  // ---------------------------------------------------------------------------
+
+  /// Rooms whose outer walls get the logo drawn on them: lowercased room
+  /// name → image asset. Edit to put logos on other rooms' walls.
+  Map<String, String> wallLogosByRoomName = {
+    'pharmacy': _kRoofLogoAsset,
+    'mri': _kRoofLogoAsset,
+  };
+
+  static const String _wallLogoSourceId = 'iway-wall-logo-source';
+  static const String _wallLogoLayerId = 'iway-wall-logo-layer';
+
+  bool _wallLogoLayerAdded = false;
+  String? _wallLogoFeaturesJson;
+  // The fade the layer was last given; the patch fade zooms are worked out
+  // from the polygons and can change after the layer is added.
+  String? _wallLogoOpacityJson;
+
+  /// The wall logo layer: hidden under the patches exactly like the room
+  /// names (the venue boundary patch, and the section patch for rooms inside
+  /// a section, flagged `sectionId` per logo).
+  SymbolLayerProperties _wallLogoLayerProps() => SymbolLayerProperties(
+        textWallImage: ['get', 'image'],
+        textWallBearing: ['get', 'bearing'],
+        textWallWidth: ['get', 'width'],
+        textWallElevation: ['get', 'elevation'],
+        textOpacity: _roomLabelOpacity((base) => base),
+      );
+
+  /// Draws the logo as a big sign on the longest outer wall of each room in
+  /// [wallLogosByRoomName], with iway_indoor_map's `text-wall-image`.
+  Future<void> _updateWallLogos(IwayMapController controller) async {
+    if (!_isPolygonLayersEnabled) return;
+    try {
+      // The same images as the roof logos (registered once per style).
+      for (final asset in wallLogosByRoomName.values.toSet()) {
+        if (_registeredRoofLogos.contains(asset)) continue;
+        final bytes = (await rootBundle.load(asset)).buffer.asUint8List();
+        await _addImageSafe(controller, _roofLogoImageId(asset), bytes);
+        _registeredRoofLogos.add(asset);
+      }
+      final features = await _wallLogoFeatures();
+      final json = jsonEncode(features);
+      final collection = {'type': 'FeatureCollection', 'features': features};
+      if (!_wallLogoLayerAdded) {
+        try {
+          await controller.removeLayer(_wallLogoLayerId);
+        } catch (_) {}
+        try {
+          await controller.removeSource(_wallLogoSourceId);
+        } catch (_) {}
+        await controller.addGeoJsonSource(_wallLogoSourceId, collection);
+        final props = _wallLogoLayerProps();
+        await controller.addSymbolLayer(_wallLogoSourceId, _wallLogoLayerId, props, enableInteraction: false);
+        _wallLogoLayerAdded = true;
+        _wallLogoFeaturesJson = json;
+        _wallLogoOpacityJson = jsonEncode(props.textOpacity);
+      } else {
+        if (json != _wallLogoFeaturesJson) {
+          // Only when the logos move: a source update rebuilds the scene.
+          await controller.setGeoJsonSource(_wallLogoSourceId, collection);
+          _wallLogoFeaturesJson = json;
+        }
+        // Re-fade when the patch fade zooms have moved since the layer was added.
+        final props = _wallLogoLayerProps();
+        final opacity = jsonEncode(props.textOpacity);
+        if (opacity != _wallLogoOpacityJson) {
+          await controller.setLayerProperties(_wallLogoLayerId, props);
+          _wallLogoOpacityJson = opacity;
+        }
+      }
+    } catch (e) {
+      print('wall logos: $e');
+    }
+  }
+
+  static double? _numProp(dynamic v) {
+    if (v is num) return v.toDouble();
+    if (v is String && v.isNotEmpty && v.toLowerCase() != 'undefined') return double.tryParse(v);
+    return null;
+  }
+
+  /// Width over height of [asset]'s image (read from the PNG header).
+  final Map<String, double> _imageAspects = {};
+  Future<double> _imageAspect(String asset) async {
+    final known = _imageAspects[asset];
+    if (known != null) return known;
+    var aspect = 3.0;
+    try {
+      final data = await rootBundle.load(asset);
+      if (data.lengthInBytes > 24) {
+        final w = data.getUint32(16), h = data.getUint32(20);
+        if (w > 0 && h > 0) aspect = w / h;
+      }
+    } catch (_) {}
+    return _imageAspects[asset] = aspect;
+  }
+
+  /// One point per room in [wallLogosByRoomName], on its longest outer wall:
+  /// on the wall's outer face (found by stepping out from the room's edge
+  /// through the wall polygons), facing out, like a sign over a shop front.
+  Future<List<Map<String, dynamic>>> _wallLogoFeatures() async {
+    if (wallLogosByRoomName.isEmpty) return const [];
+    bool isWall(GeoJsonPolygon p) =>
+        ((p.properties?['type'] ?? p.properties?['polygonType'])?.toString().toLowerCase() ?? '') == 'wall';
+    final walls = _polygons.where(isWall).toList();
+    final sections = _polygons
+        .where((p) => p.properties?['type']?.toString().toLowerCase() == 'section' && p.points.length >= 3)
+        .toList();
+    // Inside a section patch (same test as the room names' `sectionId`).
+    bool inSection(GeoJsonPolygon room) {
+      final sid = room.properties?['sectionId']?.toString() ?? '';
+      if (sid.isNotEmpty && sid.toLowerCase() != 'null') return true;
+      final lat = room.points.map((p) => p.latitude).reduce((a, b) => a + b) / room.points.length;
+      final lng = room.points.map((p) => p.longitude).reduce((a, b) => a + b) / room.points.length;
+      return sections.any((s) => _pointInPolygon(lat, lng, s.points));
+    }
+
+    const metersPerDegLat = 111320.0;
+    const gap = 0.03; // off the wall's face, so it doesn't z-fight it
+    const minEdge = 2.0; // shorter walls get no logo
+    const maxWallSearch = 1.5; // how far out from the room a wall is looked for
+    const step = 0.02;
+
+    final out = <Map<String, dynamic>>[];
+    for (final room in _polygons) {
+      final raw = room.properties?['name']?.toString();
+      if (raw == null || isWall(room)) continue;
+      final asset = wallLogosByRoomName[raw.split('|').first.trim().toLowerCase()];
+      if (asset == null) continue;
+      final aspect = await _imageAspect(asset);
+
+      final pts = [...room.points];
+      if (pts.length >= 2 &&
+          pts.first.latitude == pts.last.latitude &&
+          pts.first.longitude == pts.last.longitude) {
+        pts.removeLast();
+      }
+      if (pts.length < 3) continue;
+      final lat0 = pts.first.latitude, lng0 = pts.first.longitude;
+      final metersPerDegLng = metersPerDegLat * cos(lat0 * pi / 180);
+      double x(MapLocation p) => (p.longitude - lng0) * metersPerDegLng;
+      double y(MapLocation p) => (p.latitude - lat0) * metersPerDegLat;
+      // Signed area: positive when the ring runs counter-clockwise.
+      var area2 = 0.0;
+      for (var i = 0; i < pts.length; i++) {
+        final a = pts[i], b = pts[(i + 1) % pts.length];
+        area2 += x(a) * y(b) - x(b) * y(a);
+      }
+      final ccw = area2 > 0;
+
+      // Walls near this room only.
+      var minLat = 90.0, maxLat = -90.0, minLng = 180.0, maxLng = -180.0;
+      for (final p in pts) {
+        minLat = min(minLat, p.latitude);
+        maxLat = max(maxLat, p.latitude);
+        minLng = min(minLng, p.longitude);
+        maxLng = max(maxLng, p.longitude);
+      }
+      final padLat = 3 / metersPerDegLat, padLng = 3 / metersPerDegLng;
+      final nearWalls = walls.where((w) => w.points.any((p) =>
+          p.latitude >= minLat - padLat && p.latitude <= maxLat + padLat &&
+          p.longitude >= minLng - padLng && p.longitude <= maxLng + padLng)).toList();
+      GeoJsonPolygon? wallAt(double ex, double ny) {
+        final lat = lat0 + ny / metersPerDegLat, lng = lng0 + ex / metersPerDegLng;
+        for (final w in nearWalls) {
+          if (_pointInPolygon(lat, lng, w.points)) return w;
+        }
+        return null;
+      }
+
+      // Another room just outside a wall (a shared wall) would hide the sign.
+      bool roomAt(double ex, double ny) {
+        final lat = lat0 + ny / metersPerDegLat, lng = lng0 + ex / metersPerDegLng;
+        for (final p in _polygons) {
+          if (identical(p, room) || isWall(p)) continue;
+          final t = (p.properties?['type'] ?? p.properties?['polygonType'])?.toString().toLowerCase() ?? '';
+          if (t == 'section' || t == 'sub section' || t == 'boundary' || t == 'floor') continue;
+          if (_pointInPolygon(lat, lng, p.points)) return true;
+        }
+        return false;
+      }
+
+      // The longest wall carries the logo, preferring one that faces open
+      // space (a corridor) over one shared with another room.
+      Map<String, dynamic>? best;
+      var bestLen = 0.0;
+      var bestOpen = false;
+      for (var i = 0; i < pts.length; i++) {
+        final a = pts[i], b = pts[(i + 1) % pts.length];
+        final dx = x(b) - x(a), dy = y(b) - y(a);
+        final len = sqrt(dx * dx + dy * dy);
+        if (len < minEdge) continue;
+        // Outward unit normal (east, north): right of a CCW ring, left of a CW one.
+        final nx = ccw ? dy / len : -dy / len, ny = ccw ? -dx / len : dx / len;
+        final mx = (x(a) + x(b)) / 2, my = (y(a) + y(b)) / 2;
+
+        // Step out through the wall to its outer face.
+        GeoJsonPolygon? wall;
+        double? exit;
+        for (var t = 0.0; t <= maxWallSearch; t += step) {
+          final w = wallAt(mx + nx * t, my + ny * t);
+          if (w != null) {
+            wall ??= w;
+          } else if (wall != null) {
+            exit = t;
+            break;
+          }
+        }
+        if (wall == null || exit == null) continue; // no wall on this side
+
+        final wallBase = _numProp(wall.properties?['baseHeight']) ?? 0;
+        final wallHeight = _numProp(wall.properties?['height']) ?? 3.0;
+        if (wallHeight <= 0.5) continue;
+        // A big sign: 60% of the wall's length, at most 40% of its height
+        // tall, its centre 65% of the way up (the upper part of the wall).
+        final width = min(len * 0.6, wallHeight * 0.4 * aspect);
+        final height = width / aspect;
+        final bottom = wallBase + wallHeight * 0.65 - height / 2;
+
+        final out2 = exit + gap;
+        // Open when nothing but walls lies in the next 2 m out (a neighbour
+        // has its own wall first, so one look just outside is not enough).
+        var open = true;
+        for (var d = 0.3; d <= 2.0 && open; d += 0.3) {
+          if (roomAt(mx + nx * (exit + d), my + ny * (exit + d))) open = false;
+        }
+        if (best != null && (bestOpen && !open || bestOpen == open && len <= bestLen)) continue;
+        bestLen = len;
+        bestOpen = open;
+        best = {
+          'type': 'Feature',
+          'geometry': {
+            'type': 'Point',
+            'coordinates': [lng0 + (mx + nx * out2) / metersPerDegLng, lat0 + (my + ny * out2) / metersPerDegLat],
+          },
+          'properties': {
+            'image': _roofLogoImageId(asset),
+            'bearing': atan2(nx, ny) * 180 / pi,
+            'width': width,
+            'elevation': bottom,
+            if (inSection(room)) 'sectionId': true,
+          },
+        };
+      }
+      if (best != null) out.add(best);
+    }
+    return out;
   }
 
   /// Recomputes the patch/section fade zooms when the polygons they are derived
@@ -5818,7 +6129,7 @@ class IwayMapProvider extends BaseMapProvider {
   ///
   /// Call sites stay written as `<value> * _kIconScale` so the native number in
   /// the source is the real one.
-  static final double _kIconScale = kIsWeb ? 0.5 : 1.0;
+  static final double _kIconScale = kIsWeb ? 0.8 : 1.0;
 
   /// Resting size of the icon markers (lift, stairs, washroom, exits …) as a
   /// share of their image. Was 0.8; reduced on request so the icons sit
@@ -6937,6 +7248,8 @@ class IwayMapProvider extends BaseMapProvider {
       // "English | हिन्दी" -> the first part.
       final text = raw.split('|').map((p) => p.trim()).firstWhere((p) => p.isNotEmpty, orElse: () => raw.trim());
       if (text.toLowerCase() == 'wall' || _isPinnedRoom(text, type)) continue;
+      // A roof logo stands in for the name (see roofLogosByRoomName).
+      if (_roofLogoFor(polygon) != null) continue;
       // The room shows an icon marker (with its name under it) — no floor name too.
       final ownId = _extractPolygonIdFromTap(polygon.id) ?? polygon.id;
       if (iconRooms.contains(ownId)) continue;
@@ -6981,6 +7294,9 @@ class IwayMapProvider extends BaseMapProvider {
   SymbolLayerProperties _roomNameLayerProps(_OpacityResolver op) => SymbolLayerProperties(
         visibility: _visibility(_roomNameLayerId, internalVisible: _flatRoomLabels),
         textField: ['get', 'label'],
+        // Rooms in roofLogosByRoomName get their image pasted on the roof
+        // instead of the name.
+        textRoomImage: ['get', 'roofImage'],
         // Bigger names in bigger rooms; small rooms wrap onto two lines
         // (decided natively, whichever gives the larger letters).
         textRoomMaxHeight: _kRoomLabelMaxHeightM,
@@ -7008,7 +7324,7 @@ class IwayMapProvider extends BaseMapProvider {
       _polygonSourceId,
       _roomNameLayerId,
       _layerProps(_roomNameLayerId, _roomNameLayerProps),
-      filter: ['has', 'label'],
+      filter: ['any', ['has', 'label'], ['has', 'roofImage']],
       enableInteraction: false,
     );
   }
