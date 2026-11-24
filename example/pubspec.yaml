@@ -36,7 +36,9 @@ dependencies:
   maplibre_gl: ^0.26.1
   # Local checkout for now (has the rebuild fixes); git: https://github.com/Kanika1609/iway_indoor_map.git
   iway_indoor_map:
-    path: ../../iway_indoor_map
+    git:
+      url: https://github.com/Kanika1609/iway_indoor_map.git
+      ref: main
   mappls_gl: ^1.2.0
   webview_flutter: ^4.10.0
 

@@ -52,7 +52,9 @@ dev_dependencies:
   # Native indoor map package (same API as maplibre_gl).
   # Local checkout for now (has the rebuild fixes); git: https://github.com/Kanika1609/iway_indoor_map.git
   iway_indoor_map:
-    path: ../iway_indoor_map
+    git:
+      url: https://github.com/Kanika1609/iway_indoor_map.git
+      ref: main
   webview_flutter: ^4.14.1
 
   flutter_test:

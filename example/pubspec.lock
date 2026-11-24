@@ -212,9 +212,11 @@ packages:
   iway_indoor_map:
     dependency: "direct main"
     description:
-      path: "../../iway_indoor_map"
-      relative: true
-    source: path
+      path: "."
+      ref: main
+      resolved-ref: "98c43ebf8daff20fc596c37725a517dafef9f052"
+      url: "https://github.com/Kanika1609/iway_indoor_map.git"
+    source: git
     version: "0.5.0"
   leak_tracker:
     dependency: transitive
