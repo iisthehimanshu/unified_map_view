@@ -203,6 +203,12 @@ class IwayMapProvider extends BaseMapProvider {
   /// 3D extruded furniture (shown in immersive/3D mode).
   final String _furnitureLayerId = 'furniture-layer';
 
+  /// The furniture standing outside every section patch: shown as soon as the
+  /// boundary (whole-venue) patch is gone, while [_furnitureLayerId] (the
+  /// furniture inside a section) waits for its section patch to fade. One
+  /// fill-extrusion layer cannot fade per feature, hence two.
+  final String _furnitureOpenLayerId = 'furniture-open-layer';
+
   /// Flat footprint of the same furniture (shown in 2D mode instead of
   /// the extrusion).
   final String _furnitureFillLayerId = 'furniture-fill-layer';
@@ -349,6 +355,7 @@ class IwayMapProvider extends BaseMapProvider {
     // furniture
     _furnitureFillLayerId: MapLayer.furniture,
     _furnitureLayerId: MapLayer.furniture,
+    _furnitureOpenLayerId: MapLayer.furniture,
     // user location
     _rotationMarkerLayerId: MapLayer.userLocation,
     _normalCircleLayerId: MapLayer.userLocation,
@@ -1599,8 +1606,9 @@ class IwayMapProvider extends BaseMapProvider {
   /// them by itself. The furniture 3D models and the icon markers grouped
   /// under a `sectionId` sit ABOVE it and would otherwise draw on top of the
   /// patch, so they fade out on this curve instead. Mirrors the stops pushed
-  /// by [_refreshPatchAboveOpacity] (`fadeOutZoom + 1.5 → + 2.0`); before
-  /// that has run it mirrors the section layer's creation ramp (17 → 17.5).
+  /// by [_refreshPatchAboveOpacity] (`fadeOutZoom + _kSectionHideFrom →
+  /// + _kSectionHideTo`); before that has run it mirrors the section layer's
+  /// creation ramp (17 → 17.5).
   ///
   /// `op` sits on the top stop only, like the section layer, so a host opacity
   /// override sets the strength once the section is gone without making the
@@ -1622,8 +1630,25 @@ class IwayMapProvider extends BaseMapProvider {
   (double, double)? _sectionHideWindow() {
     if (!_fadeEnabled) return null;
     final z = _fadeOutZoom;
-    return z == null ? (17.0, 17.5) : (z + 1.5, z + 2.0);
+    return z == null ? (17.0, 17.5) : (z + _kSectionHideFrom, z + _kSectionHideTo);
   }
+
+  /// Where the section patches fade out (and section rooms, section markers
+  /// and the furniture inside sections fade in), past the boundary patch's
+  /// fade zoom.
+  static const double _kSectionHideFrom = 1.5;
+  static const double _kSectionHideTo = 2.0;
+
+  /// The section layers' zoom ramp: in as the boundary patch goes
+  /// (fadeOutZoom - 0.5 → fadeOutZoom), out over the section hide window.
+  /// Stops stay strictly ascending when that window starts at fadeOutZoom.
+  List<Object?> _sectionRamp(double fadeOutZoom, Object? peak) => [
+        "interpolate", ["linear"], ["zoom"],
+        fadeOutZoom - 0.5, 0.0,
+        fadeOutZoom, peak,
+        if (_kSectionHideFrom > 0) ...[fadeOutZoom + _kSectionHideFrom, peak],
+        fadeOutZoom + _kSectionHideTo, 0.0,
+      ];
 
   /// Fade tying a layer to the boundary patch ("patch above"): 0 once the
   /// patch is fully drawn (`fadeOutZoom - 0.5`), rising to [base] where the
@@ -3427,6 +3452,9 @@ class IwayMapProvider extends BaseMapProvider {
     // The venue's fade thresholds are derived from these very polygons, so they
     // have to be recomputed whenever the polygon set changes.
     await _refreshPatchFadeIfStale(controller);
+    // Sections may have arrived after the furniture: which layer draws each
+    // piece depends on them (no push when nothing changed).
+    if (_isFurnitureLayerEnabled && _furnitureItems.isNotEmpty) await _updateFurnitureSource(controller);
     // The logo on the outer walls of wallLogosByRoomName (pushed only when it moves).
     await _updateWallLogos(controller);
   }
@@ -4211,7 +4239,7 @@ class IwayMapProvider extends BaseMapProvider {
     await _addFurnitureExtrusionLayer(controller);
   }
 
-  /// Adds the furniture fill-extrusion layer (3D). No-op if already present
+  /// Adds the furniture fill-extrusion layers (3D). No-op if already present
   /// or if the base furniture source/fill layer hasn't been created yet.
   Future<void> _addFurnitureExtrusionLayer(
       IwayMapController controller) async {
@@ -4219,47 +4247,49 @@ class IwayMapProvider extends BaseMapProvider {
     // Same stale-flag hazard as the flat fill layer: _isFurnitureExtrusionAdded
     // is reset in onStyleLoadedCallback, which can fire without the style
     // actually being replaced. See the note there.
-    try {
-      await controller.removeLayer(_furnitureLayerId);
-    } catch (_) {}
+    for (final inSection in [true, false]) {
+      final id = inSection ? _furnitureLayerId : _furnitureOpenLayerId;
+      try {
+        await controller.removeLayer(id);
+      } catch (_) {}
+      await _addFurnitureExtrusion(controller, inSection: inSection);
+      // Same plugin gap as the polygon extrusions: setLayerProperties rejects
+      // fill-extrusion layers, so policy changes have to rebuild this one.
+      _layerReAdders[id] = () async {
+        await controller.removeLayer(id);
+        await _addFurnitureExtrusion(controller, inSection: inSection);
+      };
+    }
+    _isFurnitureExtrusionAdded = true;
+    await _applyLayerPolicy(controller, only: [_furnitureLayerId, _furnitureOpenLayerId]);
+  }
+
+  /// One of the two furniture extrusion layers: the parts inside a section
+  /// patch ([inSection], fading in as the section patch goes — see
+  /// _hiddenUnderSectionOpacity) or the rest (fading in as the boundary
+  /// patch goes — see _underPatchOpacity). `inSection` is set per part by
+  /// _updateFurnitureSource.
+  Future<void> _addFurnitureExtrusion(IwayMapController controller, {required bool inSection}) async {
+    final id = inSection ? _furnitureLayerId : _furnitureOpenLayerId;
     await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
       _furnitureSourceId,
-      _furnitureLayerId,
-      _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
-        visibility: _visibility(_furnitureLayerId),
+      id,
+      _layerProps(id, (op) => FillExtrusionLayerProperties(
+        visibility: _visibility(id),
         fillExtrusionColor: ['get', 'color'],
         fillExtrusionBase: ['get', 'base'],
         fillExtrusionHeight: ['get', 'height'],
         // Every other extrusion layer in this file pins this explicitly;
-        // leaving it unset here was the one inconsistency letting the
-        // renderer fall back to an implicit default instead of a
-        // guaranteed-opaque layer. Fades out under the section patch — see
-        // _hiddenUnderSectionOpacity.
-        fillExtrusionOpacity: _hiddenUnderSectionOpacity(op),
+        // leaving it unset let the renderer fall back to an implicit default
+        // instead of a guaranteed-opaque layer.
+        fillExtrusionOpacity: inSection ? _hiddenUnderSectionOpacity(op) : _underPatchOpacity(op, 1.0),
       )),
+      filter: inSection
+          ? ['to-boolean', ['get', 'inSection']]
+          : ['!', ['to-boolean', ['get', 'inSection']]],
       minzoom: _furnitureMinZoom,
       belowLayerId: await _furnitureBelowLayerId(controller),
     ));
-    _isFurnitureExtrusionAdded = true;
-    // Same plugin gap as the polygon extrusions: setLayerProperties rejects
-    // fill-extrusion layers, so policy changes have to rebuild this one.
-    _layerReAdders[_furnitureLayerId] = () async {
-      await controller.removeLayer(_furnitureLayerId);
-      await _retryIfStyleLoading(() async => controller.addFillExtrusionLayer(
-        _furnitureSourceId,
-        _furnitureLayerId,
-        _layerProps(_furnitureLayerId, (op) => FillExtrusionLayerProperties(
-              visibility: _visibility(_furnitureLayerId),
-              fillExtrusionColor: ['get', 'color'],
-              fillExtrusionBase: ['get', 'base'],
-              fillExtrusionHeight: ['get', 'height'],
-              fillExtrusionOpacity: _hiddenUnderSectionOpacity(op),
-            )),
-        minzoom: _furnitureMinZoom,
-        belowLayerId: await _furnitureBelowLayerId(controller),
-      ));
-    };
-    await _applyLayerPolicy(controller, only: [_furnitureLayerId]);
   }
 
   /// Removes the furniture fill-extrusion layer entirely (used when switching
@@ -4269,21 +4299,40 @@ class IwayMapProvider extends BaseMapProvider {
     if (!_isFurnitureExtrusionAdded) return;
     // Removing the re-adder matters: _applyLayerPolicy would otherwise rebuild
     // the extrusion we are deliberately taking away for 2D.
-    _layerReAdders.remove(_furnitureLayerId);
-    try {
-      await controller.removeLayer(_furnitureLayerId);
-    } catch (_) {}
-    // Drop the builder too: the layer is gone until 3D is re-entered, and
-    // _applyLayerPolicy would otherwise keep trying to write to it.
-    _propBuilders.remove(_furnitureLayerId);
-    _everApplied.remove(_furnitureLayerId);
+    for (final id in [_furnitureLayerId, _furnitureOpenLayerId]) {
+      _layerReAdders.remove(id);
+      try {
+        await controller.removeLayer(id);
+      } catch (_) {}
+      // Drop the builder too: the layer is gone until 3D is re-entered, and
+      // _applyLayerPolicy would otherwise keep trying to write to it.
+      _propBuilders.remove(id);
+      _everApplied.remove(id);
+    }
     _isFurnitureExtrusionAdded = false;
   }
 
   Future<void> _updateFurnitureSource(IwayMapController controller) async {
+    // Each part says whether its item stands inside a section patch, which
+    // decides which of the two furniture layers draws it (_addFurnitureExtrusion).
+    final sections = _polygons
+        .where((p) => p.properties?['type']?.toString().toLowerCase() == 'section' && p.points.length >= 3)
+        .toList();
+    bool inSection(Map<String, dynamic> item) {
+      if (sections.isEmpty) return false;
+      final c = (item['geometry'] as Map<String, dynamic>?)?['coordinates'] as List?;
+      if (c == null || c.length < 2) return false;
+      final lng = double.tryParse('${c[0]}'), lat = double.tryParse('${c[1]}');
+      if (lng == null || lat == null) return false;
+      return sections.any((s) => _pointInPolygon(lat, lng, s.points));
+    }
     final features = <Map<String, dynamic>>[
       for (final item in _furnitureItems)
-        ..._buildFurniturePartFeatures(item),
+        if (inSection(item))
+          for (final f in _buildFurniturePartFeatures(item))
+            {...f, 'properties': {...(f['properties'] as Map<String, dynamic>), 'inSection': true}}
+        else
+          ..._buildFurniturePartFeatures(item),
     ];
     // Startup reaches here several times with the same furniture (the model
     // fetch and the map becoming ready both trigger a render). On
@@ -7716,13 +7765,7 @@ class IwayMapProvider extends BaseMapProvider {
                 // Fades in as the boundary patch fades out (bottom two stops,
                 // see _underPatchOpacity) and out where the buildings take
                 // over (top two).
-                _fadeRamp(op, () => [
-                  "interpolate", ["linear"], ["zoom"],
-                  fadeOutZoom - 0.5, 0.0,
-                  fadeOutZoom, op(1.0),
-                  fadeOutZoom + 1.5, op(1.0),
-                  fadeOutZoom + 2.0, 0.0,
-                ]),
+                _fadeRamp(op, () => _sectionRamp(fadeOutZoom, op(1.0))),
                 visibility: _visibility(_sectionPolygonLayerId),
               )),
     );
@@ -7733,13 +7776,7 @@ class IwayMapProvider extends BaseMapProvider {
       _layerProps(
           _sectionMarkerLayerId,
           (op) => _sectionMarkerProps(
-                opacity: _fadeRamp(op, () => op([
-                  "interpolate", ["linear"], ["zoom"],
-                  fadeOutZoom - 0.5, 0.0,
-                  fadeOutZoom, 1.0,
-                  fadeOutZoom + 1.5, 1.0,
-                  fadeOutZoom + 2.0, 0.0,
-                ])),
+                opacity: _fadeRamp(op, () => op(_sectionRamp(fadeOutZoom, 1.0))),
                 visibility: _visibility(_sectionMarkerLayerId),
               )),
       filter: ["to-boolean", ["get", "section"]],
@@ -7776,8 +7813,9 @@ class IwayMapProvider extends BaseMapProvider {
     // from interleaving with a policy apply (see _policyApplyChain).
     if (_isFurnitureLayerEnabled) {
       _reAddedState.remove(_furnitureLayerId);
+      _reAddedState.remove(_furnitureOpenLayerId);
       await _applyLayerPolicy(controller,
-          only: [_furnitureFillLayerId, _furnitureLayerId], force: true);
+          only: [_furnitureFillLayerId, _furnitureLayerId, _furnitureOpenLayerId], force: true);
     }
 
     // The two label layers above were torn down and re-added, so re-arm the
