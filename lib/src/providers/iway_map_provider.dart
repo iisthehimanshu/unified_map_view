@@ -8851,19 +8851,15 @@ class IwayMapProvider extends BaseMapProvider {
 
   @override
   Future<void> zoom(dynamic controller, {double zoom = 0.0}) async {
+    // Relative to the camera the map has now (zoomBy is applied by the map
+    // itself). Adding to `cameraPosition.zoom` used the last position Dart
+    // was told about, which lags an animation or gesture under way, so a
+    // zoom-out could land zoomed in.
+    final c = controller is IwayMapController ? controller : _controller;
+    if (c == null) return;
     try {
-      final bounds = await _controller!.getVisibleRegion();
-      final centerLat =
-          (bounds.northeast.latitude + bounds.southwest.latitude) / 2;
-      final centerLng =
-          (bounds.northeast.longitude + bounds.southwest.longitude) / 2;
-      final cameraPos = _controller!.cameraPosition;
-
-      await animateCamera(
-        controller,
-        MapLocation(latitude: centerLat, longitude: centerLng),
-        (cameraPos?.zoom ?? 0.0) + zoom,
-      );
+      await _awaitWebViewport(c);
+      await c.animateCamera(CameraUpdate.zoomBy(zoom));
     } catch (e) {
       print("Error zoom: $e");
     }
