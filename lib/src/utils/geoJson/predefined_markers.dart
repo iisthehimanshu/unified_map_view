@@ -81,7 +81,7 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.source.assetPath,
         iconName: "source",
         priority: true,
-        imageSize: Size(14, 14),
+        imageSize: Size(10, 10),
         anchor: LandmarkAssetType.source.anchor,
       customRendering: true
     );
@@ -117,11 +117,11 @@ class PredefinedMarkers{
         assetPath:LandmarkAssetType.destination.assetPath,
         iconName: "Destination",
         priority: true,
-        imageSize: Size(30, 30),
+        imageSize: Size(10, 10),
         renderAnchor: Offset(0.5, 0.8),
         anchor: LandmarkAssetType.destination.anchor,
       customRendering: true,
-      properties: {"fontSize":10.0}
+      properties: {"fontSize":5.0}
     );
   }
 

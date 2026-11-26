@@ -3328,7 +3328,19 @@ class IwayMapProvider extends BaseMapProvider {
             p.properties?['type']?.toString().toLowerCase() == 'section' &&
             p.points.length >= 3)
         .toList();
+    // Building/floor outlines, used to tell a building's outer walls from the
+    // inner ones (the venue data does not mark them).
+    final boundaryPolygons = _polygons
+        .where((p) =>
+            p.properties?['type']?.toString().toLowerCase() == 'boundary' &&
+            p.points.length >= 3)
+        .toList();
+    final outerWalls = _outerWallsFor(boundaryPolygons);
     bool underSection(GeoJsonPolygon room) {
+      // Outer walls stay visible while the section patches are drawn, so the
+      // walls enclosing the venue still read on top of the coloured patch.
+      // Inner walls hide under it with the rooms.
+      if (outerWalls.contains(room)) return false;
       final sid = room.properties?['sectionId']?.toString() ?? '';
       if (sid.isNotEmpty && sid.toLowerCase() != 'null') return true;
       if (sectionPolygons.isEmpty) return false;
@@ -3540,7 +3552,6 @@ class IwayMapProvider extends BaseMapProvider {
   Future<void> _updateWallLogos(IwayMapController controller) async {
     if (!_isPolygonLayersEnabled) return;
     try {
-      // The same images as the roof logos (registered once per style).
       for (final asset in wallLogosByRoomName.values.toSet()) {
         if (_registeredRoofLogos.contains(asset)) continue;
         final bytes = (await rootBundle.load(asset)).buffer.asUint8List();
@@ -8440,6 +8451,137 @@ class IwayMapProvider extends BaseMapProvider {
     return null;
   }
 
+  bool _isWallPolygon(GeoJsonPolygon p) =>
+      (p.properties?['type'] ?? p.properties?['polygonType'])
+          ?.toString()
+          .toLowerCase() ==
+      'wall';
+
+  /// Walls farther than this (metres) from the building outline never count
+  /// as outer walls, whatever lies between — e.g. an open atrium's walls.
+  static const double _kOuterWallMaxMeters = 15.0;
+
+  /// Share of a wall's corners that must see the outline unobstructed by other
+  /// walls. A wall running along the outside of the building has (nearly) all
+  /// of them; a room wall behind an outer wall has only the ones at its open
+  /// ends.
+  static const double _kOuterWallCornerShare = 0.5;
+
+  /// The walls that enclose the venue: those with nothing between them and the
+  /// building outline ([boundaries]). The venue data does not mark them, and
+  /// they often stand a few metres inside the outline, so the test is whether
+  /// the straight line from a wall corner to the nearest outline point crosses
+  /// another wall. Computed once per polygon set (it checks every wall against
+  /// every other) and cached.
+  Set<GeoJsonPolygon> _outerWallsFor(List<GeoJsonPolygon> boundaries) {
+    final key = Object.hashAll([
+      _polygons.length,
+      for (final b in boundaries) Object.hashAll(b.points),
+      if (_polygons.isNotEmpty) identityHashCode(_polygons.first),
+      if (_polygons.isNotEmpty) identityHashCode(_polygons.last),
+    ]);
+    if (key == _outerWallCacheKey) return _outerWallCache;
+    final result = <GeoJsonPolygon>{};
+    final walls = _polygons.where((p) => _isWallPolygon(p) && p.points.length >= 2).toList();
+    if (boundaries.isNotEmpty && walls.isNotEmpty) {
+      // Flat local metres around the venue.
+      final lat0 = boundaries.first.points.first.latitude;
+      final lng0 = boundaries.first.points.first.longitude;
+      const my = 111320.0;
+      final mx = my * cos(lat0 * pi / 180);
+      List<Point<double>> toM(List<MapLocation> pts) => [
+            for (final p in pts)
+              Point((p.longitude - lng0) * mx, (p.latitude - lat0) * my)
+          ];
+      final rings = [for (final w in walls) toM(w.points)];
+      // Bounding boxes (minX, minY, maxX, maxY) to skip far walls cheaply.
+      final boxes = [
+        for (final r in rings)
+          (
+            r.map((p) => p.x).reduce(min),
+            r.map((p) => p.y).reduce(min),
+            r.map((p) => p.x).reduce(max),
+            r.map((p) => p.y).reduce(max),
+          )
+      ];
+      final outlines = [for (final b in boundaries) toM(b.points)];
+
+      for (int wi = 0; wi < walls.length; wi++) {
+        final ring = rings[wi];
+        int clear = 0;
+        for (int ci = 0; ci < ring.length; ci++) {
+          final c = ring[ci];
+          final q = _closestOnRings(c, outlines);
+          if (q == null) continue;
+          final d = c.distanceTo(q);
+          if (d > _kOuterWallMaxMeters) continue;
+          // Start 5 cm toward the outline, off the wall's own face.
+          final s = d < 1e-9 ? c : c + (q - c) * (min(0.05, d) / d);
+          final sx0 = min(s.x, q.x), sx1 = max(s.x, q.x);
+          final sy0 = min(s.y, q.y), sy1 = max(s.y, q.y);
+          bool blocked = false;
+          for (int wj = 0; wj < walls.length && !blocked; wj++) {
+            // A wall never hides itself: a thick outer wall's inner face looks
+            // out through its own outer face.
+            if (wj == wi) continue;
+            final b = boxes[wj];
+            if (b.$3 < sx0 || b.$1 > sx1 || b.$4 < sy0 || b.$2 > sy1) continue;
+            final other = rings[wj];
+            final n = other.length;
+            for (int k = 0; k < n; k++) {
+              if (_segmentsCross(s, q, other[k], other[(k + 1) % n])) {
+                blocked = true;
+                break;
+              }
+            }
+          }
+          if (!blocked) clear++;
+        }
+        if (clear > 0 && clear >= ring.length * _kOuterWallCornerShare) {
+          result.add(walls[wi]);
+        }
+      }
+    }
+    _outerWallCacheKey = key;
+    _outerWallCache = result;
+    return result;
+  }
+
+  int? _outerWallCacheKey;
+  Set<GeoJsonPolygon> _outerWallCache = const {};
+
+  /// Nearest point to [p] on any of the closed [rings].
+  Point<double>? _closestOnRings(Point<double> p, List<List<Point<double>>> rings) {
+    Point<double>? best;
+    double bestD = double.infinity;
+    for (final r in rings) {
+      for (int i = 0; i < r.length; i++) {
+        final a = r[i], b = r[(i + 1) % r.length];
+        final ab = b - a;
+        final len2 = ab.x * ab.x + ab.y * ab.y;
+        final t = len2 == 0
+            ? 0.0
+            : (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).clamp(0.0, 1.0);
+        final q = Point(a.x + ab.x * t, a.y + ab.y * t);
+        final d = p.squaredDistanceTo(q);
+        if (d < bestD) {
+          bestD = d;
+          best = q;
+        }
+      }
+    }
+    return best;
+  }
+
+  /// Whether segments p1–p2 and p3–p4 properly cross.
+  bool _segmentsCross(Point<double> p1, Point<double> p2, Point<double> p3, Point<double> p4) {
+    double o(Point<double> a, Point<double> b, Point<double> c) =>
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    final d1 = o(p3, p4, p1), d2 = o(p3, p4, p2);
+    final d3 = o(p1, p2, p3), d4 = o(p1, p2, p4);
+    return (d1 > 0) != (d2 > 0) && (d3 > 0) != (d4 > 0);
+  }
+
   bool _pointInPolygon(double lat, double lng, List<MapLocation> points) {
     if (points.length < 3) return false;
     bool inside = false;
@@ -8983,18 +9125,9 @@ class IwayMapProvider extends BaseMapProvider {
   static const String osmRasterStyle = '''
 {
   "version": 8,
-  "name": "Esri Dark Gray Canvas",
+  "name": "Plain background",
   "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   "sources": {
-    "osm-tiles": {
-      "type": "raster",
-      "tiles": [
-        "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-      ],
-      "tileSize": 256,
-      "attribution": "© Esri, HERE, Garmin, © OpenStreetMap contributors",
-      "maxzoom": 16
-    },
     "empty": {
       "type": "geojson",
       "data": { "type": "FeatureCollection", "features": [] }
@@ -9002,15 +9135,9 @@ class IwayMapProvider extends BaseMapProvider {
   },
   "layers": [
     {
-      "id": "osm-tiles-layer",
-      "type": "raster",
-      "source": "osm-tiles",
-      "minzoom": 0,
-      "maxzoom": 23,
-      "paint": {
-        "raster-brightness-min": 0.18,
-        "raster-brightness-max": 1.0
-      }
+      "id": "plain-background",
+      "type": "background",
+      "paint": { "background-color": "#EFEFEF" }
     },
     {
       "id": "font-anchor",
