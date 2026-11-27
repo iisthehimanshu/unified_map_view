@@ -56,6 +56,7 @@ class IwayGestures {
 /// ```yaml
 /// iway:
 ///   roomLabels: flat            # flat | upright
+///   patchLabels: flat           # flat | upright (section patch names)
 ///   light:
 ///     anchor: map               # map | viewport
 ///     position: [1.5, 210, 30]  # radius, azimuth, polar
@@ -81,6 +82,9 @@ class IwayGestures {
 @immutable
 class IwayOptions {
   final IwayRoomLabels? roomLabels;
+
+  /// How section patch names are drawn, independently of [roomLabels].
+  final IwayRoomLabels? patchLabels;
   final IwayLight? light;
 
   /// Camera tilt in degrees when switching to 3D (0..60).
@@ -92,6 +96,7 @@ class IwayOptions {
 
   const IwayOptions({
     this.roomLabels,
+    this.patchLabels,
     this.light,
     this.tilt3D,
     this.minZoom,
@@ -131,18 +136,22 @@ class IwayOptions {
       }
     }
 
-    unknownKeys(map, const {'roomLabels', 'light', 'view3D', 'zoom', 'gestures'}, 'iway.');
+    unknownKeys(map, const {'roomLabels', 'patchLabels', 'light', 'view3D', 'zoom', 'gestures'}, 'iway.');
 
-    IwayRoomLabels? roomLabels;
-    final rl = map['roomLabels'];
-    if (rl != null) {
-      roomLabels = IwayRoomLabels.values
-          .where((e) => e.name == rl.toString().trim())
+    IwayRoomLabels? labels(String key) {
+      final v = map[key];
+      if (v == null) return null;
+      final parsed = IwayRoomLabels.values
+          .where((e) => e.name == v.toString().trim())
           .firstOrNull;
-      if (roomLabels == null) {
-        warnings.add('iway.roomLabels: expected flat or upright, got "$rl"');
+      if (parsed == null) {
+        warnings.add('iway.$key: expected flat or upright, got "$v"');
       }
+      return parsed;
     }
+
+    final roomLabels = labels('roomLabels');
+    final patchLabels = labels('patchLabels');
 
     IwayLight? light;
     final l = section('light');
@@ -205,6 +214,7 @@ class IwayOptions {
 
     return IwayOptions(
       roomLabels: roomLabels,
+      patchLabels: patchLabels,
       light: light,
       tilt3D: tilt3D,
       minZoom: minZoom,

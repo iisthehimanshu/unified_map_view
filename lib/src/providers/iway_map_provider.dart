@@ -86,6 +86,9 @@ class IwayMapProvider extends BaseMapProvider {
     //             IwayRoomLabels.upright -> normal upright labels
     roomLabels: IwayRoomLabels.flat,
 
+    // Section patch names, same two choices, independent of roomLabels.
+    patchLabels: IwayRoomLabels.flat,
+
     // Camera tilt (degrees, 0..60) when switching to 3D.
     tilt3D: 45,
 
@@ -127,6 +130,9 @@ class IwayMapProvider extends BaseMapProvider {
   /// (same as its IwayplusVenue room-name layer). Replaces the upright text
   /// markers, which are hidden so a name never shows twice.
   final String _roomNameLayerId = 'room-name-flat-layer';
+  /// Section patch names, drawn flat and fitted inside each patch like the
+  /// room names on [_roomNameLayerId].
+  final String _sectionNameLayerId = 'section-name-flat-layer';
   final String _normalIconMarkerLayerId = 'normalIcon-markers-layer';
   final String _customRenderingMarkerLayerId = 'customRendering-markers-layer';
   final String _fixedMarkerLayerId = 'fixed-markers-layer';
@@ -335,6 +341,7 @@ class IwayMapProvider extends BaseMapProvider {
     _fixedMarkerLayerId: MapLayer.entryMarkers,
     _priorityMarkerLayerId: MapLayer.priorityMarkers,
     _sectionMarkerLayerId: MapLayer.sectionLabels,
+    _sectionNameLayerId: MapLayer.sectionLabels,
     _subSectionMarkerLayerId: MapLayer.subSectionLabels,
     _patchAboveMarkerLayerId: MapLayer.venueLabel,
     // polygons
@@ -1389,6 +1396,7 @@ class IwayMapProvider extends BaseMapProvider {
       // Map not created yet: the layers are built in this mode.
       _iwayOptions = IwayOptions(
         roomLabels: labels,
+        patchLabels: _iwayOptions.patchLabels,
         light: _iwayOptions.light,
         tilt3D: _iwayOptions.tilt3D,
         minZoom: _iwayOptions.minZoom,
@@ -1403,6 +1411,37 @@ class IwayMapProvider extends BaseMapProvider {
   /// Room names lie flat in each room (default) or use the upright labels.
   bool get _flatRoomLabels => _iwayOptions.roomLabels != IwayRoomLabels.upright;
 
+  /// How section patch names are drawn right now.
+  IwayRoomLabels get patchLabels =>
+      _flatPatchLabels ? IwayRoomLabels.flat : IwayRoomLabels.upright;
+
+  /// Switches section patch names between flat (fitted in each patch) and
+  /// upright, on the live map. Independent of [setRoomLabels].
+  ///
+  /// ```dart
+  /// await iwayProvider.setPatchLabels(IwayRoomLabels.upright);
+  /// ```
+  Future<void> setPatchLabels(IwayRoomLabels labels) async {
+    final controller = _controller;
+    if (controller == null) {
+      // Map not created yet: the layers are built in this mode.
+      _iwayOptions = IwayOptions(
+        roomLabels: _iwayOptions.roomLabels,
+        patchLabels: labels,
+        light: _iwayOptions.light,
+        tilt3D: _iwayOptions.tilt3D,
+        minZoom: _iwayOptions.minZoom,
+        maxZoom: _iwayOptions.maxZoom,
+        gestures: _iwayOptions.gestures,
+      );
+      return;
+    }
+    await applyIwayOptions(controller, IwayOptions(patchLabels: labels));
+  }
+
+  /// Section patch names lie flat in each patch (default) or stay upright.
+  bool get _flatPatchLabels => _iwayOptions.patchLabels != IwayRoomLabels.upright;
+
   @override
   Future<void> applyIwayOptions(dynamic controller, IwayOptions options) async {
     if (controller is! IwayMapController) return;
@@ -1410,6 +1449,7 @@ class IwayMapProvider extends BaseMapProvider {
     final g0 = before.gestures, g1 = options.gestures;
     _iwayOptions = IwayOptions(
       roomLabels: options.roomLabels ?? before.roomLabels,
+      patchLabels: options.patchLabels ?? before.patchLabels,
       light: options.light ?? before.light,
       tilt3D: options.tilt3D ?? before.tilt3D,
       minZoom: options.minZoom ?? before.minZoom,
@@ -1432,6 +1472,21 @@ class IwayMapProvider extends BaseMapProvider {
         if (_isPolygonLayersEnabled) await _addRoomNameLayer(controller);
       } catch (e) {
         print('iway options: room labels switch failed: $e');
+      }
+    }
+
+    // Section patch labels: flat <-> upright.
+    if (_flatPatchLabels != (before.patchLabels != IwayRoomLabels.upright)) {
+      try {
+        await _applyLayerPolicy(controller,
+            only: [_sectionMarkerLayerId, _selectedMarkerLayerId], force: true);
+        if (_isPolygonLayersEnabled) {
+          await _addSectionNameLayer(controller);
+          // Section names are only put on the features while flat.
+          await _updatePolygonSource(controller);
+        }
+      } catch (e) {
+        print('iway options: patch labels switch failed: $e');
       }
     }
 
@@ -3321,6 +3376,7 @@ class IwayMapProvider extends BaseMapProvider {
     }
 
     final roomLabels = _roomLabels(_polygons);
+    final sectionLabels = _flatPatchLabels ? _sectionLabels(_polygons) : const <String, String>{};
     // Section patches: a labelled room inside one is flagged `sectionId` so
     // its flat name hides while the patch is drawn (_roomLabelOpacity).
     final sectionPolygons = _polygons
@@ -3427,6 +3483,7 @@ class IwayMapProvider extends BaseMapProvider {
           'fillOpacity': fillColor.a,
           'isSelected': selectPolygonIds?.contains(polygon.id) ?? false,
           if (roomLabels[polygon.id] != null) 'label': roomLabels[polygon.id],
+          if (sectionLabels[polygon.id] != null) 'patchLabel': sectionLabels[polygon.id],
           // An image pasted on the roof instead of the name (roofLogosByRoomName).
           if (_roofLogoFor(polygon) != null && type != 'section' &&
               type != 'sub section' && type != 'boundary')
@@ -6373,7 +6430,13 @@ class IwayMapProvider extends BaseMapProvider {
         iconImage: ["get", "icon"],
         iconSize: 0.8 * _kIconScale,
         iconAnchor: ["get", "iconAnchor"],
-        textField: ["get", "title"],
+        // While names are drawn flat, a text-only section label is drawn on
+        // the patch by [_sectionNameLayerId] instead. A section with an icon
+        // keeps its upright label under the icon (no flat name, see
+        // _sectionLabels), same as rooms.
+        textField: _flatPatchLabels
+            ? ["case", ["has", "icon"], ["get", "title"], ""]
+            : ["get", "title"],
         textSize: 14,
         textColor: "#000000",
         textHaloColor: "#f8f9fa",
@@ -7098,6 +7161,13 @@ class IwayMapProvider extends BaseMapProvider {
             // room-name layer; drawing it here too showed it twice.
             ["to-boolean", ["get", "hasFlatLabel"]],
             "",
+            // Same for a text-only section marker while patch names are drawn
+            // flat by [_sectionNameLayerId]. Nested `case` rather than `all`/`!`
+            // (see the iOS note on iconImage above).
+            if (_flatPatchLabels) ...[
+              ["to-boolean", ["get", "section"]],
+              ["case", ["to-boolean", ["get", "icon"]], ["get", "title"], ""],
+            ],
             ["get", "title"],
           ],
           textSize: ["*", 14, 1.3], // keep this number equal to peakLabelScale above
@@ -7239,13 +7309,19 @@ class IwayMapProvider extends BaseMapProvider {
   ///
   /// Matched by the marker's `polyId`, or — for a marker not tied to a polygon
   /// id — by the marker sitting inside a room of the same name.
-  Set<String> _iconRoomIds(List<GeoJsonPolygon> polygons) {
+  ///
+  /// With [sections], the same for section patches instead of rooms: the
+  /// sections whose own marker shows an icon.
+  Set<String> _iconRoomIds(List<GeoJsonPolygon> polygons, {bool sections = false}) {
     final ids = <String>{};
     final unlinked = <GeoJsonMarker>[];
     for (final m in _symbols) {
       if (!_hasUsableIcon(m)) continue;
       final type = m.properties?['type']?.toString().toLowerCase() ?? '';
-      if (type == 'section' || type == 'sub section' || type == 'boundary') continue;
+      final isSection = type == 'section';
+      if (sections
+          ? !isSection
+          : (isSection || type == 'sub section' || type == 'boundary')) continue;
       final polyId = GeoJsonUtils.extractKeyValueMap(m.id)['polyId'];
       if (polyId != null && polyId.toString().isNotEmpty) {
         ids.add(polyId.toString());
@@ -7258,6 +7334,8 @@ class IwayMapProvider extends BaseMapProvider {
     for (final polygon in polygons) {
       final name = norm(polygon.properties?['name']?.toString());
       if (name.isEmpty || polygon.points.length < 3) continue;
+      if (sections &&
+          polygon.properties?['type']?.toString().toLowerCase() != 'section') continue;
       for (final m in unlinked) {
         if (norm(m.title) == name &&
             _pointInPolygon(m.position.latitude, m.position.longitude, polygon.points)) {
@@ -7278,12 +7356,37 @@ class IwayMapProvider extends BaseMapProvider {
   /// changed since they were last built (markers usually land after rooms).
   Future<void> _refreshRoomLabelsForIcons(IwayMapController controller) async {
     if (!_isPolygonLayersEnabled || _polygons.isEmpty) return;
-    final sig = (_iconRoomIds(_polygons).toList()..sort()).join(',');
-    if (sig == _iconRoomSignature) return;
+    if (_iconSignature(_polygons) == _iconRoomSignature) return;
     await _updatePolygonSource(controller,
         selectPolygonIds: selectedLocation?.polygon == null
             ? null
             : _selectionGroupFor(selectedLocation!.polygon!));
+  }
+
+  /// Rooms and sections showing an icon, as one comparable string.
+  String _iconSignature(List<GeoJsonPolygon> polygons) =>
+      '${(_iconRoomIds(polygons).toList()..sort()).join(',')}'
+      '|${(_iconRoomIds(polygons, sections: true).toList()..sort()).join(',')}';
+
+  /// The flat label of each named section patch, by polygon id. A section
+  /// whose marker shows an icon gets none (the icon carries the name).
+  Map<String, String> _sectionLabels(List<GeoJsonPolygon> polygons) {
+    final iconSections = _iconRoomIds(polygons, sections: true);
+    final out = <String, String>{};
+    for (final polygon in polygons) {
+      final props = polygon.properties;
+      if (props == null || polygon.points.length < 3) continue;
+      if (props['type']?.toString().toLowerCase() != 'section') continue;
+      if (_unusableName(props['name'])) continue;
+      final raw = props['name'].toString();
+      // "English | हिन्दी" -> the first part.
+      final text = raw.split('|').map((p) => p.trim()).firstWhere((p) => p.isNotEmpty, orElse: () => raw.trim());
+      if (text.isEmpty) continue;
+      final ownId = _extractPolygonIdFromTap(polygon.id) ?? polygon.id;
+      if (iconSections.contains(ownId)) continue;
+      out[polygon.id] = text;
+    }
+    return out;
   }
 
   /// The flat label of each named room, by polygon id.
@@ -7291,7 +7394,7 @@ class IwayMapProvider extends BaseMapProvider {
     const sameTextRadiusM = 12.0;
     const differentTextRadiusM = 1.5;
     final iconRooms = _iconRoomIds(polygons);
-    _iconRoomSignature = (iconRooms.toList()..sort()).join(',');
+    _iconRoomSignature = _iconSignature(polygons);
     final out = <String, String>{};
     final kept = <(String, double, double)>[]; // text, lat, lng
     for (final polygon in polygons) {
@@ -7385,6 +7488,51 @@ class IwayMapProvider extends BaseMapProvider {
       _roomNameLayerId,
       _layerProps(_roomNameLayerId, _roomNameLayerProps),
       filter: ['any', ['has', 'label'], ['has', 'roofImage']],
+      enableInteraction: false,
+    );
+  }
+
+  /// Tallest a flat section-patch name's letters may get, in metres. Larger
+  /// than rooms: patches are big and are only on screen zoomed out (around
+  /// zoom 16.5–19), where 3 m letters would be a few pixels tall.
+  static const double _kSectionLabelMaxHeightM = 12.0;
+
+  /// Flat section-name opacity: the section patch's own fade, so the name
+  /// shows exactly while its patch does (same ramp as [_sectionMarkerLayerId]).
+  Object? _sectionLabelOpacity(_OpacityResolver op) {
+    final z = _fadeOutZoom;
+    if (z == null) {
+      return op(const ["interpolate", ["linear"], ["zoom"], 17, 1.0, 18, 0.0]);
+    }
+    return _fadeRamp(op, () => op(_sectionRamp(z, 1.0)));
+  }
+
+  /// The flat section-name layer's properties: the room-name format
+  /// ([_roomNameLayerProps]) applied to the section patches.
+  SymbolLayerProperties _sectionNameLayerProps(_OpacityResolver op) => SymbolLayerProperties(
+        visibility: _visibility(_sectionNameLayerId, internalVisible: _flatPatchLabels),
+        textField: ['get', 'patchLabel'],
+        textRoomMaxHeight: _kSectionLabelMaxHeightM,
+        textRoomFill: _kRoomLabelFill,
+        textPitchAlignment: 'map',
+        textRotationAlignment: 'map',
+        textAllowOverlap: true,
+        textKeepUpright: true,
+        textColor: '#000000',
+        textHaloColor: '#f8f9fa',
+        textHaloWidth: 1.5,
+        textOpacity: _sectionLabelOpacity(op),
+      );
+
+  Future<void> _addSectionNameLayer(IwayMapController controller) async {
+    try {
+      await controller.removeLayer(_sectionNameLayerId);
+    } catch (_) {}
+    await controller.addSymbolLayer(
+      _polygonSourceId,
+      _sectionNameLayerId,
+      _layerProps(_sectionNameLayerId, _sectionNameLayerProps),
+      filter: ['has', 'patchLabel'],
       enableInteraction: false,
     );
   }
@@ -7674,6 +7822,10 @@ class IwayMapProvider extends BaseMapProvider {
       await _addRoomNameLayer(controller);
       _layerReAdders[_roomNameLayerId] = () => _addRoomNameLayer(controller);
 
+      /// 🔟 SECTION PATCH NAMES (flat, fitted inside each patch)
+      await _addSectionNameLayer(controller);
+      _layerReAdders[_sectionNameLayerId] = () => _addSectionNameLayer(controller);
+
       _isPolygonLayersEnabled = true;
       await _applyLayerPolicy(controller);
 
@@ -7804,13 +7956,16 @@ class IwayMapProvider extends BaseMapProvider {
       ..remove(_extrudedPolygonLayerId)
       ..remove(_extrudedSectionPolygonLayerId)
       ..remove(_selectedExtrudedPolygonLayerId)
-      ..remove(_roomNameLayerId);
+      ..remove(_roomNameLayerId)
+      ..remove(_sectionNameLayerId);
     await _applyLayerPolicy(controller, force: true, only: [
       _normalPolygonLayerId,
       _patternPolygonLayerId,
       _subSectionPolygonLayerId,
       // Room names fade against the same boundary/section windows.
       _roomNameLayerId,
+      // Section names follow the section ramp just recomputed.
+      _sectionNameLayerId,
       _selectedPlainPolygonLayerId,
       _extrudedPolygonLayerId,
       _extrudedSectionPolygonLayerId,
