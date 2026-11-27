@@ -81,7 +81,7 @@ class PredefinedMarkers{
         assetPath: LandmarkAssetType.source.assetPath,
         iconName: "source",
         priority: true,
-        imageSize: Size(10, 10),
+        imageSize: Size(10, 10 ),
         anchor: LandmarkAssetType.source.anchor,
       customRendering: true
     );

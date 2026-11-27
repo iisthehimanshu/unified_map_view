@@ -224,6 +224,20 @@ class IwayMapProvider extends BaseMapProvider {
   static const double _furnitureMinZoom = 17.5;
 
   final String _polylineSourceId = 'polylines-source';
+
+  /// Point features for the small direction arrows along the route. MapLibre
+  /// repeats them along the line itself (`symbol-placement: line`), which the
+  /// iway renderer does not support — it drew one unrotated arrow at each
+  /// line's middle vertex. So the points are laid out here instead, at
+  /// MapLibre's spacing for the current zoom, each rotated along its segment
+  /// (see [_refreshPathArrows]).
+  final String _pathArrowPointSourceId = 'path-arrow-points-source';
+
+  /// Solid, non-grey route lines the small arrows are laid along.
+  List<List<MapLocation>> _arrowRoutes = const [];
+
+  /// Zoom the arrow points were last laid out for.
+  double? _arrowsBuiltZoom;
   final String _pathCornerSourceId = 'path-corners-source';
   final String _pathBigArrowLayerId = 'path-big-arrow-layer';
   final String _pathShineSourceId = 'path-shine-source';
@@ -860,7 +874,19 @@ class IwayMapProvider extends BaseMapProvider {
                             ["!", ["to-boolean", ["get", "sectionId"]]],
                           )
                         : const <dynamic>[];
-                final markerFeatures = [...textFeatures, ...layerFeatures];
+                // Custom-rendering markers inside a section are faded out
+                // under its patch too, so their hits are dropped here.
+                bool hiddenCustom(dynamic f) {
+                  final p = f is Map ? f['properties'] : null;
+                  return sectionIdHidden &&
+                      p is Map &&
+                      p['customRendering'] == true &&
+                      p['sectionId'] == true;
+                }
+                final markerFeatures = [
+                  ...textFeatures,
+                  ...layerFeatures.where((f) => !hiddenCustom(f)),
+                ];
 
                 print("queryRenderedFeatures count: ${markerFeatures.length}");
 
@@ -1158,6 +1184,9 @@ class IwayMapProvider extends BaseMapProvider {
               try {
                 if (_allCornerFeatures.isNotEmpty || _floorChangeFeatures.isNotEmpty) {
                   _refreshCornerVisibility(_controller!);
+                }
+                if (_arrowRoutes.isNotEmpty) {
+                  unawaited(_refreshPathArrows(_controller!));
                 }
                 // The puck glide defers its source pushes while the camera moves
                 // (see _animateMarkerToPosition). The camera just settled, so land
@@ -2600,10 +2629,8 @@ class IwayMapProvider extends BaseMapProvider {
         // marker cannot divide by zero.
         final biasDenominator = list.isEmpty ? 1 : list.length;
 
-        // Section patches. A marker sitting inside one is treated as
-        // sectioned (hidden while the patch is drawn) even when the data gives
-        // it no `sectionId` — otherwise lift/washroom icons and their names
-        // drew on top of the patch.
+        // Section patches. While they are drawn, every marker except the
+        // entries/exits hides (see `hasSectionId` below).
         final sectionPatches = _polygons
             .where((p) =>
                 p.properties?['type']?.toString().toLowerCase() == 'section' &&
@@ -2619,19 +2646,21 @@ class IwayMapProvider extends BaseMapProvider {
               : (marker.anchor?.dx == 0.5 && marker.anchor?.dy == 0.5)
                   ? "center"
                   : "bottom";
-          bool hasSectionId = (marker.properties?['sectionId'] != null && marker.properties?['sectionId'].isNotEmpty);
-          if (!hasSectionId && sectionPatches.isNotEmpty) {
+          // `sectionId` here means "hidden while the section patches are
+          // drawn". Every ordinary marker is, wherever it stands: lifts,
+          // stairs and washrooms mostly sit in the corridors between the
+          // sections, outside every section polygon, and still drew on top of
+          // the patches. Entries and exits are the exception — they stay
+          // visible over the patches.
+          bool hasSectionId = false;
+          if (sectionPatches.isNotEmpty && !_isEntryExitMarker(marker)) {
             final mType = marker.properties?['type']?.toString().toLowerCase() ?? '';
-            if (mType != 'section' && mType != 'sub section' && mType != 'boundary') {
-              hasSectionId = sectionPatches.any((p) => _pointInPolygon(
-                  marker.position.latitude, marker.position.longitude, p.points));
-            }
+            hasSectionId = mType != 'section' && mType != 'sub section' && mType != 'boundary';
           }
           double? entryDirection;
           if(marker.id.contains("_entryDirection") && marker.properties?['entryDirection'] != null){
             entryDirection = (marker.properties?['entryDirection'] as num).toDouble();
           }
-
           return {
             'type': 'Feature',
             'geometry': {
@@ -3185,6 +3214,17 @@ class IwayMapProvider extends BaseMapProvider {
   RegExp _wholeWord(String wanted) => _wholeWordCache.putIfAbsent(
       wanted,
       () => RegExp('(?<![a-z0-9])${RegExp.escape(wanted)}(?![a-z0-9])'));
+
+  /// Whether [marker] is an entry or exit (main entry, entrance, exit,
+  /// emergency exit). These are drawn over section patches; every other
+  /// marker inside a section hides while its patch is shown.
+  static final RegExp _entryExitType =
+      RegExp(r'\b(entry|entrance|exit|emergency)\b');
+  bool _isEntryExitMarker(GeoJsonMarker marker) {
+    final raw = RenderingUtilities.rawLandmarkType(marker.properties);
+    if (raw == null) return false;
+    return _entryExitType.hasMatch(RenderingUtilities.normaliseLandmarkType(raw));
+  }
 
   bool _passesMarkerTypeFilter(GeoJsonMarker marker) {
     final filter = _markerTypeFilter;
@@ -4702,6 +4742,17 @@ class IwayMapProvider extends BaseMapProvider {
       },
     );
 
+    // Small direction arrows follow the same solid, non-grey route lines.
+    _arrowRoutes = [
+      for (final line in _lines)
+        if ((line.properties?['path'] ?? line.id.toLowerCase().contains("path")) == true &&
+            line.properties?['style'] == "solid" &&
+            !(line.properties?['isGreyOverlay'] ?? false) &&
+            line.points.length >= 2)
+          [...line.points],
+    ];
+    await _refreshPathArrows(controller, force: true);
+
     // The corner pass below only reads solid, non-grey path lines. Build a
     // cheap signature of exactly those and skip the whole pass (segment walk +
     // per-bend image bakes) when it hasn't changed since the last build — e.g.
@@ -4890,6 +4941,118 @@ class IwayMapProvider extends BaseMapProvider {
       accum += segLengths[i];
     }
     return points.last;
+  }
+
+  /// Lays the small direction arrows out along [_arrowRoutes] for the
+  /// current zoom, as MapLibre's `symbol-placement: line` would: one every
+  /// `symbol-spacing` screen pixels (same zoom stops as the MapLibre
+  /// provider), starting half a spacing in, each rotated along its segment.
+  /// An arrow whose body would hang over a sharp bend is skipped, as MapLibre
+  /// does, so none sits across a corner.
+  ///
+  /// Re-run when the camera settles; skipped when the zoom has barely moved,
+  /// since the spacing is the only thing that depends on it.
+  Future<void> _refreshPathArrows(IwayMapController controller, {bool force = false}) async {
+    if (!_isPolylineLayersEnabled) return;
+    final zoom = controller.cameraPosition?.zoom ?? 18.0;
+    if (!force && _arrowsBuiltZoom != null && (zoom - _arrowsBuiltZoom!).abs() < 0.2) return;
+    _arrowsBuiltZoom = zoom;
+
+    if (_arrowRoutes.isEmpty) {
+      await controller.setGeoJsonSource(_pathArrowPointSourceId,
+          {'type': 'FeatureCollection', 'features': []});
+      return;
+    }
+
+    // symbol-spacing, px — the MapLibre provider's stops.
+    double spacingPx(double z) {
+      const stops = [(0.0, 2.0), (10.0, 10.0), (14.0, 40.0), (19.0, 100.0)];
+      if (z <= stops.first.$1) return stops.first.$2;
+      for (var i = 1; i < stops.length; i++) {
+        if (z <= stops[i].$1) {
+          final (z0, v0) = stops[i - 1];
+          final (z1, v1) = stops[i];
+          return v0 + (v1 - v0) * (z - z0) / (z1 - z0);
+        }
+      }
+      return stops.last.$2;
+    }
+
+    // icon-size at this zoom (the layer's stops) times the 32px sprite.
+    double iconPx(double z) {
+      final s = z <= 0
+          ? 0.4
+          : z <= 10
+              ? 0.4 + 0.2 * z / 10
+              : z <= 18
+                  ? 0.6 + 0.2 * (z - 10) / 8
+                  : 0.8;
+      return 32 * s;
+    }
+
+    final lat0 = _arrowRoutes.first.first.latitude;
+    const metersPerDegLat = 111320.0;
+    final metersPerDegLng = metersPerDegLat * cos(lat0 * pi / 180);
+    // 512px tiles, as MapLibre's zoom.
+    final metersPerPx = 78271.51696 * cos(lat0 * pi / 180) / pow(2, zoom);
+    final spacing = spacingPx(zoom) * metersPerPx;
+    final halfIcon = iconPx(zoom) / 2 * metersPerPx;
+    if (spacing <= 0) return;
+
+    const maxArrows = 3000;
+    final features = <Map<String, dynamic>>[];
+    for (final route in _arrowRoutes) {
+      // Segment lengths (m) and bearings (deg clockwise from north).
+      final n = route.length;
+      final lens = <double>[];
+      final bearings = <double>[];
+      for (var i = 0; i + 1 < n; i++) {
+        final dx = (route[i + 1].longitude - route[i].longitude) * metersPerDegLng;
+        final dy = (route[i + 1].latitude - route[i].latitude) * metersPerDegLat;
+        lens.add(sqrt(dx * dx + dy * dy));
+        bearings.add((atan2(dx, dy) * 180 / pi + 360) % 360);
+      }
+      // Turn angle at an interior vertex (between segments vertex-1 and vertex).
+      double turnAt(int vertex) {
+        if (vertex <= 0 || vertex >= n - 1) return 0;
+        final d = (bearings[vertex] - bearings[vertex - 1]).abs() % 360;
+        return d > 180 ? 360 - d : d;
+      }
+
+      var next = spacing / 2; // distance along the route of the next arrow
+      var walked = 0.0;
+      for (var i = 0; i < lens.length && features.length < maxArrows; i++) {
+        final len = lens[i];
+        if (len <= 0) continue;
+        while (next <= walked + len && features.length < maxArrows) {
+          final along = next - walked;
+          final t = along / len;
+          // Skip an arrow that would overhang a sharp bend at either end.
+          final overStart = along < halfIcon && turnAt(i) > 30;
+          final overEnd = len - along < halfIcon && turnAt(i + 1) > 30;
+          if (!overStart && !overEnd) {
+            final a = route[i], b = route[i + 1];
+            features.add({
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [
+                  a.longitude + (b.longitude - a.longitude) * t,
+                  a.latitude + (b.latitude - a.latitude) * t,
+                ],
+              },
+              // The sprite points east (right): rotate by bearing - 90.
+              'properties': {'bearing': bearings[i] - 90},
+            });
+          }
+          next += spacing;
+        }
+        walked += len;
+      }
+    }
+
+    await controller.setGeoJsonSource(_pathArrowPointSourceId,
+        {'type': 'FeatureCollection', 'features': features});
   }
 
   Future<void> _refreshCornerVisibility(IwayMapController controller) async {
@@ -6333,23 +6496,20 @@ class IwayMapProvider extends BaseMapProvider {
         ],
         textAllowOverlap: false,
         iconAllowOverlap: false,
-        // Icon-led placement. Both of these default to false, and that default
-        // is what produced the reported bug: an icon that loses its quad — an
-        // image not in the style at that moment, or a placement the icon loses
-        // while the label wins — leaves the LABEL drawn on its own. The
-        // landmark then reads as a bare floating word, and it flips back as you
-        // zoom because placement is recomputed on every pass.
+        // Icon and label are placed as one: both drawn, or neither.
         //
-        //   icon-optional: false  -> no icon, no symbol. Never a naked label.
-        //   text-optional: true   -> a label that cannot fit is dropped while
-        //                            the icon stays.
+        //   icon-optional: false  -> an icon that cannot be drawn (collision,
+        //                            image not loaded) hides its label too, so
+        //                            there is never a bare floating word.
+        //   text-optional: false  -> a label that cannot fit hides its icon
+        //                            too, so there is never a nameless icon.
         //
-        // So the marker has exactly one behaviour: it draws its icon (with the
-        // label when there is room), or it is not drawn at all. That is what
-        // reads as stable when you zoom, and it is why a marker never
-        // half-renders.
+        // text-optional used to be true, which kept the icon when its label
+        // collided: on pan/rotate/zoom the icon showed first and the label
+        // popped in later. With both false the marker appears and disappears
+        // as a whole.
         iconOptional: false,
-        textOptional: true,
+        textOptional: false,
         iconOpacity: opacity,
         textOpacity: opacity,
       );
@@ -6809,7 +6969,9 @@ class IwayMapProvider extends BaseMapProvider {
         _customRenderingMarkerLayerId,
         _layerProps(
             _customRenderingMarkerLayerId,
-            (op) => _customRenderingLayerProps(op(_kDefaultMarkerOpacity),
+            (op) => _customRenderingLayerProps(
+                // Custom markers inside a section hide under its patch.
+                _withSectionIdHidden(op, _kDefaultMarkerOpacity),
                 visibility: _visibility(_customRenderingMarkerLayerId))),
         filter: [
           "all",
@@ -8117,7 +8279,8 @@ class IwayMapProvider extends BaseMapProvider {
       _customRenderingMarkerLayerId,
       _layerProps(
           _customRenderingMarkerLayerId,
-          (op) => _customRenderingLayerProps(op(opacityExpression),
+          (op) => _customRenderingLayerProps(
+              _withSectionIdHidden(op, opacityExpression),
               visibility: _visibility(_customRenderingMarkerLayerId))),
     );
 
@@ -8198,6 +8361,13 @@ class IwayMapProvider extends BaseMapProvider {
         'features': [],
       });
 
+      await controller.addGeoJsonSource(_pathArrowPointSourceId, {
+        'type': 'FeatureCollection',
+        'features': [],
+      });
+      // A style reload recreates the source empty: lay the arrows out again.
+      _arrowsBuiltZoom = null;
+
       await controller.addGeoJsonSource(_pathShineSourceId, {
         'type': 'FeatureCollection',
         'features': [],
@@ -8259,37 +8429,26 @@ class IwayMapProvider extends BaseMapProvider {
         belowLayerId: await _webSafeBelowLayerId(controller, _normalIconMarkerLayerId),
       );
 
-      // Repetitive small arrows
+      // Repetitive small arrows. Points laid out by _refreshPathArrows (the
+      // renderer has no `symbol-placement: line`), each carrying its rotation.
       await _addSymbolLayerSafe(controller,
-        _polylineSourceId,
+        _pathArrowPointSourceId,
         _pathArrowLayerId,
         const SymbolLayerProperties(
           iconImage: _kPathArrowImageId,
-          symbolPlacement: 'line',
-          symbolSpacing: [
-            "interpolate", ["linear"], ["zoom"],
-            0, 2.0,   // Ultra-dense spacing for world-level view
-            10, 10.0,  // Very dense for city-level view
-            14, 40.0,
-            19, 100.0
-          ],
           iconSize: [
             "interpolate", ["linear"], ["zoom"],
             0, 0.4,   // Scale down at extreme distance but keep visible
             10, 0.6,
             18, 0.8
           ],
+          iconRotate: ["get", "bearing"],
           iconRotationAlignment: 'map',
+          iconAnchor: 'center',
           iconAllowOverlap: true,
           iconIgnorePlacement: true,
           iconPadding: 0,
         ),
-        filter: [
-          "all",
-          ["to-boolean", ["get", "path"]],
-          ["==", ["get", "style"], "solid"],
-          ["!", ["to-boolean", ["get", "isGreyOverlay"]]],
-        ],
       );
 
       // Big corner arrows
@@ -8418,6 +8577,7 @@ class IwayMapProvider extends BaseMapProvider {
         symbolSortKey: ["*", ["get", "turnSharpness"], -1],
         iconImage: ["get", "turnBubbleIcon"],
         iconAnchor: "bottom",
+        iconSize: 0.5,
         iconOffset: [0, -8],
         iconAllowOverlap: true,
         iconIgnorePlacement: true,
